@@ -168,6 +168,27 @@ namespace GUI.Types.Exporter.CharacterAssets
         }
 
         /// <summary>
+        /// Points a model at copies of materials kept elsewhere: the swaps of its material groups that go to one of them,
+        /// and its meshes' own through swaps in the default group.
+        /// </summary>
+        /// <param name="vmdl">The .vmdl text.</param>
+        /// <param name="copies">The copy of each material, by package source path.</param>
+        public static string RedirectMaterials(string vmdl, IReadOnlyDictionary<string, string> copies)
+        {
+            if (copies.Count == 0)
+            {
+                return vmdl;
+            }
+
+            vmdl = RemapTargetRegex().Replace(vmdl, match => copies.TryGetValue(CharacterLoadout.NormalizePath(match.Groups["to"].Value), out var copy)
+                ? $"{match.Groups["prefix"].Value}{copy}\""
+                : match.Value);
+
+            // Materials the default group already swaps keep that swap, its target was redirected above
+            return AddDefaultMaterialRemaps(vmdl, copies);
+        }
+
+        /// <summary>
         /// Picks body group choices, like the game does when it switches a body group, e.g. the arcana one to the
         /// arcana level. The other choices are removed along with the meshes only they show, so the model shows the
         /// picked meshes without anything having to switch the body group. The arcana body group keeps its first choice
@@ -2273,6 +2294,9 @@ namespace GUI.Types.Exporter.CharacterAssets
 
         [GeneratedRegex(@"\b(?:poseParam|row_pose_param_name|col_pose_param_name)\s*=\s*""(?<name>[^""]*)""", RegexOptions.CultureInvariant)]
         private static partial Regex PoseParameterRegex();
+
+        [GeneratedRegex(@"(?<prefix>\bto\s*=\s*"")(?<to>[^""]*\.vmat)""", RegexOptions.CultureInvariant | RegexOptions.IgnoreCase)]
+        private static partial Regex RemapTargetRegex();
 
         [GeneratedRegex(@"\bsource_filename\s*=\s*""(?<file>[^""]*)""", RegexOptions.CultureInvariant)]
         private static partial Regex SourceFilenameRegex();

@@ -47,6 +47,16 @@ namespace GUI.Types.Exporter.CharacterAssets
         public bool ArcanaMaterials { get; set; }
 
         /// <summary>
+        /// Exports copies of every material the exported models use, with their textures, with alpha testing turned on,
+        /// into <see cref="MaterialCopiesFolder"/>, and points the models at them. For the arcanas that render
+        /// see-through in game with the game's own materials, e.g. Razor's. Off by default, it is not needed for most.
+        /// </summary>
+        public bool AlphaTestMaterials { get; set; }
+
+        /// <summary>Where <see cref="AlphaTestMaterials"/> puts the copies, under their own paths.</summary>
+        public const string MaterialCopiesFolder = "materials/j0nathan550";
+
+        /// <summary>
         /// Adds the meshes of the models items wear besides their own, e.g. an arcana's frost overlay, to the hero's model
         /// when the default assets are replaced. They are exported as models of their own either way.
         /// </summary>
@@ -210,6 +220,7 @@ namespace GUI.Types.Exporter.CharacterAssets
             ItemModels = true,
             Materials = false,
             ArcanaMaterials = false,
+            AlphaTestMaterials = false,
             MergeAdditionalWearables = true,
             ItemParticles = true,
             HeroParticles = false,
@@ -296,6 +307,36 @@ namespace GUI.Types.Exporter.CharacterAssets
             => "These options add what the mod most likely does not need, or change more than the hero:\n\n" +
                 string.Join("\n", warnings.Select(static warning => $"- {warning}")) +
                 "\n\nThe Recommended options export only what the loadout changes. Export with these anyway?";
+
+        /// <summary>
+        /// What the Recommended options export, with what was asked for besides.
+        /// </summary>
+        public static string GetRecommendedHint(bool materials, bool alphaTestMaterials, bool sharedParticles)
+        {
+            List<string> extras = [];
+
+            if (materials)
+            {
+                extras.Add("the materials to modify");
+            }
+
+            if (alphaTestMaterials)
+            {
+                extras.Add("the materials with alpha test");
+            }
+
+            if (sharedParticles)
+            {
+                extras.Add("the shared particles");
+            }
+
+            return extras switch
+            {
+                [] => "Exports only what the loadout changes.",
+                [var extra] => $"Exports only what the loadout changes, and {extra}.",
+                [.. var first, var last] => $"Exports only what the loadout changes, {string.Join(", ", first)}, and {last}.",
+            };
+        }
     }
 
     public sealed record ItemRecolorOption(Color Color, bool Enabled = true);
@@ -381,6 +422,12 @@ namespace GUI.Types.Exporter.CharacterAssets
 
         /// <summary>Materials the models use, decompiled with the custom material exporter, which also writes their textures.</summary>
         public List<string> Materials { get; } = [];
+
+        /// <summary>
+        /// The copies of materials the models are pointed at instead, by the material's package source path, see
+        /// <see cref="CharacterExportOptions.AlphaTestMaterials"/>.
+        /// </summary>
+        public Dictionary<string, string> MaterialCopies { get; } = new(StringComparer.OrdinalIgnoreCase);
 
         /// <summary>Everything else that is compiled, decompiled with the built-in decompiler.</summary>
         public List<string> Resources { get; } = [];
@@ -587,6 +634,25 @@ namespace GUI.Types.Exporter.CharacterAssets
                 plan.Notes.Add($"the materials of {arcanaModels.Count} arcana model{(arcanaModels.Count == 1 ? "" : "s")} were exported, the other models use the game's own");
             }
 
+            if (options.AlphaTestMaterials)
+            {
+                AddMaterials(plan, plan.Models, cancellationToken);
+
+                foreach (var material in plan.Materials)
+                {
+                    var source = NormalizePath(material[..^GameFileLoader.CompiledFileSuffix.Length]);
+                    var path = source.StartsWith("materials/", StringComparison.OrdinalIgnoreCase) ? source["materials/".Length..] : source;
+
+                    plan.MaterialCopies[source] = $"{CharacterExportOptions.MaterialCopiesFolder}/{path}";
+                }
+
+                plan.Notes.Add(plan.MaterialCopies.Count switch
+                {
+                    0 => "the exported models use no materials to copy",
+                    var count => $"{count} material{(count == 1 ? " was" : "s were")} copied into {CharacterExportOptions.MaterialCopiesFolder} with alpha testing and the models point at them",
+                });
+            }
+
             foreach (var (model, remaps) in styleMaterialRemaps)
             {
                 plan.StyleMaterialRemaps[model] = remaps;
@@ -774,13 +840,16 @@ namespace GUI.Types.Exporter.CharacterAssets
             {
                 var compiledPath = material + GameFileLoader.CompiledFileSuffix;
 
-                if (Exists(compiledPath))
+                if (!Exists(compiledPath))
+                {
+                    if (!plan.Missing.Contains(material, StringComparer.OrdinalIgnoreCase))
+                    {
+                        plan.Missing.Add(material);
+                    }
+                }
+                else if (!plan.Materials.Contains(compiledPath, StringComparer.OrdinalIgnoreCase))
                 {
                     plan.Materials.Add(compiledPath);
-                }
-                else
-                {
-                    plan.Missing.Add(material);
                 }
             }
         }

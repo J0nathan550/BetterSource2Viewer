@@ -54,7 +54,9 @@ namespace GUI.Forms
 #pragma warning disable CA2213 // Disposed with the export group box they are added to
         private readonly CheckBox skipUnchangedCheckBox;
         private readonly CheckBox arcanaMaterialsCheckBox;
+        private readonly CheckBox alphaTestMaterialsCheckBox;
         private readonly CheckBox editMaterialsCheckBox;
+        private readonly CheckBox recommendedAlphaTestCheckBox;
         private readonly CheckBox recommendedSharedParticlesCheckBox;
         private readonly RadioButton recommendedRadioButton;
         private readonly RadioButton customRadioButton;
@@ -101,6 +103,7 @@ namespace GUI.Forms
             ItemModels = itemModelsCheckBox.Checked,
             Materials = materialsCheckBox.Checked || slotRecolors.Count > 0,
             ArcanaMaterials = arcanaMaterialsCheckBox.Checked,
+            AlphaTestMaterials = alphaTestMaterialsCheckBox.Checked,
             MergeAdditionalWearables = mergeWearablesCheckBox.Checked,
             ItemParticles = itemParticlesCheckBox.Checked,
             ItemEffects = GetItemEffects(),
@@ -151,6 +154,12 @@ namespace GUI.Forms
             includeTable.RowStyles.Add(new RowStyle());
             includeTable.Controls.Add(arcanaMaterialsCheckBox, 0, includeTable.RowCount - 1);
             includeTable.SetColumnSpan(arcanaMaterialsCheckBox, 3);
+
+            alphaTestMaterialsCheckBox = new CheckBox { AutoSize = true, Text = "Materials with alpha test" };
+            includeTable.RowCount++;
+            includeTable.RowStyles.Add(new RowStyle());
+            includeTable.Controls.Add(alphaTestMaterialsCheckBox, 0, includeTable.RowCount - 1);
+            includeTable.SetColumnSpan(alphaTestMaterialsCheckBox, 3);
             materialsCheckBox.CheckedChanged += (_, _) => UpdateReplaceDefaultsDependents();
 
             recommendedRadioButton = new RadioButton { AutoSize = true, Text = "Recommended", Checked = true, Margin = new Padding(3, 3, 12, 3) };
@@ -199,6 +208,23 @@ namespace GUI.Forms
                 }
             };
 
+            recommendedAlphaTestCheckBox = new CheckBox
+            {
+                AutoSize = true,
+                Dock = DockStyle.Top,
+                Text = "Also export the materials with alpha test (fixes see-through arcanas, e.g. Razor's)",
+                Checked = preferences.RecommendedAlphaTest,
+                Padding = new Padding(3, 0, 3, 4),
+            };
+            recommendedAlphaTestCheckBox.CheckedChanged += (_, _) =>
+            {
+                if (isRecommended)
+                {
+                    alphaTestMaterialsCheckBox.Checked = recommendedAlphaTestCheckBox.Checked;
+                    UpdateExportHint();
+                }
+            };
+
             recommendedSharedParticlesCheckBox = new CheckBox
             {
                 AutoSize = true,
@@ -219,6 +245,7 @@ namespace GUI.Forms
             // Docked in reverse order of how they are added, so the mode goes first, then the hint, then the questions
             // of Recommended, then the options
             includeGroupBox.Controls.Add(recommendedSharedParticlesCheckBox);
+            includeGroupBox.Controls.Add(recommendedAlphaTestCheckBox);
             includeGroupBox.Controls.Add(editMaterialsCheckBox);
             includeGroupBox.Controls.Add(exportHintLabel);
             includeGroupBox.Controls.Add(modePanel);
@@ -289,6 +316,10 @@ namespace GUI.Forms
             toolTip.SetToolTip(arcanaMaterialsCheckBox,
                 "Without Materials and textures, still decompile the materials of models that switch their meshes by the arcana level,\n" +
                 "for an arcana that renders semi-transparent in game with the game's own. Off by default, the game applies its own to most.");
+            toolTip.SetToolTip(alphaTestMaterialsCheckBox,
+                "Copy every material the exported models use, with their textures, into materials/j0nathan550 with alpha testing turned on,\n" +
+                "and point the models at the copies. Fixes arcanas that render see-through in game, e.g. Razor's.\n" +
+                "Off by default, most heroes do not need it.");
             toolTip.SetToolTip(mergeWearablesCheckBox, "When replacing default assets, add the meshes of the extra models items wear, e.g. an arcana's frost overlay,\n" +
                 "to the hero's model. They are exported as models of their own either way.");
             toolTip.SetToolTip(replaceSharedParticlesCheckBox, "Also replace particles every hero uses, like the blink dagger, stun and status effects");
@@ -315,6 +346,10 @@ namespace GUI.Forms
             toolTip.SetToolTip(editMaterialsCheckBox,
                 "Only for retexturing or otherwise changing the materials: decompile the materials every exported model uses, with their textures,\n" +
                 "so the addon compiles its own copies to edit. Otherwise they are left out, the game applies its own by itself.");
+            toolTip.SetToolTip(recommendedAlphaTestCheckBox,
+                "Copy every material the exported models use, with their textures, into materials/j0nathan550 with alpha testing turned on,\n" +
+                "and point the models at the copies, for arcanas that render see-through in game, e.g. Razor's.\n" +
+                "Off by default, most heroes do not need it.");
             toolTip.SetToolTip(recommendedSharedParticlesCheckBox,
                 "Also write the particles every hero uses that the items swap, e.g. an arcana's blink dagger or deny effects.\n" +
                 "They change for every hero in the game, not only this one.");
@@ -592,6 +627,7 @@ namespace GUI.Forms
             itemsGameCheckBox.Checked = options.DefaultItemsInItemsGame;
             skipUnchangedCheckBox.Checked = options.SkipUnchangedModels;
             arcanaMaterialsCheckBox.Checked = options.ArcanaMaterials;
+            alphaTestMaterialsCheckBox.Checked = options.AlphaTestMaterials;
         }
 
         private CheckBox[] ExportCheckBoxes =>
@@ -599,7 +635,7 @@ namespace GUI.Forms
             heroModelCheckBox, itemModelsCheckBox, pedestalCheckBox, itemParticlesCheckBox, heroParticlesCheckBox, iconsCheckBox,
             itemSoundsCheckBox, heroSoundsCheckBox, heroVoiceCheckBox, includeAudioCheckBox, soundsCheckBox, replaceDefaultsCheckBox,
             replaceSharedParticlesCheckBox, materialsCheckBox, mergeWearablesCheckBox, renameModelsCheckBox, animatePartsCheckBox,
-            spriteSheetCheckBox, itemsGameCheckBox, skipUnchangedCheckBox, arcanaMaterialsCheckBox,
+            spriteSheetCheckBox, itemsGameCheckBox, skipUnchangedCheckBox, arcanaMaterialsCheckBox, alphaTestMaterialsCheckBox,
         ];
 
         /// <summary>
@@ -612,6 +648,7 @@ namespace GUI.Forms
             ItemModels = itemModelsCheckBox.Checked,
             Materials = materialsCheckBox.Checked,
             ArcanaMaterials = arcanaMaterialsCheckBox.Checked,
+            AlphaTestMaterials = alphaTestMaterialsCheckBox.Checked,
             MergeAdditionalWearables = mergeWearablesCheckBox.Checked,
             ItemParticles = itemParticlesCheckBox.Checked,
             HeroParticles = heroParticlesCheckBox.Checked,
@@ -648,6 +685,7 @@ namespace GUI.Forms
                 isRecommended = true;
                 ApplyOptions(CharacterExportOptions.Recommended);
                 materialsCheckBox.Checked = editMaterialsCheckBox.Checked;
+                alphaTestMaterialsCheckBox.Checked = recommendedAlphaTestCheckBox.Checked;
                 replaceSharedParticlesCheckBox.Checked = recommendedSharedParticlesCheckBox.Checked;
             }
             else
@@ -662,6 +700,7 @@ namespace GUI.Forms
             }
 
             editMaterialsCheckBox.Visible = recommended;
+            recommendedAlphaTestCheckBox.Visible = recommended;
             recommendedSharedParticlesCheckBox.Visible = recommended;
             UpdateReplaceDefaultsDependents();
             UpdateExportHint();
@@ -688,13 +727,8 @@ namespace GUI.Forms
         {
             if (isRecommended)
             {
-                exportHintLabel.Text = (editMaterialsCheckBox.Checked, recommendedSharedParticlesCheckBox.Checked) switch
-                {
-                    (true, true) => "Exports only what the loadout changes, the materials to modify, and the shared particles.",
-                    (true, false) => "Exports only what the loadout changes, and the materials to modify.",
-                    (false, true) => "Exports only what the loadout changes, and the shared particles.",
-                    (false, false) => "Exports only what the loadout changes.",
-                };
+                exportHintLabel.Text = CharacterExportOptions.GetRecommendedHint(editMaterialsCheckBox.Checked, recommendedAlphaTestCheckBox.Checked,
+                    recommendedSharedParticlesCheckBox.Checked);
                 toolTip.SetToolTip(exportHintLabel, "Pick Custom to choose what to export yourself.");
                 return;
             }
@@ -760,6 +794,7 @@ namespace GUI.Forms
             preferences.Options = isRecommended ? customOptions : GetTickedOptions();
             preferences.Options.OnlyWhatChanges = isRecommended;
             preferences.RecommendedMaterials = editMaterialsCheckBox.Checked;
+            preferences.RecommendedAlphaTest = recommendedAlphaTestCheckBox.Checked;
             preferences.RecommendedSharedParticles = recommendedSharedParticlesCheckBox.Checked;
             preferences.PreviewEffects = previewEffectsCheckBox.Checked;
             preferences.Save();

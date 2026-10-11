@@ -26,6 +26,12 @@ namespace GUI.Types.Exporter.CharacterAssets
         public bool RecommendedMaterials { get; set; }
 
         /// <summary>
+        /// Whether Recommended also exports the materials with alpha test, see
+        /// <see cref="CharacterExportOptions.AlphaTestMaterials"/>.
+        /// </summary>
+        public bool RecommendedAlphaTest { get; set; }
+
+        /// <summary>
         /// Whether Recommended also writes the particles every hero uses that the items swap, like the blink dagger's, see
         /// <see cref="CharacterExportOptions.ReplaceSharedParticles"/>.
         /// </summary>

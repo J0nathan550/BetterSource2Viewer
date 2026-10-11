@@ -216,12 +216,13 @@ namespace GUI.Types.Exporter.CharacterAssets
                 var failed = 0;
 
                 failed += ExportModels(plan.Models, vpkPath, contentRoot, fileLoader, progress, cancellationToken);
-                failed += ExportMaterials(plan.Materials, contentRoot, fileLoader, loadout, options, progress, writtenFiles, cancellationToken);
+                failed += ExportMaterials(plan.Materials, plan.MaterialCopies, contentRoot, fileLoader, loadout, options, progress, writtenFiles, cancellationToken);
                 failed += ExportResources(plan.Resources, contentRoot, fileLoader, progress, writtenFiles, cancellationToken);
                 failed += ExportRawFiles(plan.RawFiles, contentRoot, fileLoader, progress, writtenFiles, cancellationToken);
                 failed += ApplyParticleRedirects(plan.ParticleRedirects, contentRoot, fileLoader, progress);
                 failed += ApplyControlPoints(plan.ParticleControlPoints, contentRoot, progress);
                 failed += ApplyReplacements(plan, contentRoot, fileLoader, progress);
+                failed += ApplyMaterialCopies(plan, contentRoot, progress);
                 if (options.ParticleRecolorOptions.Count > 0)
                 {
                     progress.Report("Applying Prismatic particle recolors (VPCF-Editor)...");
@@ -1102,7 +1103,8 @@ namespace GUI.Types.Exporter.CharacterAssets
         /// Decompiles the materials with their textures, so the addon compiles its own copies rather than using the
         /// game's, which some item materials render semi-transparent with.
         /// </summary>
-        private static int ExportMaterials(List<string> materials, string outputRoot, GameFileLoader fileLoader,
+        /// <param name="copies">Materials written elsewhere with alpha testing, see <see cref="CharacterExportPlan.MaterialCopies"/>.</param>
+        private static int ExportMaterials(List<string> materials, IReadOnlyDictionary<string, string> copies, string outputRoot, GameFileLoader fileLoader,
             CharacterLoadout loadout, CharacterExportOptions options,
             IProgress<string> progress, HashSet<string> writtenFiles, CancellationToken cancellationToken)
         {
@@ -1127,11 +1129,17 @@ namespace GUI.Types.Exporter.CharacterAssets
                     using var resource = fileLoader.LoadFile(material) ?? throw new FileNotFoundException("Could not be read");
 
                     var cleanMatRelative = StripCompiledSuffix(material);
-                    var vmatPath = GetOutputPath(outputRoot, Path.ChangeExtension(cleanMatRelative, "vmat"));
-                    progress.Report($"  {material}");
+                    var copy = copies.GetValueOrDefault(CharacterLoadout.NormalizePath(cleanMatRelative));
+                    var vmatPath = GetOutputPath(outputRoot, Path.ChangeExtension(copy ?? cleanMatRelative, "vmat"));
+                    progress.Report(copy == null ? $"  {material}" : $"  {material} -> {copy}");
 
                     // Экспортируем стандартный VMAT и его текстуры на диск
                     CustomVmatExporter.ExportMaterial(resource, vmatPath, outputRoot, fileLoader, progress, writtenFiles, cancellationToken);
+
+                    if (copy != null)
+                    {
+                        SetAlphaTest(vmatPath);
+                    }
 
                     // Применяем перекраску
                     var normalizedMat = CharacterLoadout.NormalizePath(Path.ChangeExtension(cleanMatRelative, "vmat"));
@@ -1284,6 +1292,64 @@ namespace GUI.Types.Exporter.CharacterAssets
         }
 
         /// <summary>
+        /// Turns alpha testing on in an exported material, see <see cref="CharacterExportOptions.AlphaTestMaterials"/>.
+        /// </summary>
+        private static void SetAlphaTest(string vmatPath)
+        {
+            var vmat = File.ReadAllText(vmatPath);
+            var feature = AlphaTestRegex().Match(vmat);
+
+            vmat = feature.Success
+                ? string.Concat(vmat.AsSpan(0, feature.Groups["value"].Index), "1", vmat.AsSpan(feature.Groups["value"].Index + feature.Groups["value"].Length))
+                : ShaderLineRegex().Replace(vmat, match => $"{match.Value}{match.Groups["indent"].Value}\"F_ALPHA_TEST\"\t\"1\"\n", 1);
+
+            File.WriteAllText(vmatPath, vmat);
+        }
+
+        /// <summary>
+        /// Points every model the export wrote at the copies of the materials, see <see cref="CharacterExportPlan.MaterialCopies"/>.
+        /// </summary>
+        private static int ApplyMaterialCopies(CharacterExportPlan plan, string outputRoot, IProgress<string> progress)
+        {
+            if (plan.MaterialCopies.Count == 0)
+            {
+                return 0;
+            }
+
+            progress.Report("Pointing the models at the material copies...");
+
+            var failed = 0;
+            var models = plan.Models.Select(StripCompiledSuffix)
+                .Concat(plan.ModelReplacements.Select(static replacement => replacement.Target))
+                .Select(static model => Path.ChangeExtension(CharacterLoadout.NormalizePath(model), "vmdl"))
+                .Distinct(StringComparer.OrdinalIgnoreCase);
+
+            foreach (var model in models)
+            {
+                var path = GetOutputPath(outputRoot, model);
+
+                if (!File.Exists(path))
+                {
+                    continue;
+                }
+
+                try
+                {
+                    File.WriteAllText(path, ModelDocEditor.RedirectMaterials(File.ReadAllText(path), plan.MaterialCopies));
+                    progress.Report($"  {model}");
+                }
+                catch (Exception e)
+                {
+                    failed++;
+                    progress.Report($"  FAILED {model}: {e.Message}");
+                    Log.Error(nameof(CharacterAssetsExporter), $"Failed to point '{model}' at the material copies: {e}");
+                }
+            }
+
+            return failed;
+        }
+
+        /// <summary>
         /// Перекрашивает текстуру цвета на 100% и обновляет VMAT на диске.
         /// </summary>
         private static void ApplyRecolorToExportedVmat(
@@ -1370,5 +1436,11 @@ namespace GUI.Types.Exporter.CharacterAssets
             => path.EndsWith(GameFileLoader.CompiledFileSuffix, StringComparison.OrdinalIgnoreCase)
                 ? path[..^GameFileLoader.CompiledFileSuffix.Length]
                 : path;
+
+        [GeneratedRegex(@"^[ \t]*""F_ALPHA_TEST""[ \t]+""(?<value>[^""]*)""", RegexOptions.CultureInvariant | RegexOptions.Multiline)]
+        private static partial Regex AlphaTestRegex();
+
+        [GeneratedRegex(@"^(?<indent>[ \t]*)""shader""[ \t]+""[^""]*""[ \t]*\r?\n", RegexOptions.CultureInvariant | RegexOptions.Multiline)]
+        private static partial Regex ShaderLineRegex();
     }
 }
