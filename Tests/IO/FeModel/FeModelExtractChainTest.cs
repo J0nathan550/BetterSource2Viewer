@@ -578,7 +578,8 @@ namespace Tests.IO
         [Test]
         public async Task ARinglessChainsAbsentRootBaseStatesNoFormat()
         {
-            var ringless = (ThreeJointRope with { RotLockStaticNodes = 1 }).Reconstruct();
+            // Version 2 places j2 by a reverse offset from its simulated parent
+            var ringless = (ThreeJointRope with { RotLockStaticNodes = 1, ReverseOffsets = [ReverseOffset(1, 2, 0f, 0f, -10f)] }).Reconstruct();
 
             var chain = ringless.BuildBoneChains()[0];
 
@@ -589,6 +590,26 @@ namespace Tests.IO
                 await Assert.That(ringless.Index.NodeBases.ContainsKey(chain.Joints[0].Node)).IsFalse();
                 await Assert.That(ClothReconstruction.ClothChainVersion(ringless, chain))
                     .IsEqualTo(2);
+            }
+        }
+
+        /// <summary>
+        /// A ringless chain without the reverse offset from a simulated parent its version 1 and above compile was
+        /// authored at version 0, which lets the joint's goal follow its own bone.
+        /// </summary>
+        [Test]
+        public async Task ARinglessChainWithoutItsParentReverseOffsetIsVersion0()
+        {
+            var bare = (ThreeJointRope with { RotLockStaticNodes = 1 }).Reconstruct();
+            var offset = (ThreeJointRope with { RotLockStaticNodes = 1, ReverseOffsets = [ReverseOffset(1, 2, 0f, 0f, -10f)] }).Reconstruct();
+            var bareChain = bare.BuildBoneChains()[0];
+            var offsetChain = offset.BuildBoneChains()[0];
+
+            using (Assert.Multiple())
+            {
+                await Assert.That(bare.ChainLacksParentReverseOffsets(bareChain)).IsTrue();
+                await Assert.That(offset.ChainLacksParentReverseOffsets(offsetChain)).IsFalse();
+                await Assert.That(ClothReconstruction.ClothChainVersion(bare, bareChain)).IsEqualTo(0);
             }
         }
 

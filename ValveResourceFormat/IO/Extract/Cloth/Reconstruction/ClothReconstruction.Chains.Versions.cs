@@ -267,6 +267,39 @@ namespace ValveResourceFormat.IO
         }
 
         /// <summary>
+        /// Whether no joint of <paramref name="chain"/> under a simulated joint of it has the reverse offset from that
+        /// parent which a <c>ClothChain</c> of version 1 or above compiles, false when one has or none is under one.
+        /// </summary>
+        internal bool ChainLacksParentReverseOffsets(BoneChain chain)
+        {
+            // A ringed chain's offsets name its rings, see ChainReverseOffsetsArePreset
+            if (chain.ExtrudeSides >= 1 || chain.Joints.Exists(static joint => joint.RingNodes.Count > 0))
+            {
+                return false;
+            }
+
+            var targets = ReverseOffsetTargets;
+            var read = false;
+
+            foreach (var joint in chain.Joints)
+            {
+                if (joint.ParentNode < Fe.StaticNodes || !chain.Joints.Exists(parent => parent.Node == joint.ParentNode))
+                {
+                    continue;
+                }
+
+                if (targets.TryGetValue(joint.ParentNode, out var parentTargets) && parentTargets.Contains(joint.Node))
+                {
+                    return false;
+                }
+
+                read = true;
+            }
+
+            return read;
+        }
+
+        /// <summary>
         /// Whether the original compiled <paramref name="chain"/> with the reverse offsets a <c>ClothChain</c> of version 2
         /// or above records against its joints' preset bases: true when every read joint names the Y1 node of the preset
         /// basis graded over its own extrusion vector and its child's, false when one names none, null when no joint is read.

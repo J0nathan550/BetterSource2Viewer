@@ -24,7 +24,8 @@ internal sealed partial class ClothReconstruction
     internal readonly record struct ChainVersionEvidence(bool? RootAllowsRotation, bool RootHasBase, bool LockedJoint,
         bool RigidCloudClusterLock, bool LocksJoints, bool? BasesBulkGraded, bool HintsTwistWritten, bool HasUnstagedThinJoint,
         bool? ReverseOffsetsPreset = null, bool HasUnbasedLeaf = false, bool SiblingHubLock = false, bool ExtrudesNothing = false,
-        bool FitsPresetJoint = false, bool LocksOnlyParentLocked = false, bool LocksOnlyToGoal = false);
+        bool FitsPresetJoint = false, bool LocksOnlyParentLocked = false, bool LocksOnlyToGoal = false,
+        bool LacksParentReverseOffsets = false);
 
     /// <summary>
     /// The <c>ClothChain</c> version a chain was authored at, read off the evidence its compiled data carries. Version 2
@@ -61,6 +62,12 @@ internal sealed partial class ClothReconstruction
             version = 0;
         }
 
+        // Version 1 and above place a joint under a simulated parent by a reverse offset from that parent
+        if (evidence.LacksParentReverseOffsets)
+        {
+            version = 0;
+        }
+
         return version;
     }
 
@@ -92,7 +99,8 @@ internal sealed partial class ClothReconstruction
                 && !chain.Joints.Exists(static joint => joint.RingNodes.Count > 0),
             FitsPresetJoint: cloth.ChainFitsAPresetJoint(chain),
             LocksOnlyParentLocked: ChainLocksOnlyParentLockedJoints(cloth, chain),
-            LocksOnlyToGoal: locksJoints && !ChainLocksJointsToParent(cloth, chain));
+            LocksOnlyToGoal: locksJoints && !ChainLocksJointsToParent(cloth, chain),
+            LacksParentReverseOffsets: cloth.ChainLacksParentReverseOffsets(chain));
     }
 
     /// <summary>
