@@ -33,10 +33,8 @@ namespace GUI.Types.Exporter.CharacterAssets
     /// <param name="Modifiers">The activity modifiers it is made for.</param>
     /// <param name="Looping">Whether it loops.</param>
     /// <param name="Delta">Whether it is an additive blend, e.g. the turns layered on runs.</param>
-    /// <param name="Duration">How long it plays for in seconds, 0 when not known.</param>
     /// <param name="Multi">Whether it blends several poses, e.g. by the angle an aim pose parameter gives.</param>
-    sealed record OriginalSequence(string Name, string? Activity, IReadOnlyList<string> Modifiers, bool Looping, bool Delta = false, float Duration = 0,
-        bool Multi = false);
+    sealed record OriginalSequence(string Name, string? Activity, IReadOnlyList<string> Modifiers, bool Looping, bool Delta = false, bool Multi = false);
 
     /// <summary>
     /// Edits decompiled .vmdl files in place, keeping the rest of the text exactly as the model extractor wrote it.
@@ -837,7 +835,6 @@ namespace GUI.Types.Exporter.CharacterAssets
             var played = new Dictionary<string, AnimFileNode>(StringComparer.OrdinalIgnoreCase);
             var layered = new List<OriginalSequence>();
             var copied = 0;
-            var retimed = 0;
 
             foreach (var sequence in original)
             {
@@ -861,26 +858,12 @@ namespace GUI.Types.Exporter.CharacterAssets
 
                 played[sequence.Name] = source;
 
-                var text = GetNodeText(vmdl, source.Start, source.End, source.Name, own?.Name.Value ?? sequence.Name);
-
-                // The server moves on once the original's version ends, a longer one would be cut off and a shorter one
-                // would hold its last frame
-                if (!sequence.Looping && !sequence.Delta && sequence.Duration > 0 && (own == null || topLevel.Contains(own))
-                    && FitDuration(text, sequence.Duration) is { } fitted)
-                {
-                    text = fitted;
-                    retimed++;
-
-                    if (own == source)
-                    {
-                        replacements.Add((own, text[..^1]));
-                        continue;
-                    }
-                }
-                else if (own == source)
+                if (own == source)
                 {
                     continue;
                 }
+
+                var text = GetNodeText(vmdl, source.Start, source.End, source.Name, own?.Name.Value ?? sequence.Name);
 
                 if (own == null)
                 {
@@ -965,9 +948,9 @@ namespace GUI.Types.Exporter.CharacterAssets
 
             vmdl = vmdl.Insert(animationList.Index + animationList.Length, copies + Indent(animOrder, 5));
 
-            if (remapped.Count > 0 || retimed > 0)
+            if (remapped.Count > 0)
             {
-                details?.Add($"sequences numbered like the original's ({copied} copied, {retimed} retimed to its length): {string.Join(", ", remapped)}");
+                details?.Add($"sequences numbered like the original's ({copied} copied): {string.Join(", ", remapped)}");
             }
 
             return Validate(vmdl);
@@ -1073,51 +1056,6 @@ namespace GUI.Types.Exporter.CharacterAssets
             }
 
             return text.Append(',').ToString();
-        }
-
-        /// <summary>
-        /// Changes the frame rate of an animation node's text so it plays for as long as another sequence, or returns
-        /// null when it already does, within a frame's worth, or its length is not known.
-        /// </summary>
-        private static string? FitDuration(string text, float duration)
-        {
-            // Only the node's own settings, its children have frame ranges of their own
-            var children = FindObjects(text).Skip(1).ToList();
-
-            Match? FindOwn(Regex regex)
-            {
-                for (var match = regex.Match(text); match.Success; match = match.NextMatch())
-                {
-                    if (!children.Any(child => match.Index > child.Start && match.Index < child.End))
-                    {
-                        return match;
-                    }
-                }
-
-                return null;
-            }
-
-            if (FindOwn(FrameRateRegex()) is not { } frameRate
-                || FindOwn(StartFrameRegex()) is not { } startFrame
-                || FindOwn(EndFrameRegex()) is not { } endFrame
-                || !float.TryParse(frameRate.Groups["value"].Value, NumberStyles.Float, CultureInfo.InvariantCulture, out var fps) || fps <= 0)
-            {
-                return null;
-            }
-
-            var frames = int.Parse(endFrame.Groups["value"].Value, CultureInfo.InvariantCulture)
-                - int.Parse(startFrame.Groups["value"].Value, CultureInfo.InvariantCulture);
-
-            // Poses held for a screen rather than played, e.g. the versus screen's, run at a fraction of a frame per second
-            if (frames <= 0 || MathF.Abs((frames / fps) - duration) * fps < 1f || frames / duration < 1f)
-            {
-                return null;
-            }
-
-            var value = frameRate.Groups["value"];
-
-            return string.Concat(text.AsSpan(0, value.Index), (frames / duration).ToString("0.###", CultureInfo.InvariantCulture),
-                text.AsSpan(value.Index + value.Length));
         }
 
         /// <summary>
@@ -2241,15 +2179,6 @@ namespace GUI.Types.Exporter.CharacterAssets
 
         [GeneratedRegex(@"\bmodel\s*=\s*""(?<model>[^""]*)""", RegexOptions.CultureInvariant)]
         private static partial Regex IncludedModelRegex();
-
-        [GeneratedRegex(@"\bframerate\s*=\s*(?<value>[0-9.]+)", RegexOptions.CultureInvariant)]
-        private static partial Regex FrameRateRegex();
-
-        [GeneratedRegex(@"\bstart_frame\s*=\s*(?<value>-?[0-9]+)", RegexOptions.CultureInvariant)]
-        private static partial Regex StartFrameRegex();
-
-        [GeneratedRegex(@"\bend_frame\s*=\s*(?<value>-?[0-9]+)", RegexOptions.CultureInvariant)]
-        private static partial Regex EndFrameRegex();
 
         [GeneratedRegex(@"\bdelta\s*=\s*(?<value>true|false)\b", RegexOptions.CultureInvariant)]
         private static partial Regex DeltaRegex();

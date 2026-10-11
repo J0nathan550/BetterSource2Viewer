@@ -581,15 +581,6 @@ namespace GUI.Types.Exporter.CharacterAssets
             }
 
             var descriptions = new Dictionary<string, OriginalSequence>(StringComparer.Ordinal);
-            var durations = new Dictionary<string, float>(StringComparer.Ordinal);
-
-            if (resource.DataBlock is Model compiledModel)
-            {
-                foreach (var animation in compiledModel.GetAllAnimations(fileLoader))
-                {
-                    durations.TryAdd(animation.Name, animation.Duration);
-                }
-            }
 
             foreach (var sequence in sequenceData.GetArray("m_localS1SeqDescArray") ?? [])
             {
@@ -602,7 +593,7 @@ namespace GUI.Types.Exporter.CharacterAssets
                 var delta = flags?.GetBooleanProperty("m_bLegacyDelta") ?? false;
                 var multi = flags?.GetBooleanProperty("m_bMulti") ?? false;
 
-                descriptions.TryAdd(name, new OriginalSequence(name, activity, modifiers, looping, delta, durations.GetValueOrDefault(name), multi));
+                descriptions.TryAdd(name, new OriginalSequence(name, activity, modifiers, looping, delta, multi));
             }
 
             return [.. (sequenceData.GetArray<string>("m_localSequenceNameArray") ?? [])
