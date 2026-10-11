@@ -6,6 +6,7 @@ using ValvePak;
 using ValveResourceFormat;
 using ValveResourceFormat.IO;
 using ValveResourceFormat.ResourceTypes;
+using ValveResourceFormat.ResourceTypes.ModelAnimation;
 using ValveResourceFormat.Serialization.KeyValues;
 
 namespace GUI.Types.Exporter.CharacterAssets
@@ -140,10 +141,15 @@ namespace GUI.Types.Exporter.CharacterAssets
         /// <summary>The expression each "customresponse" criteria matches, by criteria name, e.g. "!=drow_arcana".</summary>
         private readonly Dictionary<string, string> customCriteria;
 
-        private HeroResponseRules(List<(string[] Requirements, string[] Lines)> groups, Dictionary<string, string> customCriteria)
+        /// <summary>What each criteria matches, by criteria name, as "key=expression", e.g. "special_spawn=drow_arcana_loadout_spawn".</summary>
+        private readonly Dictionary<string, string> criteriaMatches;
+
+        private HeroResponseRules(List<(string[] Requirements, string[] Lines)> groups, Dictionary<string, string> customCriteria,
+            Dictionary<string, string> criteriaMatches)
         {
             this.groups = groups;
             this.customCriteria = customCriteria;
+            this.criteriaMatches = criteriaMatches;
         }
 
         /// <summary>
@@ -190,13 +196,23 @@ namespace GUI.Types.Exporter.CharacterAssets
         private static HeroResponseRules Read(KVObject data)
         {
             var customCriteria = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+            var criteriaMatches = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
 
             foreach (var criteria in data.GetArray("m_Requirements") ?? [])
             {
-                if (string.Equals(criteria.GetStringProperty("m_matchKey"), CustomResponseKey, StringComparison.OrdinalIgnoreCase)
-                    && criteria.GetStringProperty("m_name") is { Length: > 0 } name)
+                if (criteria.GetStringProperty("m_name") is not { Length: > 0 } name)
                 {
-                    customCriteria[name] = criteria.GetStringProperty("m_matchExpr", string.Empty);
+                    continue;
+                }
+
+                var key = criteria.GetStringProperty("m_matchKey", string.Empty);
+                var expression = criteria.GetStringProperty("m_matchExpr", string.Empty);
+
+                criteriaMatches[name] = $"{key}={expression}";
+
+                if (string.Equals(key, CustomResponseKey, StringComparison.OrdinalIgnoreCase))
+                {
+                    customCriteria[name] = expression;
                 }
             }
 
@@ -223,7 +239,7 @@ namespace GUI.Types.Exporter.CharacterAssets
                 }
             }
 
-            return new HeroResponseRules(groups, customCriteria);
+            return new HeroResponseRules(groups, customCriteria, criteriaMatches);
         }
 
         /// <summary>
@@ -240,7 +256,12 @@ namespace GUI.Types.Exporter.CharacterAssets
         /// <param name="criteria">The criteria the item sets, e.g. "arcana".</param>
         /// <param name="chatWheel">The hero's chat wheel.</param>
         /// <param name="chatWheelSwaps">The lines the voice's items swap chat wheel lines for, see <see cref="VoiceChoice.ChatWheelSwaps"/>.</param>
-        public VoiceMapping MapVoice(string criteria, IReadOnlyList<ChatWheelLine> chatWheel, IReadOnlyDictionary<string, string> chatWheelSwaps)
+        /// <param name="spokenCriteria">
+        /// What the exported hero model asks to be spoken that the hero's own model does not, as "key=value", see
+        /// <see cref="CharacterSounds.GetSpeechCriteria"/>.
+        /// </param>
+        public VoiceMapping MapVoice(string criteria, IReadOnlyList<ChatWheelLine> chatWheel, IReadOnlyDictionary<string, string> chatWheelSwaps,
+            IReadOnlySet<string>? spokenCriteria = null)
         {
             var voiceCriteria = customCriteria
                 .Where(pair => pair.Value.Equals(criteria, StringComparison.OrdinalIgnoreCase))
@@ -285,6 +306,18 @@ namespace GUI.Types.Exporter.CharacterAssets
             }
 
             var voiceLines = situations.SelectMany(static situation => situation.Lines).ToHashSet(StringComparer.OrdinalIgnoreCase);
+
+            // Rules that need no voice and that only the exported model sets off are heard with the voice too, so their
+            // lines stay even when another rule of the hero's has them, e.g. the silence line Drow Ranger's arcana
+            // loadout says, which the voice has other silence lines for
+            if (spokenCriteria is { Count: > 0 })
+            {
+                voiceLines.UnionWith(heroGroups
+                    .Where(group => !group.Requirements.Any(customCriteria.ContainsKey)
+                        && group.Requirements.Any(requirement => criteriaMatches.TryGetValue(requirement, out var match) && spokenCriteria.Contains(match))
+                        && !situations.Any(voiceSituation => voiceSituation.Situation.SetEquals(GetSituation(group.Requirements))))
+                    .SelectMany(static group => group.Lines));
+            }
             var chatWheelLines = chatWheel.Where(static line => !line.Persona).ToList();
             var chatWheelSounds = chatWheelLines.Select(static line => line.Sound).ToHashSet(StringComparer.OrdinalIgnoreCase);
 
@@ -379,6 +412,34 @@ namespace GUI.Types.Exporter.CharacterAssets
             "soundevents/team_fandom/",
             "soundevents/stickers/",
         ];
+
+        /// <summary>
+        /// What a model's sequences ask the hero to speak, as "key=value", e.g. "special_spawn=drow_arcana_loadout_spawn".
+        /// </summary>
+        public static HashSet<string> GetSpeechCriteria(IFileLoader fileLoader, string model)
+        {
+            var criteria = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+
+            using var resource = fileLoader.LoadFileCompiled(CharacterLoadout.NormalizePath(model));
+
+            if (resource?.DataBlock is not Model compiledModel)
+            {
+                return criteria;
+            }
+
+            foreach (var animation in compiledModel.GetAllAnimations(fileLoader).OfType<SequenceAnimation>())
+            {
+                foreach (var animationEvent in animation.Events)
+                {
+                    if (animationEvent.Name == "AE_CL_SPEECH" && animationEvent.EventData?.GetStringProperty("criteria") is { Length: > 0 } eventCriteria)
+                    {
+                        criteria.UnionWith(eventCriteria.Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries));
+                    }
+                }
+            }
+
+            return criteria;
+        }
 
         /// <summary>
         /// The file each sound event is defined in, as source paths, leaving out voice lines, which items do not swap

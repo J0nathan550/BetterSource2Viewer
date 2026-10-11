@@ -542,7 +542,7 @@ namespace GUI.Types.Exporter.CharacterAssets
 
             if (options.Sounds)
             {
-                AddSoundReplacements(loadout.Hero, options, plan);
+                AddSoundReplacements(loadout, options, plan);
             }
 
             while (queue.TryDequeue(out var next))
@@ -1750,12 +1750,14 @@ namespace GUI.Types.Exporter.CharacterAssets
         /// and the <see cref="CharacterExportOptions.Voice"/>, and queues those files, and the sounds the copied
         /// definitions play when <see cref="CharacterExportOptions.IncludeAudio"/> is set.
         /// </summary>
-        private void AddSoundReplacements(HeroDefinition hero, CharacterExportOptions options, CharacterExportPlan plan)
+        private void AddSoundReplacements(CharacterLoadout loadout, CharacterExportOptions options, CharacterExportPlan plan)
         {
             if (options.SoundReplacements.Count == 0 && options.Voice == null)
             {
                 return;
             }
+
+            var hero = loadout.Hero;
 
             var index = soundEvents ??= BuildSoundEventIndex(hero);
             var edits = new Dictionary<string, SoundEventEdit>(StringComparer.OrdinalIgnoreCase);
@@ -1795,7 +1797,7 @@ namespace GUI.Types.Exporter.CharacterAssets
 
             if (options.Voice is { Criteria: { } criteria } voice)
             {
-                var mapping = HeroResponseRules.Load(package, hero)?.MapVoice(criteria, hero.ChatWheel, voice.ChatWheelSwaps);
+                var mapping = HeroResponseRules.Load(package, hero)?.MapVoice(criteria, hero.ChatWheel, voice.ChatWheelSwaps, GetModelSpeechCriteria(loadout));
 
                 if (mapping == null || mapping.Lines.Count == 0)
                 {
@@ -1839,6 +1841,31 @@ namespace GUI.Types.Exporter.CharacterAssets
                 {
                     Enqueue(sound);
                 }
+            }
+        }
+
+        /// <summary>
+        /// What the hero model the loadout swaps in asks to be spoken that the hero's own model does not, e.g. the lines
+        /// of an arcana's loadout, see <see cref="CharacterSounds.GetSpeechCriteria"/>.
+        /// </summary>
+        private HashSet<string>? GetModelSpeechCriteria(CharacterLoadout loadout)
+        {
+            if (loadout.HeroModel == null || loadout.Hero.Model == null || CharacterLoadout.IsSamePath(loadout.HeroModel, loadout.Hero.Model))
+            {
+                return null;
+            }
+
+            try
+            {
+                var criteria = CharacterSounds.GetSpeechCriteria(fileLoader, loadout.HeroModel);
+                criteria.ExceptWith(CharacterSounds.GetSpeechCriteria(fileLoader, loadout.Hero.Model));
+
+                return criteria;
+            }
+            catch (Exception e)
+            {
+                progress?.Report($"  ! failed to read what \"{loadout.HeroModel}\" speaks: {e.Message}");
+                return null;
             }
         }
 
