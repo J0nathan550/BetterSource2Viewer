@@ -1286,8 +1286,20 @@ namespace GUI.Types.Exporter.CharacterAssets
                 return vmdl;
             }
 
-            // Alignment nodes are named, the merged model's would clash with this model's
-            string Rename(string text) => ClothNodeNameRegex().Replace(text, match => $"{match.Groups["prefix"].Value}{prefix}_{match.Groups["name"].Value}\"");
+            // Nodes named apart from their bone could clash with this model's, they are renamed wherever they are
+            // referred to, e.g. by springs and vertex maps. The others are named after their bone, which stays
+            var renamed = ClothNodeNameRegex().Matches(otherVmdl, softbody.Start)
+                .Where(match => match.Index < softbody.End)
+                .Select(static match => match.Groups["name"].Value)
+                .Where(name => name.Length > 0 && !Regex.IsMatch(otherVmdl[softbody.Start..softbody.End],
+                    $@"_class\s*=\s*""ClothNode""\s*name\s*=\s*""{Regex.Escape(name)}""[^{{}}]*?cloth_node_root_bone\s*=\s*""{Regex.Escape(name)}"""))
+                .ToHashSet(StringComparer.Ordinal);
+            var renamedRegex = renamed.Count == 0
+                ? null
+                : new Regex($@"(?<![\w$]){string.Join('|', renamed.OrderByDescending(static name => name.Length).Select(Regex.Escape))}(?!\w)",
+                    RegexOptions.CultureInvariant);
+
+            string Rename(string text) => renamedRegex?.Replace(text, match => $"{prefix}_{match.Value}") ?? text;
 
             if (SoftbodyChildrenRegex().Match(vmdl) is { Success: true } ownChildren)
             {

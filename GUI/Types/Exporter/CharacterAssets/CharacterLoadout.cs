@@ -95,6 +95,9 @@ namespace GUI.Types.Exporter.CharacterAssets
         private readonly Dictionary<string, List<string>> slotUnitModels;
         private readonly HashSet<string> itemModels;
 
+        /// <summary>The slots whose default item the game combines into the hero's model.</summary>
+        private readonly HashSet<string> combinedDefaultSlots = new(StringComparer.OrdinalIgnoreCase);
+
         public HeroDefinition Hero { get; }
         public IReadOnlyList<EquippedItem> Items { get; }
 
@@ -117,14 +120,20 @@ namespace GUI.Types.Exporter.CharacterAssets
             var slots = new Dictionary<string, HeroSlot>(StringComparer.OrdinalIgnoreCase);
             var unitModels = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
             var slotUnitModels = new Dictionary<string, List<string>>(StringComparer.OrdinalIgnoreCase);
+            var combinedDefaultSlots = new List<string>();
 
             foreach (var slot in catalog.GetSlots(hero))
             {
                 slots.TryAdd(slot.Name, slot);
 
-                if (catalog.GetDefaultItem(hero, slot.Name)?.ModelPlayer is { } model)
+                if (catalog.GetDefaultItem(hero, slot.Name) is { ModelPlayer: { } model } defaultItem)
                 {
                     defaultModels[slot.Name] = model;
+
+                    if (!defaultItem.SkipModelCombine)
+                    {
+                        combinedDefaultSlots.Add(slot.Name);
+                    }
                 }
 
                 foreach (var unit in slot.Units ?? [])
@@ -166,7 +175,10 @@ namespace GUI.Types.Exporter.CharacterAssets
             // Saved loadouts may still have one, the taunt animations stay in the model as the hero's own
             items = [.. items.Where(static item => !ItemsGameCatalog.IsTauntSlot(item.Item.Slot))];
 
-            return new CharacterLoadout(hero, items, defaultModels, slots, unitModels, slotUnitModels, itemModels);
+            var loadout = new CharacterLoadout(hero, items, defaultModels, slots, unitModels, slotUnitModels, itemModels);
+            loadout.combinedDefaultSlots.UnionWith(combinedDefaultSlots);
+
+            return loadout;
         }
 
         /// <summary>
@@ -268,6 +280,12 @@ namespace GUI.Types.Exporter.CharacterAssets
         /// The model the hero wears in the slot when nothing else is equipped, if it has one.
         /// </summary>
         public string? GetDefaultModel(string slot) => defaultModels.GetValueOrDefault(slot);
+
+        /// <summary>
+        /// Whether the game combines the slot's default item into the hero's model. It goes by the equipped item, which
+        /// for a mod is always the default one, so an item written over it is combined too, even one the game keeps apart.
+        /// </summary>
+        public bool IsDefaultCombined(string slot) => combinedDefaultSlots.Contains(slot);
 
         /// <summary>
         /// Whether an equipped item turns the hero into its persona, which wears the items of its own slots instead of

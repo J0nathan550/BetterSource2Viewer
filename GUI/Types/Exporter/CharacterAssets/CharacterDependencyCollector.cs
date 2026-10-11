@@ -1089,6 +1089,17 @@ namespace GUI.Types.Exporter.CharacterAssets
 
                         plan.Notes.Add($"{NormalizePath(model)} animates parts of its own, it was added to the hero's model with its animations played on them");
                     }
+                    else if (options.AnimateOwnParts && options.HeroModel && hero.Model != null && defaultModel != null && item.Item.SkipModelCombine
+                        && loadout.IsDefaultCombined(item.Item.Slot) && loadout.IsWornByHero(item.Item.Slot) && HasBoneCloth(model))
+                    {
+                        // Written over a default the game combines into the hero, its cloth would hang stretched off bones
+                        // nothing moves any more, e.g. the Windranger arcana's hair
+                        var (skin, bodyGroups) = GetModelLook(loadout, model, item.Skin, styleRemaps: false);
+                        merged.Add(new MergedModel(NormalizePath(model), skin, bodyGroups) { PickedChoicesOnly = true });
+                        heroParticles.AddRange(createdParticles);
+                        plan.HiddenModels.Add(NormalizePath(defaultModel));
+                        plan.Notes.Add($"{NormalizePath(model)} has cloth the game keeps apart from the hero, it was added to the hero's model");
+                    }
                     else if (defaultModel != null)
                     {
                         var (skin, bodyGroups) = GetLook(model, item.Skin);
@@ -1311,6 +1322,26 @@ namespace GUI.Types.Exporter.CharacterAssets
         /// Earthshaker's and Drow Ranger's, but follow the hero's sequences and have to be written over their default
         /// models like other items.
         /// </summary>
+        /// <summary>
+        /// Whether a model has cloth on chains of its bones, which <see cref="ModelDocEditor.MergeModel"/> can carry over.
+        /// Cloth on a proxy mesh's vertices is set up outside the soft body and is not.
+        /// </summary>
+        private bool HasBoneCloth(string model)
+        {
+            try
+            {
+                using var resource = fileLoader.LoadFileCompiled(NormalizePath(model));
+
+                return resource?.DataBlock is Model compiledModel && compiledModel.GetEmbeddedPhys()?.FeModel is { } cloth
+                    && !cloth.CtrlName.Any(static name => name.StartsWith("$cloth_m", StringComparison.Ordinal));
+            }
+            catch (Exception e)
+            {
+                progress?.Report($"  ! failed to read the cloth of \"{model}\": {e.Message}");
+                return false;
+            }
+        }
+
         private List<string> GetAnimatedBones(CharacterLoadout loadout, EquippedItem item, string model)
         {
             if (!item.Item.SkipModelCombine
