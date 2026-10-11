@@ -889,6 +889,16 @@ namespace GUI.Types.Exporter.CharacterAssets
                 // Blends go to this model's blend of the same kind, e.g. the aim poses Razor turns to his target with
                 var blend = (sequence.Delta || sequence.Multi) && FindOwn(sequence.Name) == null ? FindBlend(sequence) : null;
 
+                // The original only turns its run to the target while the hero moves to attack, e.g. Razor during Static
+                // Link, and walks facing ahead otherwise. Its plain run plays the same aim blend, so he faces the target
+                // whenever the game sets the pose parameter
+                if (blend == null && sequence is { Activity: "ACT_DOTA_RUN", Looping: true, Delta: false, Multi: false, Modifiers.Count: 0 }
+                    && FindOwn(sequence.Name) == null
+                    && original.FirstOrDefault(other => other.Multi && other.Activity == sequence.Activity && other.PoseParameters.Count > 0) is { } aimedRun)
+                {
+                    blend = FindBlend(aimedRun);
+                }
+
                 if (blend != null && !aliases.ContainsValue(blend.Name.Value))
                 {
                     aliases[sequence.Name] = blend.Name.Value;
