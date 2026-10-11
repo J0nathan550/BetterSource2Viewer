@@ -123,6 +123,7 @@ namespace GUI.Forms
         private readonly CheckBox skipUnchangedCheckBox;
         private readonly CheckBox arcanaMaterialsCheckBox;
         private readonly CheckBox alphaTestMaterialsCheckBox;
+        private readonly CheckBox portraitsCheckBox;
         private readonly CheckBox editMaterialsCheckBox;
         private readonly CheckBox recommendedAlphaTestCheckBox;
         private readonly CheckBox recommendedSharedParticlesCheckBox;
@@ -151,6 +152,7 @@ namespace GUI.Forms
             Materials = IsChecked(materialsCheckBox) || slotRecolors.Count > 0,
             ArcanaMaterials = IsChecked(arcanaMaterialsCheckBox),
             AlphaTestMaterials = IsChecked(alphaTestMaterialsCheckBox),
+            Portraits = IsChecked(portraitsCheckBox),
             MergeAdditionalWearables = IsChecked(mergeWearablesCheckBox),
             ItemParticles = IsChecked(itemParticlesCheckBox),
             ItemEffects = GetItemEffects(),
@@ -290,6 +292,7 @@ namespace GUI.Forms
             skipUnchangedCheckBox = Check("Only models the loadout changes", true);
             arcanaMaterialsCheckBox = Check("Materials of arcana models", false);
             alphaTestMaterialsCheckBox = Check("Materials with alpha test", false);
+            portraitsCheckBox = Check("Portrait lighting of replaced models (writes a copy of portraits.txt)", false);
 
             replaceDefaultsCheckBox.IsCheckedChanged += (_, _) => UpdateReplaceDefaultsDependents();
             materialsCheckBox.IsCheckedChanged += (_, _) => UpdateReplaceDefaultsDependents();
@@ -376,6 +379,7 @@ namespace GUI.Forms
             AddCell(includeTable, skipUnchangedCheckBox, 10, 0, columnSpan: 3);
             AddCell(includeTable, arcanaMaterialsCheckBox, 11, 0, columnSpan: 3);
             AddCell(includeTable, alphaTestMaterialsCheckBox, 12, 0, columnSpan: 3);
+            AddCell(includeTable, portraitsCheckBox, 13, 0, columnSpan: 3);
 
             var modePanel = new StackPanel
             {
@@ -659,6 +663,11 @@ namespace GUI.Forms
                 "Copy every material the exported models use, with their textures, into materials/j0nathan550 with alpha testing turned on,\n" +
                 "and point the models at the copies. Fixes arcanas that render see-through in game, e.g. Razor's.\n" +
                 "Off by default, most heroes do not need it.");
+            ToolTip.SetTip(portraitsCheckBox,
+                "When replacing default assets, light the HUD portrait of each replaced model like the model written over it, e.g. an arcana's,\n" +
+                "in a copy of scripts/npc/portraits.txt in the game folder. The game looks portraits up by model path, so it would use the original's.\n" +
+                "The copy replaces the whole file, so other mods that change it stop working unless they are in the same folder.\n" +
+                "A copy an earlier export wrote there is updated, so several heroes can share it.");
             ToolTip.SetTip(mergeWearablesCheckBox, "When replacing default assets, add the meshes of the extra models items wear, e.g. an arcana's frost overlay,\n" +
                 "to the hero's model. They are exported as models of their own either way.");
             ToolTip.SetTip(replaceSharedParticlesCheckBox, "Also replace particles every hero uses, like the blink dagger, stun and status effects");
@@ -951,6 +960,7 @@ namespace GUI.Forms
             skipUnchangedCheckBox.IsChecked = options.SkipUnchangedModels;
             arcanaMaterialsCheckBox.IsChecked = options.ArcanaMaterials;
             alphaTestMaterialsCheckBox.IsChecked = options.AlphaTestMaterials;
+            portraitsCheckBox.IsChecked = options.Portraits;
         }
 
         private CheckBox[] ExportCheckBoxes =>
@@ -958,7 +968,7 @@ namespace GUI.Forms
             heroModelCheckBox, itemModelsCheckBox, pedestalCheckBox, itemParticlesCheckBox, heroParticlesCheckBox, iconsCheckBox,
             itemSoundsCheckBox, heroSoundsCheckBox, heroVoiceCheckBox, includeAudioCheckBox, soundsCheckBox, replaceDefaultsCheckBox,
             replaceSharedParticlesCheckBox, materialsCheckBox, mergeWearablesCheckBox, renameModelsCheckBox, animatePartsCheckBox,
-            spriteSheetCheckBox, itemsGameCheckBox, skipUnchangedCheckBox, arcanaMaterialsCheckBox, alphaTestMaterialsCheckBox,
+            spriteSheetCheckBox, itemsGameCheckBox, skipUnchangedCheckBox, arcanaMaterialsCheckBox, alphaTestMaterialsCheckBox, portraitsCheckBox,
         ];
 
         // Not read from the radio buttons, the newly checked one tells before the other one is unchecked
@@ -975,6 +985,7 @@ namespace GUI.Forms
             Materials = IsChecked(materialsCheckBox),
             ArcanaMaterials = IsChecked(arcanaMaterialsCheckBox),
             AlphaTestMaterials = IsChecked(alphaTestMaterialsCheckBox),
+            Portraits = IsChecked(portraitsCheckBox),
             MergeAdditionalWearables = IsChecked(mergeWearablesCheckBox),
             ItemParticles = IsChecked(itemParticlesCheckBox),
             HeroParticles = IsChecked(heroParticlesCheckBox),

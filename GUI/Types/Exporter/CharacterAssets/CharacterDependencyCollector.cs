@@ -3,6 +3,7 @@ using System.Drawing;
 using System.IO;
 using System.Linq;
 using System.Text.Json.Serialization;
+using System.Text.RegularExpressions;
 using System.Threading;
 using ValveKeyValue;
 using ValvePak;
@@ -128,6 +129,16 @@ namespace GUI.Types.Exporter.CharacterAssets
         public IReadOnlyList<DefaultItemSwap> DefaultItemSwaps { get; set; } = [];
 
         /// <summary>
+        /// With <see cref="ReplaceDefaults"/>, writes the portrait settings of each model written over another, e.g. the
+        /// lights an arcana's HUD portrait is lit with, over those of the model it replaces, in a copy of
+        /// <see cref="CharacterAssetsExporter.PortraitsFile"/> in the game folder. The game looks them up by the model's
+        /// path, so it would light the replacement like the original. Like <see cref="SpriteSheet"/>, the copy stands in
+        /// for the whole file, so it is left out by default, and a copy an earlier export wrote is changed rather than
+        /// started over.
+        /// </summary>
+        public bool Portraits { get; set; }
+
+        /// <summary>
         /// Writes <see cref="SoundReplacements"/> and the <see cref="Voice"/> lines over the hero's own sounds, in the
         /// sound event files they are defined in.
         /// </summary>
@@ -231,6 +242,7 @@ namespace GUI.Types.Exporter.CharacterAssets
             Icons = true,
             SpriteSheet = false,
             DefaultItemsInItemsGame = false,
+            Portraits = false,
             Sounds = true,
             Pedestal = false,
             ReplaceDefaults = true,
@@ -429,6 +441,12 @@ namespace GUI.Types.Exporter.CharacterAssets
         /// </summary>
         public Dictionary<string, string> MaterialCopies { get; } = new(StringComparer.OrdinalIgnoreCase);
 
+        /// <summary>
+        /// The dynamic params of material copies that are left out, so the copy keeps the value it is compiled with, by
+        /// the material's package source path.
+        /// </summary>
+        public Dictionary<string, List<string>> FrozenMaterialParams { get; } = new(StringComparer.OrdinalIgnoreCase);
+
         /// <summary>Everything else that is compiled, decompiled with the built-in decompiler.</summary>
         public List<string> Resources { get; } = [];
 
@@ -486,6 +504,12 @@ namespace GUI.Types.Exporter.CharacterAssets
 
         /// <summary>Default items written over in a copy of items_game.txt in the game folder.</summary>
         public List<DefaultItemSwap> DefaultItemSwaps { get; } = [];
+
+        /// <summary>
+        /// Models whose portrait settings are written over those of the model they replace, see
+        /// <see cref="CharacterExportOptions.Portraits"/>.
+        /// </summary>
+        public List<(string Source, string Target)> PortraitReplacements { get; } = [];
 
         /// <summary>Sound event files rewritten with other events' definitions once everything is exported.</summary>
         public List<SoundEventEdit> SoundEventEdits { get; } = [];
@@ -641,9 +665,7 @@ namespace GUI.Types.Exporter.CharacterAssets
                 foreach (var material in plan.Materials)
                 {
                     var source = NormalizePath(material[..^GameFileLoader.CompiledFileSuffix.Length]);
-                    var path = source.StartsWith("materials/", StringComparison.OrdinalIgnoreCase) ? source["materials/".Length..] : source;
-
-                    plan.MaterialCopies[source] = $"{CharacterExportOptions.MaterialCopiesFolder}/{path}";
+                    plan.MaterialCopies[source] = GetMaterialCopyPath(source);
                 }
 
                 plan.Notes.Add(plan.MaterialCopies.Count switch
@@ -651,6 +673,16 @@ namespace GUI.Types.Exporter.CharacterAssets
                     0 => "the exported models use no materials to copy",
                     var count => $"{count} material{(count == 1 ? " was" : "s were")} copied into {CharacterExportOptions.MaterialCopiesFolder} with alpha testing and the models point at them",
                 });
+            }
+
+            AddFrozenMaterialParams(plan, cancellationToken);
+
+            if (options.Portraits && options.ReplaceDefaults)
+            {
+                plan.PortraitReplacements.AddRange(plan.ModelReplacements
+                    .Where(static replacement => !CharacterLoadout.IsSamePath(replacement.Source, replacement.Target))
+                    .Select(static replacement => (NormalizePath(replacement.Source), NormalizePath(replacement.Target)))
+                    .Distinct());
             }
 
             foreach (var (model, remaps) in styleMaterialRemaps)
@@ -784,7 +816,8 @@ namespace GUI.Types.Exporter.CharacterAssets
         /// <summary>
         /// Adds the materials the models use, including those of their reference meshes and material groups.
         /// </summary>
-        private void AddMaterials(CharacterExportPlan plan, List<string> models, CancellationToken cancellationToken)
+        /// <param name="include">Picks which of them to add, all when null. Asked about the ones added already too.</param>
+        private void AddMaterials(CharacterExportPlan plan, List<string> models, CancellationToken cancellationToken, Func<string, bool>? include = null)
         {
             var materials = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
 
@@ -847,10 +880,76 @@ namespace GUI.Types.Exporter.CharacterAssets
                         plan.Missing.Add(material);
                     }
                 }
-                else if (!plan.Materials.Contains(compiledPath, StringComparer.OrdinalIgnoreCase))
+                else if ((include == null || include(compiledPath)) && !plan.Materials.Contains(compiledPath, StringComparer.OrdinalIgnoreCase))
                 {
                     plan.Materials.Add(compiledPath);
                 }
+            }
+        }
+
+        /// <summary>
+        /// Where a copy of a material goes, see <see cref="CharacterExportPlan.MaterialCopies"/>.
+        /// </summary>
+        private static string GetMaterialCopyPath(string source)
+        {
+            var path = source.StartsWith("materials/", StringComparison.OrdinalIgnoreCase) ? source["materials/".Length..] : source;
+            return $"{CharacterExportOptions.MaterialCopiesFolder}/{path}";
+        }
+
+        /// <summary>
+        /// Copies the materials that read a material attribute the models animate, e.g. the fade of Spectre's arcana
+        /// blades, see <see cref="CharacterExportPlan.FrozenMaterialParams"/>. The decompiled animations do not set those
+        /// attributes, so the copies keep the value the material is compiled with, otherwise the blades stay faded out.
+        /// </summary>
+        private void AddFrozenMaterialParams(CharacterExportPlan plan, CancellationToken cancellationToken)
+        {
+            foreach (var modelPath in plan.Models.ToList())
+            {
+                List<string> attributes;
+
+                try
+                {
+                    using var resource = fileLoader.LoadFile(modelPath);
+
+                    attributes = resource?.DataBlock is Model model
+                        ? [.. (model.Data.GetArray("m_AnimatedMaterialAttributes") ?? []).Select(static attribute => attribute.GetStringProperty("m_AttributeName")).Where(static name => !string.IsNullOrEmpty(name))]
+                        : [];
+                }
+                catch (Exception e)
+                {
+                    progress?.Report($"  ! failed to read the animated material attributes of \"{modelPath}\": {e.Message}");
+                    continue;
+                }
+
+                if (attributes.Count == 0)
+                {
+                    continue;
+                }
+
+                var reads = new Regex($@"\b(?:{string.Join('|', attributes.Select(Regex.Escape))})\b", RegexOptions.CultureInvariant);
+
+                AddMaterials(plan, [modelPath], cancellationToken, compiledPath =>
+                {
+                    using var resource = fileLoader.LoadFile(compiledPath);
+
+                    if (resource?.DataBlock is not Material material)
+                    {
+                        return false;
+                    }
+
+                    var frozen = material.DynamicExpressions.Where(expression => reads.IsMatch(expression.Value)).Select(static expression => expression.Key).ToList();
+
+                    if (frozen.Count == 0)
+                    {
+                        return false;
+                    }
+
+                    var source = NormalizePath(compiledPath[..^GameFileLoader.CompiledFileSuffix.Length]);
+                    plan.MaterialCopies.TryAdd(source, GetMaterialCopyPath(source));
+                    plan.FrozenMaterialParams[source] = frozen;
+                    plan.Notes.Add($"{source} was copied with {string.Join(", ", frozen)} kept as compiled, the animations that set it are not decompiled");
+                    return true;
+                });
             }
         }
 

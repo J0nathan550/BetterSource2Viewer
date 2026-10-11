@@ -710,6 +710,141 @@ namespace GUI.Types.Exporter.CharacterAssets
         }
 
         /// <summary>
+        /// Layers a model's constant layer, e.g. the blades Spectre's arcana keeps floating above her head, on its other
+        /// sequences, when the model it is written over has none. The game plays an ACT_DOTA_CONSTANT_LAYER sequence over
+        /// everything, but picks it from the original, which then plays nothing. Each sequence gets it in the frames its
+        /// own AE_DOTA_SUPPRESS_CONSTANT_LAYER events leave it on, e.g. after an attack has thrown the blades.
+        /// </summary>
+        /// <param name="vmdl">The .vmdl text.</param>
+        /// <param name="original">The original model's sequences.</param>
+        /// <param name="frameCounts">The number of frames of each of this model's sequences, by name.</param>
+        /// <param name="details">Receives a description of what was layered.</param>
+        public static string AddConstantLayer(string vmdl, IReadOnlyList<OriginalSequence> original, IReadOnlyDictionary<string, int> frameCounts,
+            ICollection<string>? details = null)
+        {
+            const string ConstantLayer = "ACT_DOTA_CONSTANT_LAYER";
+
+            if (original.Any(static sequence => sequence.Activity == ConstantLayer))
+            {
+                return vmdl;
+            }
+
+            var nodes = GetAnimFiles(vmdl, blends: true);
+
+            if (nodes.FirstOrDefault(static node => node.Activity == ConstantLayer) is not { } layer)
+            {
+                return vmdl;
+            }
+
+            var insertions = new List<(int Index, string Text)>();
+
+            foreach (var node in nodes)
+            {
+                if (node.Activity is not { Length: > 0 } || node.Activity == ConstantLayer || node.Delta
+                    || !frameCounts.TryGetValue(node.Name.Value, out var frames) || frames < 2)
+                {
+                    continue;
+                }
+
+                var last = frames - 1;
+                var text = vmdl[node.Start..node.End];
+                var events = SuppressConstantLayerRegex().Matches(text)
+                    .Select(static match => (Frame: int.Parse(match.Groups["frame"].Value, CultureInfo.InvariantCulture), Suppress: match.Groups["suppress"].Value == "true"))
+                    .OrderBy(static change => change.Frame)
+                    .ToList();
+
+                // The frames the layer is on in, it starts on until an event turns it off
+                var windows = new List<(int Start, int End)>();
+                var on = true;
+                var start = 0;
+
+                foreach (var (frame, suppress) in events.Append((Frame: last, Suppress: true)))
+                {
+                    var at = Math.Clamp(frame, 0, last);
+
+                    if (on && suppress && at - start >= 2)
+                    {
+                        windows.Add((start, at));
+                    }
+
+                    if (on == suppress)
+                    {
+                        on = !suppress;
+                        start = at;
+                    }
+                }
+
+                if (windows.Count == 0)
+                {
+                    continue;
+                }
+
+                var lineStart = GetLineStart(vmdl, node.Start);
+                var depth = vmdl.AsSpan(lineStart, node.Start - lineStart).Count('\t');
+                var layers = new StringBuilder();
+
+                foreach (var (from, to) in windows)
+                {
+                    // Fades in and out where an animation hands the blades over, not at the ends of a loop
+                    var peak = from == 0 ? 0 : Math.Min(from + 3, to);
+                    var tail = to == last ? last : Math.Max(to - 3, peak);
+
+                    layers.Append(CultureInfo.InvariantCulture, $$"""
+
+                        {
+                            _class = "AnimBlendLayer"
+                            anim_name = "{{layer.Name.Value}}"
+                            spline = false
+                            xfade = false
+                            no_blend = false
+                            local_space = false
+                            start_frame = {{from}}
+                            peak_frame = {{peak}}
+                            tail_frame = {{tail}}
+                            end_frame = {{to}}
+                        },
+                        """);
+                }
+
+                if (node.ChildrenIndex is { } childrenIndex)
+                {
+                    insertions.Add((childrenIndex, Indent(layers.ToString(), depth + 2)));
+                }
+                else
+                {
+                    var end = vmdl.LastIndexOf('}', node.End - 1);
+                    insertions.Add((GetLineStart(vmdl, end), Indent($"    children =\n    [{layers}\n    ]\n", depth)));
+                }
+            }
+
+            foreach (var (index, text) in insertions.OrderByDescending(static insertion => insertion.Index))
+            {
+                vmdl = vmdl.Insert(index, text);
+            }
+
+            if (insertions.Count > 0)
+            {
+                details?.Add($"{layer.Name.Value} layered on {insertions.Count} sequences, the original has no constant layer");
+            }
+
+            // What the layer moves may only show in body groups the game switches on for the item, e.g. the blades, which
+            // only the loadout's own events switch on otherwise. They show by default instead
+            var enabled = EnableBodyGroupRegex().Matches(vmdl).Select(static match => match.Groups["name"].Value).ToHashSet(StringComparer.OrdinalIgnoreCase);
+            var choices = GetBodyGroups(GetRootChildren(vmdl))
+                .Where(group => enabled.Contains(group.Name) && group.Choices is [{ Meshes.Length: 0 }, ..])
+                .Select(static group => (group.Name, Index: group.Choices.FindIndex(static choice => choice.Meshes.Length > 0)))
+                .Where(static group => group.Index > 0)
+                .ToDictionary(static group => group.Name, static group => group.Index, StringComparer.OrdinalIgnoreCase);
+
+            if (choices.Count > 0)
+            {
+                vmdl = SelectBodyGroupChoices(vmdl, choices, details);
+            }
+
+            return Validate(vmdl);
+        }
+
+        /// <summary>
         /// Numbers a model's sequences like those of the model it is written over. A mod only changes what the client
         /// shows, the server still picks sequences from the original by number, e.g. one of two runs for each of Death
         /// Prophet's Exorcism spirits, so each of the original's numbers has to play this model's version of that
@@ -2310,6 +2445,12 @@ namespace GUI.Types.Exporter.CharacterAssets
 
         [GeneratedRegex(@"(?<prefix>\bto\s*=\s*"")(?<to>[^""]*\.vmat)""", RegexOptions.CultureInvariant | RegexOptions.IgnoreCase)]
         private static partial Regex RemapTargetRegex();
+
+        [GeneratedRegex(@"event_class\s*=\s*""AE_DOTA_SUPPRESS_CONSTANT_LAYER""\s*event_frame\s*=\s*(?<frame>-?[0-9]+)\s*event_keys\s*=\s*\{\s*suppress\s*=\s*(?<suppress>true|false)", RegexOptions.CultureInvariant)]
+        private static partial Regex SuppressConstantLayerRegex();
+
+        [GeneratedRegex(@"event_class\s*=\s*""AE_CL_ENABLE_BODYGROUP""\s*event_frame\s*=\s*-?[0-9]+\s*event_keys\s*=\s*\{\s*name\s*=\s*""(?<name>[^""]*)""", RegexOptions.CultureInvariant)]
+        private static partial Regex EnableBodyGroupRegex();
 
         [GeneratedRegex(@"\bsource_filename\s*=\s*""(?<file>[^""]*)""", RegexOptions.CultureInvariant)]
         private static partial Regex SourceFilenameRegex();

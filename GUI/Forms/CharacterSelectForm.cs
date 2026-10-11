@@ -55,6 +55,7 @@ namespace GUI.Forms
         private readonly CheckBox skipUnchangedCheckBox;
         private readonly CheckBox arcanaMaterialsCheckBox;
         private readonly CheckBox alphaTestMaterialsCheckBox;
+        private readonly CheckBox portraitsCheckBox;
         private readonly CheckBox editMaterialsCheckBox;
         private readonly CheckBox recommendedAlphaTestCheckBox;
         private readonly CheckBox recommendedSharedParticlesCheckBox;
@@ -104,6 +105,7 @@ namespace GUI.Forms
             Materials = materialsCheckBox.Checked || slotRecolors.Count > 0,
             ArcanaMaterials = arcanaMaterialsCheckBox.Checked,
             AlphaTestMaterials = alphaTestMaterialsCheckBox.Checked,
+            Portraits = portraitsCheckBox.Checked,
             MergeAdditionalWearables = mergeWearablesCheckBox.Checked,
             ItemParticles = itemParticlesCheckBox.Checked,
             ItemEffects = GetItemEffects(),
@@ -160,6 +162,12 @@ namespace GUI.Forms
             includeTable.RowStyles.Add(new RowStyle());
             includeTable.Controls.Add(alphaTestMaterialsCheckBox, 0, includeTable.RowCount - 1);
             includeTable.SetColumnSpan(alphaTestMaterialsCheckBox, 3);
+
+            portraitsCheckBox = new CheckBox { AutoSize = true, Text = "Portrait lighting of replaced models (writes a copy of portraits.txt)" };
+            includeTable.RowCount++;
+            includeTable.RowStyles.Add(new RowStyle());
+            includeTable.Controls.Add(portraitsCheckBox, 0, includeTable.RowCount - 1);
+            includeTable.SetColumnSpan(portraitsCheckBox, 3);
             materialsCheckBox.CheckedChanged += (_, _) => UpdateReplaceDefaultsDependents();
 
             recommendedRadioButton = new RadioButton { AutoSize = true, Text = "Recommended", Checked = true, Margin = new Padding(3, 3, 12, 3) };
@@ -320,6 +328,11 @@ namespace GUI.Forms
                 "Copy every material the exported models use, with their textures, into materials/j0nathan550 with alpha testing turned on,\n" +
                 "and point the models at the copies. Fixes arcanas that render see-through in game, e.g. Razor's.\n" +
                 "Off by default, most heroes do not need it.");
+            toolTip.SetToolTip(portraitsCheckBox,
+                "When replacing default assets, light the HUD portrait of each replaced model like the model written over it, e.g. an arcana's,\n" +
+                "in a copy of scripts/npc/portraits.txt in the game folder. The game looks portraits up by model path, so it would use the original's.\n" +
+                "The copy replaces the whole file, so other mods that change it stop working unless they are in the same folder.\n" +
+                "A copy an earlier export wrote there is updated, so several heroes can share it.");
             toolTip.SetToolTip(mergeWearablesCheckBox, "When replacing default assets, add the meshes of the extra models items wear, e.g. an arcana's frost overlay,\n" +
                 "to the hero's model. They are exported as models of their own either way.");
             toolTip.SetToolTip(replaceSharedParticlesCheckBox, "Also replace particles every hero uses, like the blink dagger, stun and status effects");
@@ -628,6 +641,7 @@ namespace GUI.Forms
             skipUnchangedCheckBox.Checked = options.SkipUnchangedModels;
             arcanaMaterialsCheckBox.Checked = options.ArcanaMaterials;
             alphaTestMaterialsCheckBox.Checked = options.AlphaTestMaterials;
+            portraitsCheckBox.Checked = options.Portraits;
         }
 
         private CheckBox[] ExportCheckBoxes =>
@@ -635,7 +649,7 @@ namespace GUI.Forms
             heroModelCheckBox, itemModelsCheckBox, pedestalCheckBox, itemParticlesCheckBox, heroParticlesCheckBox, iconsCheckBox,
             itemSoundsCheckBox, heroSoundsCheckBox, heroVoiceCheckBox, includeAudioCheckBox, soundsCheckBox, replaceDefaultsCheckBox,
             replaceSharedParticlesCheckBox, materialsCheckBox, mergeWearablesCheckBox, renameModelsCheckBox, animatePartsCheckBox,
-            spriteSheetCheckBox, itemsGameCheckBox, skipUnchangedCheckBox, arcanaMaterialsCheckBox, alphaTestMaterialsCheckBox,
+            spriteSheetCheckBox, itemsGameCheckBox, skipUnchangedCheckBox, arcanaMaterialsCheckBox, alphaTestMaterialsCheckBox, portraitsCheckBox,
         ];
 
         /// <summary>
@@ -649,6 +663,7 @@ namespace GUI.Forms
             Materials = materialsCheckBox.Checked,
             ArcanaMaterials = arcanaMaterialsCheckBox.Checked,
             AlphaTestMaterials = alphaTestMaterialsCheckBox.Checked,
+            Portraits = portraitsCheckBox.Checked,
             MergeAdditionalWearables = mergeWearablesCheckBox.Checked,
             ItemParticles = itemParticlesCheckBox.Checked,
             HeroParticles = heroParticlesCheckBox.Checked,

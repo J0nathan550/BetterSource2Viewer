@@ -216,7 +216,7 @@ namespace GUI.Types.Exporter.CharacterAssets
                 var failed = 0;
 
                 failed += ExportModels(plan.Models, vpkPath, contentRoot, fileLoader, progress, cancellationToken);
-                failed += ExportMaterials(plan.Materials, plan.MaterialCopies, contentRoot, fileLoader, loadout, options, progress, writtenFiles, cancellationToken);
+                failed += ExportMaterials(plan.Materials, plan.MaterialCopies, plan.FrozenMaterialParams, contentRoot, fileLoader, loadout, options, progress, writtenFiles, cancellationToken);
                 failed += ExportResources(plan.Resources, contentRoot, fileLoader, progress, writtenFiles, cancellationToken);
                 failed += ExportRawFiles(plan.RawFiles, contentRoot, fileLoader, progress, writtenFiles, cancellationToken);
                 failed += ApplyParticleRedirects(plan.ParticleRedirects, contentRoot, fileLoader, progress);
@@ -251,6 +251,7 @@ namespace GUI.Types.Exporter.CharacterAssets
                 failed += ExportIcons(plan.IconReplacements, gameRoot, fileLoader, progress, cancellationToken);
                 failed += ExportSprites(plan.SpriteReplacements, gameRoot, package, progress);
                 failed += ExportDefaultItems(plan.DefaultItemSwaps, gameRoot, package, progress);
+                failed += ExportPortraits(plan.PortraitReplacements, gameRoot, package, progress);
 
                 foreach (var note in plan.Notes)
                 {
@@ -445,6 +446,15 @@ namespace GUI.Types.Exporter.CharacterAssets
                     {
                         try
                         {
+                            vmdl = ModelDocEditor.AddConstantLayer(vmdl, original, GetFrameCounts(fileLoader, replacement.Source), details);
+                        }
+                        catch (Exception e)
+                        {
+                            progress.Report($"  ! {replacement.Target}: the constant layer was not added: {e.Message}");
+                        }
+
+                        try
+                        {
                             vmdl = ModelDocEditor.MatchSequenceOrder(vmdl, original, replacement.ActivityModifiers, replacement.RangedAttack, details);
                         }
                         catch (Exception e)
@@ -572,6 +582,27 @@ namespace GUI.Types.Exporter.CharacterAssets
         /// <summary>
         /// A compiled model's sequences in the order they are numbered by, with the activity and modifiers of each.
         /// </summary>
+        /// <summary>
+        /// The number of frames of each of a model's sequences, by name.
+        /// </summary>
+        private static Dictionary<string, int> GetFrameCounts(IFileLoader fileLoader, string model)
+        {
+            using var resource = fileLoader.LoadFileCompiled(CharacterLoadout.NormalizePath(model));
+            var counts = new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
+
+            if (resource?.DataBlock is not Model modelData)
+            {
+                return counts;
+            }
+
+            foreach (var animation in modelData.GetAllAnimations(fileLoader))
+            {
+                counts.TryAdd(animation.Name, animation.FrameCount);
+            }
+
+            return counts;
+        }
+
         private static List<OriginalSequence> GetSequences(IFileLoader fileLoader, string model)
         {
             using var resource = fileLoader.LoadFileCompiled(CharacterLoadout.NormalizePath(model));
@@ -1026,6 +1057,112 @@ namespace GUI.Types.Exporter.CharacterAssets
             });
         }
 
+        /// <summary>
+        /// The file the game takes each model's HUD portrait camera and lights from, by model path.
+        /// </summary>
+        public const string PortraitsFile = "scripts/npc/portraits.txt";
+
+        /// <summary>
+        /// Writes a copy of the portrait settings into the game folder, with each replaced model's settings taken from the
+        /// model written over it, see <see cref="CharacterExportOptions.Portraits"/>. Models without settings of their own
+        /// keep the replaced model's.
+        /// </summary>
+        private static int ExportPortraits(List<(string Source, string Target)> replacements, string? gameRoot, Package package, IProgress<string> progress)
+        {
+            if (gameRoot == null || replacements.Count == 0
+                || package.FindEntry(PortraitsFile) is not { } entry)
+            {
+                return 0;
+            }
+
+            package.ReadEntry(entry, out var originalBytes);
+            var withSettings = replacements.Where(replacement => FindPortrait(Encoding.UTF8.GetString(originalBytes), replacement.Source) != null).ToList();
+
+            if (withSettings.Count == 0)
+            {
+                return 0;
+            }
+
+            return EditGameText(PortraitsFile, gameRoot, package, progress, (original, current) =>
+            {
+                foreach (var (source, target) in withSettings)
+                {
+                    var (start, end) = FindPortrait(original, source)!.Value;
+
+                    // The source's block under the target's name
+                    var block = string.Concat($"\t\"{target}\"", original.AsSpan(GetLineEnd(original, start), end - GetLineEnd(original, start)));
+
+                    if (FindPortrait(current, target) is { } existing)
+                    {
+                        current = string.Concat(current.AsSpan(0, existing.Start), block, current.AsSpan(existing.End));
+                    }
+                    else
+                    {
+                        var close = current.LastIndexOf('}');
+                        current = current.Insert(close, block + "\n");
+                    }
+
+                    progress.Report($"  portrait of {target} <- {source}");
+                }
+
+                return (current, 0);
+            });
+        }
+
+        /// <summary>
+        /// Where a model's top level block in the portrait settings starts, at its name, and ends, after its closing brace.
+        /// </summary>
+        private static (int Start, int End)? FindPortrait(string text, string model)
+        {
+            var name = Regex.Match(text, $@"^\t""{Regex.Escape(model)}""[ \t]*\r?$", RegexOptions.Multiline | RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
+
+            if (!name.Success)
+            {
+                return null;
+            }
+
+            var open = text.IndexOf('{', name.Index + name.Length);
+
+            if (open < 0)
+            {
+                return null;
+            }
+
+            var depth = 0;
+            var inString = false;
+
+            for (var i = open; i < text.Length; i++)
+            {
+                switch (text[i])
+                {
+                    case '"':
+                        inString = !inString;
+                        break;
+                    case '{' when !inString:
+                        depth++;
+                        break;
+                    case '}' when !inString:
+                        if (--depth == 0)
+                        {
+                            return (name.Index, i + 1);
+                        }
+
+                        break;
+                }
+            }
+
+            return null;
+        }
+
+        /// <summary>
+        /// Where the line a text index is on ends, before its line break.
+        /// </summary>
+        private static int GetLineEnd(string text, int index)
+        {
+            var end = text.IndexOf('\n', index);
+            return end < 0 ? text.Length : end;
+        }
+
         private static int ExportDefaultItems(List<DefaultItemSwap> swaps, string? gameRoot, Package package, IProgress<string> progress)
         {
             if (swaps.Count == 0)
@@ -1103,8 +1240,10 @@ namespace GUI.Types.Exporter.CharacterAssets
         /// Decompiles the materials with their textures, so the addon compiles its own copies rather than using the
         /// game's, which some item materials render semi-transparent with.
         /// </summary>
-        /// <param name="copies">Materials written elsewhere with alpha testing, see <see cref="CharacterExportPlan.MaterialCopies"/>.</param>
-        private static int ExportMaterials(List<string> materials, IReadOnlyDictionary<string, string> copies, string outputRoot, GameFileLoader fileLoader,
+        /// <param name="copies">Materials written elsewhere, see <see cref="CharacterExportPlan.MaterialCopies"/>.</param>
+        /// <param name="frozenParams">The dynamic params left out of copies, see <see cref="CharacterExportPlan.FrozenMaterialParams"/>.</param>
+        private static int ExportMaterials(List<string> materials, IReadOnlyDictionary<string, string> copies,
+            Dictionary<string, List<string>> frozenParams, string outputRoot, GameFileLoader fileLoader,
             CharacterLoadout loadout, CharacterExportOptions options,
             IProgress<string> progress, HashSet<string> writtenFiles, CancellationToken cancellationToken)
         {
@@ -1148,9 +1287,14 @@ namespace GUI.Types.Exporter.CharacterAssets
                         CustomVmatExporter.ExportMaterial(resource, vmatPath, outputRoot, fileLoader, progress, writtenFiles, cancellationToken);
                     }
 
-                    if (copy != null)
+                    if (copy != null && options.AlphaTestMaterials)
                     {
                         SetAlphaTest(vmatPath);
+                    }
+
+                    if (frozenParams.TryGetValue(CharacterLoadout.NormalizePath(cleanMatRelative), out var frozen))
+                    {
+                        RemoveDynamicParams(vmatPath, frozen);
                     }
 
                     // Применяем перекраску
@@ -1323,6 +1467,23 @@ namespace GUI.Types.Exporter.CharacterAssets
             vmat = ShaderLineRegex().Replace(vmat, match => match.Value + textures, 1);
 
             Directory.CreateDirectory(Path.GetDirectoryName(vmatPath)!);
+            File.WriteAllText(vmatPath, vmat);
+        }
+
+        /// <summary>
+        /// Takes dynamic params out of an exported material, so they keep the value the material sets for them, see
+        /// <see cref="CharacterExportPlan.FrozenMaterialParams"/>.
+        /// </summary>
+        private static void RemoveDynamicParams(string vmatPath, IEnumerable<string> names)
+        {
+            var vmat = File.ReadAllText(vmatPath);
+
+            foreach (var name in names)
+            {
+                // Dynamic params are the only ones nested a level deeper than the material's own
+                vmat = Regex.Replace(vmat, $@"^\t\t""{Regex.Escape(name)}""[ \t]+""[^\r\n]*\r?\n", string.Empty, RegexOptions.Multiline | RegexOptions.CultureInvariant);
+            }
+
             File.WriteAllText(vmatPath, vmat);
         }
 
