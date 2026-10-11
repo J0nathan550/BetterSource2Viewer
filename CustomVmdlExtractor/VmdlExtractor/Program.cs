@@ -4471,7 +4471,8 @@ internal static class Program
                 foreach (var elem in dm.AllElements)
                 {
                     if (elem == null || elem.ClassName != "DmeMaterial") continue;
-                    if (elem["mtlName"] is string s && !string.IsNullOrEmpty(s)) refs.Add(s);
+                    // Cloth proxy meshes only drive the simulation and are never drawn, their placeholder needs no file
+                    if (elem["mtlName"] is string s && !string.IsNullOrEmpty(s) && !s.Equals("cloth", StringComparison.OrdinalIgnoreCase)) refs.Add(s);
                 }
             }
             catch { /* skip unreadable DMX */ }
