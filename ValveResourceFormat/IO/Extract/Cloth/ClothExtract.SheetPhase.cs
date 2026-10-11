@@ -451,9 +451,11 @@ internal sealed partial class ClothExtract
                 isStaticNode: cloth.Index.IsStatic(node), proxyNodeNames: proxyNodeNames));
         }
 
+        var rodTouched = LookupsOf(cloth).RodNeighbourCounts;
+
         foreach (var (node, elementName, anchor) in nodes.UnregisteredFreeNodes)
         {
-            clothFolderChildren.Add(MakeClothNode(cloth, anchor.RootBone, node,
+            folderFor(node, !rodTouched.ContainsKey(node)).Add(MakeClothNode(cloth, anchor.RootBone, node,
                 isStaticNode: cloth.Index.IsStatic(node), elementName: elementName, origin: anchor.Origin, angles: anchor.Angles,
                 proxyNodeNames: proxyNodeNames));
         }

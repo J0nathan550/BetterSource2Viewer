@@ -136,16 +136,25 @@ internal sealed partial class ClothExtract
             return authoredClothNodes.Contains(node) ? name : null;
         }
 
+        // The chains only declare rods between their own joints, so a free node hung on a chain is tied to it here,
+        // otherwise it trails behind the hero on nothing
+        bool IsChainTie(int node, int other) => chainJointNodes.Contains(node) && !chainJointNodes.Contains(other)
+            && (freeClothNodeNames.ContainsKey(other) || authoredClothNodes.Contains(other));
+
         foreach (var (edge, rods) in cloth.RodsByPair)
         {
+            var chainTie = IsChainTie(edge.Item1, edge.Item2) || IsChainTie(edge.Item2, edge.Item1);
+
             if (riskyNodes.Contains(edge.Item1) || riskyNodes.Contains(edge.Item2) || derivedRods.Contains(edge)
-                || chainJointNodes.Contains(edge.Item1) || chainJointNodes.Contains(edge.Item2))
+                || (!chainTie && (chainJointNodes.Contains(edge.Item1) || chainJointNodes.Contains(edge.Item2))))
             {
                 continue;
             }
 
             var rod = rods[0];
-            if (ResolveName(rod.NodeA) is not { } name0 || ResolveName(rod.NodeB) is not { } name1)
+            string? NameOf(int node) => chainTie && chainJointNodes.Contains(node) ? cloth.Fe.CtrlName[node] : ResolveName(node);
+
+            if (NameOf(rod.NodeA) is not { } name0 || NameOf(rod.NodeB) is not { } name1)
             {
                 continue;
             }

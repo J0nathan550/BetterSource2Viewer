@@ -487,7 +487,7 @@ namespace ValveResourceFormat.IO
 
         /// <summary>
         /// Gets the mass multiplier of a node over its geometric mass. A rod endpoint is read against the rod mass pass
-        /// only for a chain joint or on a cloth without proxy-sheet nodes.
+        /// only for a chain joint, a free cloth node or on a cloth without proxy-sheet nodes.
         /// </summary>
         private float? MassMultiplierOf(int node, bool chainJoint = false)
         {
@@ -507,7 +507,8 @@ namespace ValveResourceFormat.IO
             {
                 geometric = GeometricMasses;
             }
-            else if (chainJoint || !HasProxyMeshNodes)
+            // A free cloth node is never on a sheet, its rods are all springs declared on it
+            else if (chainJoint || !HasProxyMeshNodes || IsFreeClothNode(node))
             {
                 geometric = RodMassPass;
             }
