@@ -1133,8 +1133,20 @@ namespace GUI.Types.Exporter.CharacterAssets
                     var vmatPath = GetOutputPath(outputRoot, Path.ChangeExtension(copy ?? cleanMatRelative, "vmat"));
                     progress.Report(copy == null ? $"  {material}" : $"  {material} -> {copy}");
 
-                    // Экспортируем стандартный VMAT и его текстуры на диск
-                    CustomVmatExporter.ExportMaterial(resource, vmatPath, outputRoot, fileLoader, progress, writtenFiles, cancellationToken);
+                    var normalizedMat = CharacterLoadout.NormalizePath(Path.ChangeExtension(cleanMatRelative, "vmat"));
+                    var recolor = materialRecolors.GetValueOrDefault(normalizedMat);
+
+                    // Copies only change settings, so they use the game's textures rather than shipping their own,
+                    // unless their color texture is recolored
+                    if (copy != null && recolor == null)
+                    {
+                        WriteMaterialOnGameTextures(resource, vmatPath, fileLoader);
+                    }
+                    else
+                    {
+                        // Экспортируем стандартный VMAT и его текстуры на диск
+                        CustomVmatExporter.ExportMaterial(resource, vmatPath, outputRoot, fileLoader, progress, writtenFiles, cancellationToken);
+                    }
 
                     if (copy != null)
                     {
@@ -1142,8 +1154,7 @@ namespace GUI.Types.Exporter.CharacterAssets
                     }
 
                     // Применяем перекраску
-                    var normalizedMat = CharacterLoadout.NormalizePath(Path.ChangeExtension(cleanMatRelative, "vmat"));
-                    if (materialRecolors.TryGetValue(normalizedMat, out var recolor))
+                    if (recolor != null)
                     {
                         ApplyRecolorToExportedVmat(vmatPath, outputRoot, recolor, progress, writtenFiles);
                     }
@@ -1289,6 +1300,30 @@ namespace GUI.Types.Exporter.CharacterAssets
             }
 
             return list;
+        }
+
+        /// <summary>
+        /// Decompiles a material pointing straight at the game's compiled textures, which the compiler takes as they are,
+        /// so nothing but the material itself is written.
+        /// </summary>
+        private static void WriteMaterialOnGameTextures(Resource resource, string vmatPath, IFileLoader fileLoader)
+        {
+            if (resource.DataBlock is not Material material)
+            {
+                throw new InvalidDataException("File is not a material");
+            }
+
+            var vmat = new MaterialExtract(resource, fileLoader).ToValveMaterial();
+            vmat = CompiledTexturesRegex().Replace(vmat, string.Empty);
+            vmat = TextureInputRegex().Replace(vmat, string.Empty);
+
+            var textures = string.Concat(material.TextureParams.Select(static texture =>
+                $"\t\"{texture.Key}\"\t\"{texture.Value}{GameFileLoader.CompiledFileSuffix}\"\n"));
+
+            vmat = ShaderLineRegex().Replace(vmat, match => match.Value + textures, 1);
+
+            Directory.CreateDirectory(Path.GetDirectoryName(vmatPath)!);
+            File.WriteAllText(vmatPath, vmat);
         }
 
         /// <summary>
@@ -1442,5 +1477,12 @@ namespace GUI.Types.Exporter.CharacterAssets
 
         [GeneratedRegex(@"^(?<indent>[ \t]*)""shader""[ \t]+""[^""]*""[ \t]*\r?\n", RegexOptions.CultureInvariant | RegexOptions.Multiline)]
         private static partial Regex ShaderLineRegex();
+
+        [GeneratedRegex(@"^\t""Compiled Textures""\r?\n\t\{.*?^\t\}\r?\n", RegexOptions.CultureInvariant | RegexOptions.Multiline | RegexOptions.Singleline)]
+        private static partial Regex CompiledTexturesRegex();
+
+        // The source images the decompiled material names for its textures, which are not written
+        [GeneratedRegex(@"^\t""Texture[^""]*""[ \t]+""[^""]*""[ \t]*\r?\n", RegexOptions.CultureInvariant | RegexOptions.Multiline)]
+        private static partial Regex TextureInputRegex();
     }
 }
