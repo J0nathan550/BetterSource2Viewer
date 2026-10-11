@@ -1038,6 +1038,14 @@ namespace GUI.Types.Exporter.CharacterAssets
                     if (loadout.IsWornByHero(item.Item.Slot))
                     {
                         heroParticles.AddRange(createdParticles);
+
+                        // The item takes the slot without wearing anything in it, e.g. an arcana head that comes with
+                        // the hero model it swaps in, so the slot's default model would show inside it
+                        if (options.ItemModels && !isDefault && personaModels == null && loadout.GetDefaultModel(item.Item.Slot) is { } emptiedModel)
+                        {
+                            plan.HiddenModels.Add(NormalizePath(emptiedModel));
+                            plan.Notes.Add($"{item.Item.Name} wears no model in its slot, {NormalizePath(emptiedModel)} was hidden");
+                        }
                     }
                 }
                 else if (personaModels != null && !CharacterLoadout.IsPersonaSlot(item.Item.Slot) && loadout.IsWornByHero(item.Item.Slot))
