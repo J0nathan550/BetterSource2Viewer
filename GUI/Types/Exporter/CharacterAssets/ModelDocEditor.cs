@@ -26,6 +26,16 @@ namespace GUI.Types.Exporter.CharacterAssets
     sealed record ActivityModifier(string? Activity, string Name);
 
     /// <summary>
+    /// A sequence of the game's model an exported one is written over, see <see cref="ModelDocEditor.MatchSequenceOrder"/>.
+    /// </summary>
+    /// <param name="Name">The sequence's name.</param>
+    /// <param name="Activity">The activity it plays for, or null when only played by name.</param>
+    /// <param name="Modifiers">The activity modifiers it is made for.</param>
+    /// <param name="Looping">Whether it loops.</param>
+    /// <param name="Delta">Whether it is an additive blend, e.g. the turns layered on runs.</param>
+    sealed record OriginalSequence(string Name, string? Activity, IReadOnlyList<string> Modifiers, bool Looping, bool Delta = false);
+
+    /// <summary>
     /// Edits decompiled .vmdl files in place, keeping the rest of the text exactly as the model extractor wrote it.
     /// </summary>
     static partial class ModelDocEditor
@@ -676,57 +686,222 @@ namespace GUI.Types.Exporter.CharacterAssets
         /// <summary>
         /// Numbers a model's sequences like those of the model it is written over. A mod only changes what the client
         /// shows, the server still picks sequences from the original by number, e.g. one of two runs for each of Death
-        /// Prophet's Exorcism spirits. Sequences the original has and this model lacks are copies of one with the same
-        /// activity, else of its idle one, and an AnimOrder keeps the original's numbering.
+        /// Prophet's Exorcism spirits, so each of the original's numbers has to play this model's version of that
+        /// sequence. That is the sequence of the same activity whose modifiers are closest to the original's, not
+        /// counting the ones the items set, e.g. an arcana's totem attack for the hero's, or a totem's own version of it
+        /// when the loadout wears that totem. Sequences without an activity go by their name, and only fall back to the
+        /// plain idle, never to one made for a modifier. The number's sequence is a copy of that version, or that version
+        /// itself when nothing else needs it, and an AnimOrder keeps the original's numbering.
         /// </summary>
-        /// <param name="vmdl">The .vmdl text.</param>
-        /// <param name="original">The original model's sequences in order, with their activities.</param>
-        /// <param name="details">Receives a description of the copies added.</param>
-        public static string MatchSequenceOrder(string vmdl, IReadOnlyList<(string Name, string? Activity)> original, ICollection<string>? details = null)
+        /// <param name="vmdl">The .vmdl text, with <see cref="ApplyActivityModifiers"/> already applied.</param>
+        /// <param name="original">The original model's sequences in order.</param>
+        /// <param name="appliedModifiers">The activity modifiers the loadout sets, which this model now plays by default.</param>
+        /// <param name="details">Receives a description of what the original's sequences play.</param>
+        public static string MatchSequenceOrder(string vmdl, IReadOnlyList<OriginalSequence> original, IReadOnlyCollection<ActivityModifier> appliedModifiers,
+            ICollection<string>? details = null)
         {
             var sequences = GetSequenceNames(vmdl);
             var animations = GetAnimFiles(vmdl);
-            var idle = animations.FirstOrDefault(static animation => animation.Activity == "ACT_DOTA_IDLE")
-                ?? animations.FirstOrDefault(static animation => animation.Looping);
 
-            // Parts of blends are numbered as sequences of their own too, e.g. "@turns_lookFrame_0"
-            var parts = animations.Select(static animation => animation.Name.Value).Except(sequences, StringComparer.OrdinalIgnoreCase).ToList();
-
-            if (idle == null || original.Count == 0)
+            if (original.Count == 0 || !animations.Any(static animation => animation.Looping))
             {
                 return vmdl;
             }
 
-            var copies = new StringBuilder();
-            var copied = new List<string>();
+            // Parts of blends are numbered as sequences of their own too, e.g. "@turns_lookFrame_0"
+            var parts = animations.Select(static animation => animation.Name.Value).Except(sequences, StringComparer.OrdinalIgnoreCase).ToList();
+            var topLevel = animations.Where(animation => sequences.Contains(animation.Name.Value, StringComparer.OrdinalIgnoreCase)).ToList();
+            var modifiers = animations.ToDictionary(static animation => animation, animation => GetModifierNames(vmdl, animation));
+            var nameTokens = new SequenceNameTokens(topLevel.Select(static animation => animation.Name.Value), original.Select(static sequence => sequence.Name));
 
             // Sequence names are compared ignoring case, the model's own spelling is kept
             string? FindOwn(string name) => sequences.Concat(parts).FirstOrDefault(own => own.Equals(name, StringComparison.OrdinalIgnoreCase));
-
-            // Models name their sequences after themselves, e.g. ss_totem_attack_90 and ss_monster_ward_attack_90
-            var originalPrefix = GetCommonPrefix(original.Select(static sequence => sequence.Name));
-            var ownPrefix = GetCommonPrefix(animations.Select(static animation => animation.Name.Value));
-
-            static string WithoutPrefix(string name, string prefix)
-                => name.StartsWith(prefix, StringComparison.OrdinalIgnoreCase) ? name[prefix.Length..] : name;
+            AnimFileNode? FindNode(string name) => animations.FirstOrDefault(animation => animation.Name.Value.Equals(name, StringComparison.OrdinalIgnoreCase));
 
             // The compiler makes "@name" by itself for a sequence with layers, it is only put in its place
-            bool IsGenerated(string name) => name.StartsWith('@') && FindOwn(name) == null && FindOwn(name[1..]) != null;
+            bool IsLayered(string name) => name.StartsWith('@') && FindOwn(name) == null
+                && (FindOwn(name[1..]) != null || original.Any(sequence => sequence.Name.Equals(name[1..], StringComparison.OrdinalIgnoreCase)));
 
-            foreach (var (name, activity) in original.Where(sequence => FindOwn(sequence.Name) == null && !IsGenerated(sequence.Name)))
+            AnimFileNode? FindIdle(string? state) => topLevel
+                .Where(animation => animation.Activity == "ACT_DOTA_IDLE"
+                    && (state == null ? modifiers[animation].Count == 0 : modifiers[animation].Contains(state, StringComparer.OrdinalIgnoreCase)))
+                .OrderBy(animation => modifiers[animation].Count)
+                .FirstOrDefault();
+
+            var plainIdle = FindIdle(null)
+                ?? topLevel.Where(static animation => animation.Activity == "ACT_DOTA_IDLE").MinBy(animation => modifiers[animation].Count)
+                ?? topLevel.FirstOrDefault(static animation => animation.Looping)
+                ?? animations.First(static animation => animation.Looping);
+
+            AnimFileNode PickSource(OriginalSequence sequence)
             {
-                var suffix = WithoutPrefix(name, originalPrefix);
-                var source = animations.FirstOrDefault(animation => WithoutPrefix(animation.Name.Value, ownPrefix).Equals(suffix, StringComparison.OrdinalIgnoreCase))
-                    ?? animations.FirstOrDefault(animation => animation.Activity is { Length: > 0 } own
-                        && own.Equals(activity, StringComparison.OrdinalIgnoreCase))
-                    ?? idle;
+                var own = FindNode(sequence.Name);
 
-                copies.Append('\n').Append(GetNodeText(vmdl, source.Start, source.End, source.Name, name));
-                copied.Add($"{name} as a copy of {source.Name.Value}");
-                sequences.Add(name);
+                if (sequence.Activity is not { Length: > 0 } activity)
+                {
+                    if (own != null)
+                    {
+                        return own;
+                    }
+
+                    // Parts of blends, e.g. "@turns_lookFrame_0", are poses only another part may stand for
+                    var named = topLevel
+                        .Where(animation => animation.Name.Value.StartsWith('@') == sequence.Name.StartsWith('@'))
+                        .Select(animation => (Animation: animation, Score: nameTokens.Compare(sequence.Name, animation.Name.Value, modifiers[animation])))
+                        .Where(static candidate => candidate.Score.Action > 0)
+                        .OrderBy(static candidate => candidate.Score.Foreign)
+                        .ThenByDescending(static candidate => candidate.Score.Action + candidate.Score.State)
+                        .ThenByDescending(static candidate => candidate.Score.Action)
+                        .ThenByDescending(static candidate => candidate.Score.Number)
+                        .ThenBy(candidate => candidate.Animation.Looping != sequence.Looping)
+                        .ThenBy(static candidate => candidate.Score.Extra)
+                        .Select(static candidate => candidate.Animation)
+                        .FirstOrDefault();
+
+                    return named ?? SequenceNameTokens.GetStates(sequence.Name).Select(FindIdle).OfType<AnimFileNode>().FirstOrDefault() ?? plainIdle;
+                }
+
+                // The items' modifiers are already played by default, see ApplyActivityModifiers, their versions lost them
+                var applied = appliedModifiers
+                    .Where(modifier => modifier.Activity == null || modifier.Activity.Equals(activity, StringComparison.OrdinalIgnoreCase))
+                    .Select(static modifier => modifier.Name)
+                    .ToHashSet(StringComparer.OrdinalIgnoreCase);
+                var wanted = sequence.Modifiers.Where(modifier => !applied.Contains(modifier)).ToHashSet(StringComparer.OrdinalIgnoreCase);
+
+                var best = topLevel
+                    .Where(animation => activity.Equals(animation.Activity, StringComparison.OrdinalIgnoreCase))
+                    .Select(animation =>
+                    {
+                        var animationModifiers = modifiers[animation];
+                        var missing = wanted.Count(modifier => !animationModifiers.Contains(modifier, StringComparer.OrdinalIgnoreCase));
+                        var extra = animationModifiers.Count(modifier => !wanted.Contains(modifier));
+                        var score = nameTokens.Compare(sequence.Name, animation.Name.Value, animationModifiers);
+
+                        return (Animation: animation, Missing: missing, Extra: extra, Score: score);
+                    })
+                    .OrderBy(static candidate => candidate.Missing + candidate.Extra)
+                    .ThenBy(static candidate => candidate.Extra)
+                    .ThenBy(candidate => candidate.Animation != own)
+                    .ThenByDescending(static candidate => candidate.Score.Action)
+                    .ThenByDescending(static candidate => candidate.Score.Number)
+                    .ThenByDescending(static candidate => candidate.Score.State)
+                    .ThenBy(candidate => candidate.Animation.Looping != sequence.Looping)
+                    .Select(static candidate => candidate.Animation)
+                    .FirstOrDefault();
+
+                return best ?? own ?? FindIdle(null) ?? plainIdle;
             }
 
-            var order = original.Select(sequence => FindOwn(sequence.Name) ?? $"@{FindOwn(sequence.Name[1..])}").ToList();
+            var aliases = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+
+            // Blends of this model's own that add to what plays, which only the original's additive sequences may stand for
+            var additiveBlends = FindObjects(vmdl)
+                .Select(range => (Range: range, Header: ObjectHeaderRegex().Match(vmdl, range.Start)))
+                .Where(node => node.Header is { Success: true } header && header.Groups["class"].Value != "AnimFile" && header.Groups["name"].Success
+                    && sequences.Contains(header.Groups["name"].Value, StringComparer.OrdinalIgnoreCase)
+                    && !original.Any(sequence => sequence.Name.Equals(header.Groups["name"].Value, StringComparison.OrdinalIgnoreCase))
+                    && DeltaRegex().Match(vmdl, node.Range.Start, node.Range.End - node.Range.Start) is { Success: true } delta
+                    && delta.Groups["value"].Value == "true")
+                .Select(static node => node.Header.Groups["name"].Value)
+                .ToList();
+
+            string? FindAdditiveBlend(OriginalSequence sequence) => additiveBlends
+                .Where(blend => !aliases.ContainsValue(blend))
+                .Select(blend => (Name: blend, Score: nameTokens.Compare(sequence.Name, blend, [])))
+                .Where(static candidate => candidate.Score.Action > 0)
+                .OrderByDescending(static candidate => candidate.Score.Action + candidate.Score.State)
+                .ThenBy(static candidate => candidate.Score.Extra)
+                .Select(static candidate => candidate.Name)
+                .FirstOrDefault();
+
+            var copies = new StringBuilder();
+            var replacements = new List<(AnimFileNode Node, string Text)>();
+            var remapped = new List<string>();
+            var played = new Dictionary<string, AnimFileNode>(StringComparer.OrdinalIgnoreCase);
+            var layered = new List<OriginalSequence>();
+            var copied = 0;
+
+            foreach (var sequence in original)
+            {
+                // Decided once what the sequence it belongs to plays is known, see below
+                if (IsLayered(sequence.Name))
+                {
+                    layered.Add(sequence);
+                    continue;
+                }
+
+                // Additive blends can only be numbered as they are, e.g. the arcana's run turns for the hero's turns
+                if (sequence.Delta && FindOwn(sequence.Name) == null && FindAdditiveBlend(sequence) is { } blend)
+                {
+                    aliases[sequence.Name] = blend;
+                    remapped.Add($"{sequence.Name} plays {blend}");
+                    continue;
+                }
+
+                var source = PickSource(sequence);
+                var own = FindNode(sequence.Name);
+
+                played[sequence.Name] = source;
+
+                if (own == source)
+                {
+                    continue;
+                }
+
+                var text = GetNodeText(vmdl, source.Start, source.End, source.Name, own?.Name.Value ?? sequence.Name);
+
+                if (own == null)
+                {
+                    copies.Append('\n').Append(text);
+                    sequences.Add(sequence.Name);
+                    copied++;
+                }
+                else if (topLevel.Contains(own))
+                {
+                    // Taken by a version the loadout no longer plays, e.g. the hero's plain cast with a totem's own worn
+                    replacements.Add((own, text[..^1]));
+                }
+                else
+                {
+                    continue;
+                }
+
+                remapped.Add($"{sequence.Name} plays {source.Name.Value}");
+            }
+
+            // The compiler only makes "@name" for a sequence with layers, without them the number needs a sequence of its own
+            foreach (var sequence in layered)
+            {
+                var layeredName = sequence.Name[1..];
+                var source = played.GetValueOrDefault(layeredName) ?? FindNode(layeredName);
+
+                if (source == null)
+                {
+                    // What it belongs to is numbered as another model's blend, so it is a part like any other
+                    source = PickSource(sequence);
+                    copies.Append('\n').Append(GetNodeText(vmdl, source.Start, source.End, source.Name, sequence.Name));
+                    remapped.Add($"{sequence.Name} plays {source.Name.Value}");
+                }
+                else if (!AnimLayerRegex().IsMatch(vmdl[source.Start..source.End]))
+                {
+                    copies.Append('\n').Append(GetPlaceholderText(vmdl, source, sequence.Name));
+                }
+                else
+                {
+                    continue;
+                }
+
+                sequences.Add(sequence.Name);
+                copied++;
+            }
+
+            foreach (var (node, text) in replacements.OrderByDescending(static replacement => replacement.Node.Start))
+            {
+                var lineStart = GetLineStart(vmdl, node.Start);
+                vmdl = string.Concat(vmdl.AsSpan(0, lineStart), text, vmdl.AsSpan(node.End));
+            }
+
+            var order = original.Select(sequence => aliases.GetValueOrDefault(sequence.Name) ?? FindOwn(sequence.Name) ?? $"@{FindOwn(sequence.Name[1..])}").ToList();
             order.AddRange(sequences.Except(order, StringComparer.OrdinalIgnoreCase));
 
             // Only one AnimOrder is compiled, the one the decompiled model may have is replaced
@@ -758,9 +933,9 @@ namespace GUI.Types.Exporter.CharacterAssets
 
             vmdl = vmdl.Insert(animationList.Index + animationList.Length, copies + Indent(animOrder, 5));
 
-            if (copied.Count > 0)
+            if (remapped.Count > 0)
             {
-                details?.Add($"sequences numbered like the original's, with {string.Join(", ", copied)}");
+                details?.Add($"sequences numbered like the original's ({copied} copied): {string.Join(", ", remapped)}");
             }
 
             return Validate(vmdl);
@@ -840,29 +1015,146 @@ namespace GUI.Types.Exporter.CharacterAssets
         }
 
         /// <summary>
-        /// The start the names share up to an underscore, e.g. "ss_totem_", or an empty string.
+        /// A hidden copy of an animation that plays for no activity, standing in for the "@name" sequence the compiler
+        /// makes for a sequence with layers when this model's version of it has none.
         /// </summary>
-        private static string GetCommonPrefix(IEnumerable<string> names)
+        private static string GetPlaceholderText(string vmdl, AnimFileNode source, string name)
         {
-            var list = names.Where(static name => !name.Equals("bindpose", StringComparison.OrdinalIgnoreCase)).ToList();
+            var lineStart = GetLineStart(vmdl, source.Start);
+            var edits = new List<(int Index, int Length, string Text)> { (source.Name.Index, source.Name.Length, name) };
 
-            if (list.Count < 2)
+            if (source.ActivityValue is { } activity)
             {
-                return string.Empty;
+                edits.Add((activity.Index, activity.Length, string.Empty));
             }
 
-            var length = list.Min(static name => name.Length);
-
-            for (var i = 0; i < length; i++)
+            if (source.HiddenValue is { } hidden)
             {
-                if (list.Any(name => char.ToLowerInvariant(name[i]) != char.ToLowerInvariant(list[0][i])))
+                edits.Add((hidden.Index, hidden.Length, "true"));
+            }
+
+            var text = new StringBuilder(vmdl[lineStart..source.End]);
+
+            foreach (var (index, length, replacement) in edits.OrderByDescending(static edit => edit.Index))
+            {
+                text.Remove(index - lineStart, length).Insert(index - lineStart, replacement);
+            }
+
+            return text.Append(',').ToString();
+        }
+
+        /// <summary>
+        /// The names of the activity modifiers an animation has.
+        /// </summary>
+        private static List<string> GetModifierNames(string vmdl, AnimFileNode animation)
+            => [.. animation.ActivityModifiers
+                .Select(range => ActivityNameRegex().Match(vmdl, range.Start, range.End - range.Start))
+                .Where(static match => match.Success && match.Groups["name"].Length > 0)
+                .Select(static match => match.Groups["name"].Value)];
+
+        /// <summary>
+        /// Compares sequence names of two models by their words, e.g. "attack01_anim" and "drow_arc_attack", leaving out
+        /// the words most of a model's names have, which name the model rather than the sequence.
+        /// </summary>
+        private sealed class SequenceNameTokens
+        {
+            // States the game sets by itself, which pick a version of a sequence rather than another sequence
+            private static readonly string[] States = ["injured", "aggressive", "haste"];
+
+            private readonly HashSet<string> ownModelWords;
+            private readonly HashSet<string> originalModelWords;
+
+            public SequenceNameTokens(IEnumerable<string> ownNames, IEnumerable<string> originalNames)
+            {
+                ownModelWords = GetModelWords(ownNames);
+                originalModelWords = GetModelWords(originalNames);
+            }
+
+            /// <summary>
+            /// How much a sequence of this model looks like one of the original by name and modifiers.
+            /// </summary>
+            /// <returns>
+            /// The words for what is played they share, the numbers they share, which only tell variants apart, e.g.
+            /// "attack2", how well the states they are made for agree, the words for what is played only the candidate
+            /// has, and the words of its modifiers other than states the original lacks, e.g. a cosmetic's own version.
+            /// </returns>
+            public (int Action, int Number, int State, int Extra, int Foreign) Compare(string originalName, string name, IReadOnlyCollection<string> modifiers)
+            {
+                var wanted = Split(originalName).Except(originalModelWords).ToHashSet(StringComparer.Ordinal);
+                var modifierWords = modifiers.SelectMany(Split).ToHashSet(StringComparer.Ordinal);
+                var own = Split(name).Concat(modifierWords).Except(ownModelWords).ToHashSet(StringComparer.Ordinal);
+
+                static bool IsAction(string word) => !States.Contains(word) && !char.IsAsciiDigit(word[0]);
+
+                var action = wanted.Count(word => IsAction(word) && own.Contains(word));
+                var number = wanted.Count(word => char.IsAsciiDigit(word[0]) && own.Contains(word));
+                var extra = own.Count(word => IsAction(word) && !wanted.Contains(word));
+                var state = States.Sum(word => wanted.Contains(word) == own.Contains(word) ? (wanted.Contains(word) ? 1 : 0) : -1);
+                var foreign = modifierWords.Count(word => IsAction(word) && !wanted.Contains(word));
+
+                return (action, number, state, extra, foreign);
+            }
+
+            /// <summary>
+            /// The modifiers of the states a sequence name is made for, the combined one first, e.g. "injured_aggressive".
+            /// </summary>
+            public static IEnumerable<string> GetStates(string name)
+            {
+                var states = States.Where(Split(name).Contains).ToList();
+
+                if (states.Count > 1)
                 {
-                    length = i;
-                    break;
+                    yield return string.Join('_', states);
+                }
+
+                foreach (var state in states)
+                {
+                    yield return state;
                 }
             }
 
-            return list[0][..(list[0].LastIndexOf('_', Math.Max(length - 1, 0)) + 1)];
+            private static HashSet<string> GetModelWords(IEnumerable<string> names)
+            {
+                var split = names.Select(static name => Split(name).Distinct().ToList()).ToList();
+
+                return split.SelectMany(static words => words)
+                    .GroupBy(static word => word, StringComparer.Ordinal)
+                    .Where(group => group.Count() * 2 > split.Count && !States.Contains(group.Key))
+                    .Select(static group => group.Key)
+                    .Append("anim")
+                    .ToHashSet(StringComparer.Ordinal);
+            }
+
+            /// <summary>
+            /// The words of a name, with numbers apart and without leading zeros, e.g. "attack", "1" for "attack01".
+            /// </summary>
+            private static IEnumerable<string> Split(string name)
+            {
+                foreach (var part in name.ToLowerInvariant().Split(['_', '@', ' ', '-', '.'], StringSplitOptions.RemoveEmptyEntries))
+                {
+                    var digits = part.Length;
+
+                    while (digits > 0 && char.IsAsciiDigit(part[digits - 1]))
+                    {
+                        digits--;
+                    }
+
+                    // Plurals name the same thing, e.g. "turns" and "turn"
+                    if (digits > 3 && digits == part.Length && part[^1] == 's' && part[^2] != 's')
+                    {
+                        yield return part[..^1];
+                    }
+                    else if (digits > 0)
+                    {
+                        yield return part[..digits];
+                    }
+
+                    if (digits < part.Length)
+                    {
+                        yield return part[digits..].TrimStart('0') is { Length: > 0 } number ? number : "0";
+                    }
+                }
+            }
         }
 
         /// <summary>
@@ -884,7 +1176,8 @@ namespace GUI.Types.Exporter.CharacterAssets
 
                 var nodeClass = header.Groups["class"].Value;
 
-                if (nodeClass is "AnimationList" or "Folder")
+                // Folders hold other things too, e.g. cloth chains
+                if (nodeClass == "AnimationList" || (nodeClass == "Folder" && containers.Any(container => container.Start < start && container.End >= end)))
                 {
                     containers.Add((start, end));
                     continue;
@@ -1826,6 +2119,9 @@ namespace GUI.Types.Exporter.CharacterAssets
         [GeneratedRegex(@"\G\{\s*_class\s*=\s*""(?<class>[^""]*)""(?:\s*name\s*=\s*""(?<name>[^""]*)"")?", RegexOptions.CultureInvariant)]
         private static partial Regex ObjectHeaderRegex();
 
+        [GeneratedRegex(@"_class\s*=\s*""Anim\w*Layer""", RegexOptions.CultureInvariant)]
+        private static partial Regex AnimLayerRegex();
+
         [GeneratedRegex(@"\bdisabled\s*=\s*true\b", RegexOptions.CultureInvariant)]
         private static partial Regex DisabledRegex();
 
@@ -1858,6 +2154,9 @@ namespace GUI.Types.Exporter.CharacterAssets
 
         [GeneratedRegex(@"\bmodel\s*=\s*""(?<model>[^""]*)""", RegexOptions.CultureInvariant)]
         private static partial Regex IncludedModelRegex();
+
+        [GeneratedRegex(@"\bdelta\s*=\s*(?<value>true|false)\b", RegexOptions.CultureInvariant)]
+        private static partial Regex DeltaRegex();
 
         [GeneratedRegex(@"\bhidden\s*=\s*(?<value>true|false)\b", RegexOptions.CultureInvariant)]
         private static partial Regex HiddenRegex();

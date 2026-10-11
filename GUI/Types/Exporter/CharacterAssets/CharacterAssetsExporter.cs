@@ -444,7 +444,7 @@ namespace GUI.Types.Exporter.CharacterAssets
                     {
                         try
                         {
-                            vmdl = ModelDocEditor.MatchSequenceOrder(vmdl, original, details);
+                            vmdl = ModelDocEditor.MatchSequenceOrder(vmdl, original, replacement.ActivityModifiers, details);
                         }
                         catch (Exception e)
                         {
@@ -569,9 +569,9 @@ namespace GUI.Types.Exporter.CharacterAssets
         }
 
         /// <summary>
-        /// A compiled model's sequences in the order they are numbered by, with the first activity of each.
+        /// A compiled model's sequences in the order they are numbered by, with the activity and modifiers of each.
         /// </summary>
-        private static List<(string Name, string? Activity)> GetSequences(IFileLoader fileLoader, string model)
+        private static List<OriginalSequence> GetSequences(IFileLoader fileLoader, string model)
         {
             using var resource = fileLoader.LoadFileCompiled(CharacterLoadout.NormalizePath(model));
 
@@ -580,15 +580,23 @@ namespace GUI.Types.Exporter.CharacterAssets
                 return [];
             }
 
-            var activities = new Dictionary<string, string?>(StringComparer.Ordinal);
+            var descriptions = new Dictionary<string, OriginalSequence>(StringComparer.Ordinal);
 
             foreach (var sequence in sequenceData.GetArray("m_localS1SeqDescArray") ?? [])
             {
-                activities.TryAdd(sequence.GetStringProperty("m_sName"),
-                    sequence.GetArray("m_activityArray") is [var activity, ..] ? activity.GetStringProperty("m_name") : null);
+                var name = sequence.GetStringProperty("m_sName");
+                var activities = (sequence.GetArray("m_activityArray") ?? []).Select(static activity => activity.GetStringProperty("m_name")).ToList();
+                var activity = activities.FirstOrDefault(static activity => activity.StartsWith("ACT_", StringComparison.Ordinal));
+                var modifiers = activities.Where(static activity => activity.Length > 0 && !activity.StartsWith("ACT_", StringComparison.Ordinal)).ToList();
+                var flags = sequence.GetSubCollection("m_flags");
+                var looping = flags?.GetBooleanProperty("m_bLooping") ?? false;
+                var delta = flags?.GetBooleanProperty("m_bLegacyDelta") ?? false;
+
+                descriptions.TryAdd(name, new OriginalSequence(name, activity, modifiers, looping, delta));
             }
 
-            return [.. (sequenceData.GetArray<string>("m_localSequenceNameArray") ?? []).Select(name => (name, activities.GetValueOrDefault(name)))];
+            return [.. (sequenceData.GetArray<string>("m_localSequenceNameArray") ?? [])
+                .Select(name => descriptions.GetValueOrDefault(name) ?? new OriginalSequence(name, null, [], false))];
         }
 
         /// <summary>
