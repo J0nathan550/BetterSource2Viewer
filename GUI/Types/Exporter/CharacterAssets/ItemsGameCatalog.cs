@@ -281,20 +281,25 @@ namespace GUI.Types.Exporter.CharacterAssets
         }
 
         /// <summary>
+        /// The slot of taunts, which the game only plays for one it has equipped, so a mod can never make them play.
+        /// </summary>
+        public const string TauntSlot = "taunt";
+
+        /// <summary>
         /// The hero's own loadout slots, followed by any other slot the hero's items are made for. Heroes whose slots swap
         /// their whole models only get their own, as the other slots' items are parts of an older model the hero no longer
-        /// has, e.g. Tiny's head and arms.
+        /// has, e.g. Tiny's head and arms. Leaves out <see cref="TauntSlot"/>.
         /// </summary>
         public IReadOnlyList<HeroSlot> GetSlots(HeroDefinition hero)
         {
-            var slots = hero.Slots.OrderBy(static slot => slot.Index).ToList();
+            var slots = hero.Slots.Where(static slot => !IsTauntSlot(slot.Name)).OrderBy(static slot => slot.Index).ToList();
 
             if (!slots.Any(static slot => slot.SwapsHeroModel) && itemsByHero.TryGetValue(hero.Name, out var items))
             {
                 var extraSlots = items
                     .Select(static item => item.Slot)
                     .Distinct(StringComparer.OrdinalIgnoreCase)
-                    .Where(slotName => !slots.Any(slot => slot.Name.Equals(slotName, StringComparison.OrdinalIgnoreCase)))
+                    .Where(slotName => !IsTauntSlot(slotName) && !slots.Any(slot => slot.Name.Equals(slotName, StringComparison.OrdinalIgnoreCase)))
                     .Order(StringComparer.OrdinalIgnoreCase);
 
                 var index = slots.Count > 0 ? slots.Max(static slot => slot.Index) : 0;
@@ -307,6 +312,11 @@ namespace GUI.Types.Exporter.CharacterAssets
 
             return slots;
         }
+
+        /// <summary>
+        /// Whether a slot is <see cref="TauntSlot"/>.
+        /// </summary>
+        public static bool IsTauntSlot(string? slot) => TauntSlot.Equals(slot, StringComparison.OrdinalIgnoreCase);
 
         /// <summary>
         /// The item the hero wears in the slot when nothing else is equipped, if the slot has one.

@@ -163,6 +163,9 @@ namespace GUI.Types.Exporter.CharacterAssets
                 .Select(NormalizePath)
                 .ToHashSet(StringComparer.OrdinalIgnoreCase);
 
+            // Saved loadouts may still have one, the taunt animations stay in the model as the hero's own
+            items = [.. items.Where(static item => !ItemsGameCatalog.IsTauntSlot(item.Item.Slot))];
+
             return new CharacterLoadout(hero, items, defaultModels, slots, unitModels, slotUnitModels, itemModels);
         }
 
