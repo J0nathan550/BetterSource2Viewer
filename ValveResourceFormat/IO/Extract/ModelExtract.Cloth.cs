@@ -409,7 +409,8 @@ partial class ModelExtract
             var greatGrandParent = grandParent >= 0 ? GetParentJoint(grandParent) : -1;
 
             // A joint given a width follows the nodes added around it, which hold what is simulated
-            var simulated = sideNodes.TryGetValue(node, out var sides) && sides.Count > 0 && !IsEndEffector(node) ? sides[0].Node : node;
+            var rings = GetRingSides(node);
+            var simulated = rings.Count > 0 ? rings[0].Node : node;
             var dynamicIndex = simulated - StaticNodeCount;
 
             joint.Add("joint_name", GetBoneName(node));
@@ -500,20 +501,27 @@ partial class ModelExtract
                 joint.Add("vertex_map", vertexMap);
             }
 
-            if (IsEndEffector(node))
+            // A joint can have both: a ring of nodes around it, and one past its end
+            var center = GetEndEffectorSide(node);
+
+            if (center is { } effector)
             {
                 // One node past the end of the chain's last joint, which the compiler names after its center
-                joint.Add("end_effector", sides![0].Offset.Length());
+                joint.Add("end_effector", effector.Offset.Length());
             }
-            else if (sides is { Count: > 0 })
+
+            if (rings.Count > 0)
             {
+                // With an end effector the compiler adds a second ring around it, the joint's own is the nearer half
+                var ring = center == null ? rings : [.. rings.OrderBy(static side => side.Offset.Length()).Take(Math.Max(1, rings.Count / 2))];
+
                 // Sides spread along the bone's Y and Z, or along X and Y when the bone points along Z
-                var side = sides[0].Offset;
+                var side = ring[0].Offset;
                 var alongZ = MathF.Abs(side.X) > MathF.Max(MathF.Abs(side.Y), MathF.Abs(side.Z));
                 var twist = alongZ ? MathF.Atan2(-side.X, side.Y) : MathF.Atan2(side.Z, side.Y);
 
-                joint.Add("extrude_sides", sides.Count);
-                joint.Add("extrude_radius", sides.Average(static offset => offset.Offset.Length()));
+                joint.Add("extrude_sides", ring.Count);
+                joint.Add("extrude_radius", ring.Average(static offset => offset.Offset.Length()));
                 joint.Add("extrude_twist", float.RadiansToDegrees(twist));
                 joint.Add("extrude_forward_axis", alongZ ? "Z" : "X");
             }
@@ -557,11 +565,18 @@ partial class ModelExtract
 
         /// <summary>The nodes a joint is simulated with: the ones added around it when it has a width, else itself.</summary>
         private List<int> Extrusion(int node)
-            => !IsEndEffector(node) && sideNodes.TryGetValue(node, out var sides) && sides.Count > 0 ? [.. sides.Select(static side => side.Node)] : [node];
+            => GetRingSides(node) is { Count: > 0 } rings ? [.. rings.Select(static side => side.Node)] : [node];
 
-        private bool IsEndEffector(int node)
-            => sideNodes.TryGetValue(node, out var sides) && sides.Count > 0
-                && sides.TrueForAll(side => Names[side.Node].EndsWith("_Ctr", StringComparison.Ordinal) && side.Offset.Length() > 1e-3f);
+        /// <summary>The nodes added around a joint that has a width, not counting the one past its end.</summary>
+        private List<(int Node, Vector3 Offset)> GetRingSides(int node)
+            => sideNodes.TryGetValue(node, out var sides) ? [.. sides.Where(side => !IsCenter(side))] : [];
+
+        /// <summary>The node added past the end of a joint, see <c>end_effector</c>, or null when it has none.</summary>
+        private (int Node, Vector3 Offset)? GetEndEffectorSide(int node)
+            => sideNodes.TryGetValue(node, out var sides) && sides.FindIndex(IsCenter) is var index and >= 0 ? sides[index] : null;
+
+        private bool IsCenter((int Node, Vector3 Offset) side)
+            => Names[side.Node].EndsWith("_Ctr", StringComparison.Ordinal) && side.Offset.Length() > 1e-3f;
 
         /// <summary>
         /// The relaxation of the rods a spring between two joints compiles to: one rod between their nodes, or one

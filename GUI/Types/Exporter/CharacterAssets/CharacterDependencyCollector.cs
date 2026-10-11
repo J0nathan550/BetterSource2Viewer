@@ -1139,7 +1139,10 @@ namespace GUI.Types.Exporter.CharacterAssets
             var merged = new List<MergedModel>();
 
             // Items with no model of the hero's to be written over, with the models their own swaps write over
-            var slotless = new List<(MergedModel Model, List<string> Particles, List<string> Companions)>();
+            var slotless = new List<(MergedModel Model, List<string> Particles, List<string> Companions, List<string> Variants)>();
+
+            // What the hero's other models get added, by variant, e.g. the night versions of items that have no slot model
+            var variantMerged = new Dictionary<int, List<MergedModel>>();
             var replacedParticles = new Dictionary<string, ParticleReplacement>(StringComparer.OrdinalIgnoreCase);
             var usedParticles = GetUsedParticles(loadout, equippedAssets);
             // The hero's other variants are written over like units, their items have no model of their own either
@@ -1281,6 +1284,23 @@ namespace GUI.Types.Exporter.CharacterAssets
                                 Rename = rename,
                             });
                         }
+
+                        // The hero's other models wear the item's versions for them, e.g. at night Night Stalker's items
+                        // swap for their night models, which would otherwise stay the default items'
+                        if (personaModels == null || !CharacterLoadout.IsPersonaSlot(item.Item.Slot))
+                        {
+                            foreach (var (variantModel, defaultVariantModel) in loadout.GetVariantModelSwaps(item))
+                            {
+                                var (variantSkin, variantBodyGroups) = GetLook(variantModel, item.Skin);
+
+                                Enqueue(variantModel);
+                                plan.ModelReplacements.Add(new ModelReplacement(NormalizePath(variantModel), NormalizePath(defaultVariantModel), variantSkin, createdParticles)
+                                {
+                                    BodyGroups = variantBodyGroups,
+                                    Rename = rename,
+                                });
+                            }
+                        }
                     }
                     else if (!isDefault && loadout.IsWornByHero(item.Item.Slot))
                     {
@@ -1293,7 +1313,8 @@ namespace GUI.Types.Exporter.CharacterAssets
                             .Select(static modifier => NormalizePath(modifier.Asset!))
                             .ToList();
 
-                        slotless.Add((new MergedModel(NormalizePath(model), skin, bodyGroups) { PickedChoicesOnly = true }, createdParticles, companions));
+                        slotless.Add((new MergedModel(NormalizePath(model), skin, bodyGroups) { PickedChoicesOnly = true }, createdParticles, companions,
+                            item.Item.VariantModelPlayers));
                     }
                     else if (!isDefault)
                     {
@@ -1366,7 +1387,7 @@ namespace GUI.Types.Exporter.CharacterAssets
                 }
             }
 
-            foreach (var (model, particles, companions) in slotless)
+            foreach (var (model, particles, companions, variants) in slotless)
             {
                 var companionIndex = plan.ModelReplacements.FindIndex(replacement => companions.Contains(replacement.Target, StringComparer.OrdinalIgnoreCase));
 
@@ -1399,6 +1420,20 @@ namespace GUI.Types.Exporter.CharacterAssets
                     merged.Add(model);
                     heroParticles.AddRange(particles);
                     plan.Notes.Add($"{model.Model} has no default model of its own, it was added to the hero's model");
+
+                    for (var variant = 1; variant <= variants.Count; variant++)
+                    {
+                        var (variantSkin, variantBodyGroups) = GetModelLook(loadout, variants[variant - 1], model.Skin, styleRemaps: false);
+
+                        Enqueue(variants[variant - 1]);
+
+                        if (!variantMerged.TryGetValue(variant, out var list))
+                        {
+                            variantMerged[variant] = list = [];
+                        }
+
+                        list.Add(new MergedModel(NormalizePath(variants[variant - 1]), variantSkin, variantBodyGroups) { PickedChoicesOnly = true });
+                    }
                 }
             }
 
@@ -1455,6 +1490,32 @@ namespace GUI.Types.Exporter.CharacterAssets
                     Merged = merged,
                     ActivityModifiers = activityModifiers,
                     Rename = rename,
+                    RangedAttack = hero.RangedAttack,
+                });
+            }
+
+            // The hero's other models wear the night versions too, e.g. Night Stalker's, which he turns into at night
+            foreach (var (variant, variantModels) in variantMerged)
+            {
+                if (variant >= hero.VariantModels.Count)
+                {
+                    continue;
+                }
+
+                var target = NormalizePath(hero.VariantModels[variant]);
+                var existing = plan.ModelReplacements.FindIndex(replacement => CharacterLoadout.IsSamePath(replacement.Target, target));
+
+                if (existing >= 0)
+                {
+                    plan.ModelReplacements[existing].Merged.AddRange(variantModels);
+                    continue;
+                }
+
+                Enqueue(target);
+                plan.ModelReplacements.Add(new ModelReplacement(target, target, 0, [.. heroParticles.Distinct(StringComparer.OrdinalIgnoreCase)])
+                {
+                    Merged = variantModels,
+                    ActivityModifiers = activityModifiers,
                     RangedAttack = hero.RangedAttack,
                 });
             }

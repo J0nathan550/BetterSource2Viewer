@@ -98,6 +98,9 @@ namespace GUI.Types.Exporter.CharacterAssets
         /// <summary>The slots whose default item the game combines into the hero's model.</summary>
         private readonly HashSet<string> combinedDefaultSlots = new(StringComparer.OrdinalIgnoreCase);
 
+        /// <summary>The default item's models for the hero's other models, by slot, see <see cref="GetVariantModelSwaps"/>.</summary>
+        private readonly Dictionary<string, List<string>> defaultVariantModels = new(StringComparer.OrdinalIgnoreCase);
+
         public HeroDefinition Hero { get; }
         public IReadOnlyList<EquippedItem> Items { get; }
 
@@ -117,6 +120,7 @@ namespace GUI.Types.Exporter.CharacterAssets
         public static CharacterLoadout Create(ItemsGameCatalog catalog, HeroDefinition hero, IReadOnlyList<EquippedItem> items)
         {
             var defaultModels = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+            var slotVariantModels = new Dictionary<string, List<string>>(StringComparer.OrdinalIgnoreCase);
             var slots = new Dictionary<string, HeroSlot>(StringComparer.OrdinalIgnoreCase);
             var unitModels = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
             var slotUnitModels = new Dictionary<string, List<string>>(StringComparer.OrdinalIgnoreCase);
@@ -129,6 +133,7 @@ namespace GUI.Types.Exporter.CharacterAssets
                 if (catalog.GetDefaultItem(hero, slot.Name) is { ModelPlayer: { } model } defaultItem)
                 {
                     defaultModels[slot.Name] = model;
+                    slotVariantModels[slot.Name] = defaultItem.VariantModelPlayers;
 
                     if (!defaultItem.SkipModelCombine)
                     {
@@ -177,6 +182,11 @@ namespace GUI.Types.Exporter.CharacterAssets
 
             var loadout = new CharacterLoadout(hero, items, defaultModels, slots, unitModels, slotUnitModels, itemModels);
             loadout.combinedDefaultSlots.UnionWith(combinedDefaultSlots);
+
+            foreach (var (slot, models) in slotVariantModels)
+            {
+                loadout.defaultVariantModels[slot] = models;
+            }
 
             return loadout;
         }
@@ -280,6 +290,19 @@ namespace GUI.Types.Exporter.CharacterAssets
         /// The model the hero wears in the slot when nothing else is equipped, if it has one.
         /// </summary>
         public string? GetDefaultModel(string slot) => defaultModels.GetValueOrDefault(slot);
+
+        /// <summary>
+        /// The item's models for the hero's other models paired with those of the slot's default item, e.g. Night
+        /// Stalker's night versions, see <see cref="EconItem.VariantModelPlayers"/>.
+        /// </summary>
+        public IEnumerable<(string Model, string DefaultModel)> GetVariantModelSwaps(EquippedItem item)
+        {
+            var defaults = defaultVariantModels.GetValueOrDefault(item.Item.Slot) ?? [];
+
+            return item.Item.VariantModelPlayers
+                .Zip(defaults)
+                .Where(static pair => !IsSamePath(pair.First, pair.Second));
+        }
 
         /// <summary>
         /// Whether the game combines the slot's default item into the hero's model. It goes by the equipped item, which

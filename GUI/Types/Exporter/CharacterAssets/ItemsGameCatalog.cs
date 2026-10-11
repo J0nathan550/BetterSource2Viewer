@@ -73,6 +73,13 @@ namespace GUI.Types.Exporter.CharacterAssets
         public required string Name { get; init; }
         public required string Slot { get; init; }
         public string? ModelPlayer { get; init; }
+
+        /// <summary>
+        /// The models the item wears on the hero's other models, see <see cref="HeroDefinition.VariantModels"/>, e.g. a
+        /// Night Stalker item's night version, from "model_player1" on.
+        /// </summary>
+        public List<string> VariantModelPlayers { get; init; } = [];
+
         public string? ImageInventory { get; init; }
         public string? Rarity { get; init; }
 
@@ -468,12 +475,20 @@ namespace GUI.Types.Exporter.CharacterAssets
             var isDefault = (GetValue(itemData, "baseitem") ?? GetPrefabValue(prefabs, prefab, "baseitem", 0)) == "1";
             var visuals = itemData.GetSubCollection("visuals");
 
+            var variantModelPlayers = new List<string>();
+
+            while (NullIfEmpty(GetValue(itemData, string.Create(CultureInfo.InvariantCulture, $"model_player{variantModelPlayers.Count + 1}"))) is { } variantModel)
+            {
+                variantModelPlayers.Add(variantModel);
+            }
+
             var item = new EconItem
             {
                 DefIndex = defIndex,
                 Name = name,
                 Slot = slot,
                 ModelPlayer = NullIfEmpty(GetValue(itemData, "model_player")),
+                VariantModelPlayers = variantModelPlayers,
                 ImageInventory = NullIfEmpty(GetValue(itemData, "image_inventory")),
                 Rarity = GetValue(itemData, "item_rarity") ?? GetPrefabValue(prefabs, prefab, "item_rarity", 0),
                 IsDefault = isDefault,
