@@ -320,6 +320,12 @@ namespace GUI.Types.Exporter.CharacterAssets
 
         /// <summary>Whether the source model is moved rather than copied, see <see cref="CharacterExportOptions.RenameModels"/>.</summary>
         public bool Rename { get; init; }
+
+        /// <summary>
+        /// Whether the hero the model is written over attacks from range, which picks between versions of an attack
+        /// made for either, null for models other than the hero's.
+        /// </summary>
+        public bool? RangedAttack { get; init; }
     }
 
     /// <summary>
@@ -1270,6 +1276,7 @@ namespace GUI.Types.Exporter.CharacterAssets
                     Merged = merged,
                     ActivityModifiers = activityModifiers,
                     Rename = rename,
+                    RangedAttack = hero.RangedAttack,
                 });
             }
         }

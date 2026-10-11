@@ -444,7 +444,7 @@ namespace GUI.Types.Exporter.CharacterAssets
                     {
                         try
                         {
-                            vmdl = ModelDocEditor.MatchSequenceOrder(vmdl, original, replacement.ActivityModifiers, details);
+                            vmdl = ModelDocEditor.MatchSequenceOrder(vmdl, original, replacement.ActivityModifiers, replacement.RangedAttack, details);
                         }
                         catch (Exception e)
                         {
@@ -581,6 +581,7 @@ namespace GUI.Types.Exporter.CharacterAssets
             }
 
             var descriptions = new Dictionary<string, OriginalSequence>(StringComparer.Ordinal);
+            var poseParameters = (sequenceData.GetArray("m_localPoseParamArray") ?? []).Select(static pose => pose.GetStringProperty("m_sName")).ToList();
 
             foreach (var sequence in sequenceData.GetArray("m_localS1SeqDescArray") ?? [])
             {
@@ -592,8 +593,12 @@ namespace GUI.Types.Exporter.CharacterAssets
                 var looping = flags?.GetBooleanProperty("m_bLooping") ?? false;
                 var delta = flags?.GetBooleanProperty("m_bLegacyDelta") ?? false;
                 var multi = flags?.GetBooleanProperty("m_bMulti") ?? false;
+                var poses = (sequence.GetSubCollection("m_fetch")?.GetIntegerArray("m_nLocalPose") ?? [])
+                    .Where(index => index >= 0 && index < poseParameters.Count)
+                    .Select(index => poseParameters[(int)index])
+                    .ToList();
 
-                descriptions.TryAdd(name, new OriginalSequence(name, activity, modifiers, looping, delta, multi));
+                descriptions.TryAdd(name, new OriginalSequence(name, activity, modifiers, looping, delta, multi) { PoseParameters = poses });
             }
 
             return [.. (sequenceData.GetArray<string>("m_localSequenceNameArray") ?? [])

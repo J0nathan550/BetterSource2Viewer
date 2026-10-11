@@ -150,6 +150,10 @@ namespace GUI.Types.Exporter.CharacterAssets
         public string? GameSoundsFile { get; init; }
         public string? VoiceFile { get; init; }
         public string? ParticleFolder { get; init; }
+
+        /// <summary>Whether the hero attacks from range rather than in melee.</summary>
+        public bool RangedAttack { get; init; }
+
         public List<string> Abilities { get; } = [];
         public List<HeroSlot> Slots { get; } = [];
 
@@ -711,6 +715,7 @@ namespace GUI.Types.Exporter.CharacterAssets
                     GameSoundsFile = NullIfEmpty(GetValue(heroData, "GameSoundsFile")),
                     VoiceFile = NullIfEmpty(GetValue(heroData, "VoiceFile")),
                     ParticleFolder = NullIfEmpty(GetValue(heroData, "particle_folder")),
+                    RangedAttack = GetValue(heroData, "AttackCapabilities") == "DOTA_UNIT_CAP_RANGED_ATTACK",
                 };
 
                 hero.VariantModels.Add(hero.Model!);

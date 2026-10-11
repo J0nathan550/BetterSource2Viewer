@@ -34,7 +34,11 @@ namespace GUI.Types.Exporter.CharacterAssets
     /// <param name="Looping">Whether it loops.</param>
     /// <param name="Delta">Whether it is an additive blend, e.g. the turns layered on runs.</param>
     /// <param name="Multi">Whether it blends several poses, e.g. by the angle an aim pose parameter gives.</param>
-    sealed record OriginalSequence(string Name, string? Activity, IReadOnlyList<string> Modifiers, bool Looping, bool Delta = false, bool Multi = false);
+    sealed record OriginalSequence(string Name, string? Activity, IReadOnlyList<string> Modifiers, bool Looping, bool Delta = false, bool Multi = false)
+    {
+        /// <summary>The pose parameters it blends its poses by, e.g. "aim".</summary>
+        public IReadOnlyList<string> PoseParameters { get; init; } = [];
+    }
 
     /// <summary>
     /// Edits decompiled .vmdl files in place, keeping the rest of the text exactly as the model extractor wrote it.
@@ -697,9 +701,13 @@ namespace GUI.Types.Exporter.CharacterAssets
         /// <param name="vmdl">The .vmdl text, with <see cref="ApplyActivityModifiers"/> already applied.</param>
         /// <param name="original">The original model's sequences in order.</param>
         /// <param name="appliedModifiers">The activity modifiers the loadout sets, which this model now plays by default.</param>
+        /// <param name="rangedAttack">
+        /// Whether the hero attacks from range, which picks the versions of an attack made for that over the ones the game
+        /// only plays by distance, e.g. the whip over the sword of Razor's arcana, or null when not a hero's model.
+        /// </param>
         /// <param name="details">Receives a description of what the original's sequences play.</param>
         public static string MatchSequenceOrder(string vmdl, IReadOnlyList<OriginalSequence> original, IReadOnlyCollection<ActivityModifier> appliedModifiers,
-            ICollection<string>? details = null)
+            bool? rangedAttack = null, ICollection<string>? details = null)
         {
             var sequences = GetSequenceNames(vmdl);
             var animations = GetAnimFiles(vmdl);
@@ -734,6 +742,26 @@ namespace GUI.Types.Exporter.CharacterAssets
                 ?? topLevel.FirstOrDefault(static animation => animation.Looping)
                 ?? animations.First(static animation => animation.Looping);
 
+            // This model's own blends, e.g. of aim poses, which the original's blends are numbered as, see FindBlend
+            var blends = GetAnimFiles(vmdl, blends: true)
+                .Where(node => node.IsBlend && sequences.Contains(node.Name.Value, StringComparer.OrdinalIgnoreCase)
+                    && !original.Any(sequence => sequence.Name.Equals(node.Name.Value, StringComparison.OrdinalIgnoreCase)))
+                .ToList();
+
+            foreach (var blend in blends)
+            {
+                modifiers[blend] = GetModifierNames(vmdl, blend);
+            }
+
+            // The game picks some versions by itself, e.g. by how far the target is, a mod can only pick the one made
+            // for how the hero attacks
+            var otherAttack = rangedAttack switch
+            {
+                true => "melee",
+                false => "ranged",
+                null => null,
+            };
+
             AnimFileNode PickSource(OriginalSequence sequence)
             {
                 var own = FindNode(sequence.Name);
@@ -762,7 +790,8 @@ namespace GUI.Types.Exporter.CharacterAssets
                     return named ?? SequenceNameTokens.GetStates(sequence.Name).Select(FindIdle).OfType<AnimFileNode>().FirstOrDefault() ?? plainIdle;
                 }
 
-                return RankByModifiers(topLevel, sequence, activity, own) ?? own ?? FindIdle(null) ?? plainIdle;
+                // Blends play as copies too, e.g. an arcana's ranged attacks blend by range
+                return RankByModifiers(topLevel.Concat(blends), sequence, activity, own) ?? own ?? FindIdle(null) ?? plainIdle;
             }
 
             // The version of an activity whose modifiers are closest to the original's, as PickSource describes
@@ -786,8 +815,11 @@ namespace GUI.Types.Exporter.CharacterAssets
 
                         return (Animation: animation, Missing: missing, Extra: extra, Score: score);
                     })
-                    .OrderBy(static candidate => candidate.Missing + candidate.Extra)
+                    .OrderBy(candidate => otherAttack != null && modifiers[candidate.Animation].Any(modifier => modifier.Contains(otherAttack, StringComparison.OrdinalIgnoreCase)))
+                    .ThenByDescending(candidate => sequence.PoseParameters.Count(pose => candidate.Animation.PoseParameters.Contains(pose, StringComparer.OrdinalIgnoreCase)))
+                    .ThenBy(static candidate => candidate.Missing + candidate.Extra)
                     .ThenBy(static candidate => candidate.Extra)
+                    .ThenBy(candidate => candidate.Animation.IsBlend != sequence.Multi)
                     .ThenBy(candidate => candidate.Animation != own)
                     .ThenByDescending(static candidate => candidate.Score.Action)
                     .ThenByDescending(static candidate => candidate.Score.Number)
@@ -799,33 +831,21 @@ namespace GUI.Types.Exporter.CharacterAssets
 
             var aliases = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
 
-            // This model's own blends, e.g. of aim poses, which only the original's blends may stand for. They are
-            // numbered as they are, being made of other sequences rather than copied
-            var blends = GetAnimFiles(vmdl, blends: true)
-                .Where(node => node.IsBlend && sequences.Contains(node.Name.Value, StringComparer.OrdinalIgnoreCase)
-                    && !original.Any(sequence => sequence.Name.Equals(node.Name.Value, StringComparison.OrdinalIgnoreCase)))
-                .ToList();
-
-            foreach (var blend in blends)
+            AnimFileNode? FindBlend(OriginalSequence sequence)
             {
-                modifiers[blend] = GetModifierNames(vmdl, blend);
-            }
-
-            string? FindBlend(OriginalSequence sequence)
-            {
-                var unused = blends.Where(blend => blend.Delta == sequence.Delta && !aliases.ContainsValue(blend.Name.Value)).ToList();
-
+                // One already numbered for another sequence is still the closest, it is copied then
                 if (sequence.Activity is { Length: > 0 } activity)
                 {
-                    return RankByModifiers(unused, sequence, activity, own: null)?.Name.Value;
+                    return RankByModifiers(blends.Where(blend => blend.Delta == sequence.Delta), sequence, activity, own: null);
                 }
 
-                return unused
+                return blends
+                    .Where(blend => blend.Delta == sequence.Delta && !aliases.ContainsValue(blend.Name.Value))
                     .Select(blend => (Blend: blend, Score: nameTokens.Compare(sequence.Name, blend.Name.Value, modifiers[blend])))
                     .Where(static candidate => candidate.Score.Action > 0)
                     .OrderByDescending(static candidate => candidate.Score.Action + candidate.Score.State)
                     .ThenBy(static candidate => candidate.Score.Extra)
-                    .Select(static candidate => candidate.Blend.Name.Value)
+                    .Select(static candidate => candidate.Blend)
                     .FirstOrDefault();
             }
 
@@ -846,14 +866,16 @@ namespace GUI.Types.Exporter.CharacterAssets
                 }
 
                 // Blends go to this model's blend of the same kind, e.g. the aim poses Razor turns to his target with
-                if ((sequence.Delta || sequence.Multi) && FindOwn(sequence.Name) == null && FindBlend(sequence) is { } blend)
+                var blend = (sequence.Delta || sequence.Multi) && FindOwn(sequence.Name) == null ? FindBlend(sequence) : null;
+
+                if (blend != null && !aliases.ContainsValue(blend.Name.Value))
                 {
-                    aliases[sequence.Name] = blend;
-                    remapped.Add($"{sequence.Name} plays {blend}");
+                    aliases[sequence.Name] = blend.Name.Value;
+                    remapped.Add($"{sequence.Name} plays {blend.Name.Value}");
                     continue;
                 }
 
-                var source = PickSource(sequence);
+                var source = blend ?? PickSource(sequence);
                 var own = FindNode(sequence.Name);
 
                 played[sequence.Name] = source;
@@ -863,7 +885,15 @@ namespace GUI.Types.Exporter.CharacterAssets
                     continue;
                 }
 
-                var text = GetNodeText(vmdl, source.Start, source.End, source.Name, own?.Name.Value ?? sequence.Name);
+                // An additive layer or a gesture this model has no version of adds nothing rather than laying another
+                // activity's whole pose over everything, e.g. the ones Razor's Static Link plays over the aim poses he turns
+                // to his target with. Override activities are only played as gestures
+                var neutral = sequence.Activity is { Length: > 0 } activity
+                    && (sequence.Delta || activity.StartsWith("ACT_DOTA_OVERRIDE_", StringComparison.OrdinalIgnoreCase))
+                    && source.SourceFile != null && !string.Equals(source.Activity, activity, StringComparison.OrdinalIgnoreCase);
+                var text = neutral
+                    ? GetNeutralLayerText(vmdl, source, own?.Name.Value ?? sequence.Name, sequence.Looping)
+                    : GetNodeText(vmdl, source.Start, source.End, source.Name, own?.Name.Value ?? sequence.Name);
 
                 if (own == null)
                 {
@@ -881,7 +911,7 @@ namespace GUI.Types.Exporter.CharacterAssets
                     continue;
                 }
 
-                remapped.Add($"{sequence.Name} plays {source.Name.Value}");
+                remapped.Add(neutral ? $"{sequence.Name} adds nothing" : $"{sequence.Name} plays {source.Name.Value}");
             }
 
             // The compiler only makes "@name" for a sequence with layers, without them the number needs a sequence of its own
@@ -1056,6 +1086,37 @@ namespace GUI.Types.Exporter.CharacterAssets
             }
 
             return text.Append(',').ToString();
+        }
+
+        /// <summary>
+        /// A hidden additive animation that adds nothing: one frame of an animation with that same frame subtracted.
+        /// </summary>
+        private static string GetNeutralLayerText(string vmdl, AnimFileNode source, string name, bool looping)
+        {
+            var lineStart = GetLineStart(vmdl, source.Start);
+            var depth = vmdl.AsSpan(lineStart, source.Start - lineStart).Count('\t');
+            var looped = looping ? "true" : "false";
+
+            return Indent($$"""
+                {
+                    _class = "AnimFile"
+                    name = "{{name}}"
+                    source_filename = "{{source.SourceFile}}"
+                    looping = {{looped}}
+                    delta = true
+                    hidden = true
+                    start_frame = {{source.StartFrame}}
+                    end_frame = {{source.StartFrame}}
+                    children =
+                    [
+                        {
+                            _class = "AnimSubtract"
+                            anim_name = "{{source.Name.Value}}"
+                            frame_type = "FirstFrame"
+                        },
+                    ]
+                },
+                """, depth);
         }
 
         /// <summary>
@@ -1549,6 +1610,12 @@ namespace GUI.Types.Exporter.CharacterAssets
                     CycleOverrides = ChildrenOfClass("AnimCycleOverride"),
                     IsBlend = header.Groups["class"].Value != "AnimFile",
                     Delta = FindOwn(DeltaRegex())?.Groups["value"].Value == "true",
+                    PoseParameters = [.. PoseParameterRegex().Matches(vmdl[start..end])
+                        .Where(match => !children.Any(child => start + match.Index > child.Start && start + match.Index < child.End))
+                        .Select(static match => match.Groups["name"].Value)
+                        .Where(static name => name.Length > 0)],
+                    SourceFile = FindOwn(SourceFilenameRegex())?.Groups["file"].Value,
+                    StartFrame = FindOwn(StartFrameRegex()) is { } startFrame ? int.Parse(startFrame.Groups["value"].Value, CultureInfo.InvariantCulture) : 0,
                 });
             }
 
@@ -1569,6 +1636,15 @@ namespace GUI.Types.Exporter.CharacterAssets
 
             /// <summary>Whether it adds to what plays rather than replacing it.</summary>
             public bool Delta { get; init; }
+
+            /// <summary>The pose parameters a blend blends its poses by, e.g. "aim".</summary>
+            public List<string> PoseParameters { get; init; } = [];
+
+            /// <summary>The animation file it plays, null for blends.</summary>
+            public string? SourceFile { get; init; }
+
+            /// <summary>The first frame of the file it plays.</summary>
+            public int StartFrame { get; init; }
         }
 
         /// <summary>
@@ -2182,6 +2258,15 @@ namespace GUI.Types.Exporter.CharacterAssets
 
         [GeneratedRegex(@"\bdelta\s*=\s*(?<value>true|false)\b", RegexOptions.CultureInvariant)]
         private static partial Regex DeltaRegex();
+
+        [GeneratedRegex(@"\b(?:poseParam|row_pose_param_name|col_pose_param_name)\s*=\s*""(?<name>[^""]*)""", RegexOptions.CultureInvariant)]
+        private static partial Regex PoseParameterRegex();
+
+        [GeneratedRegex(@"\bsource_filename\s*=\s*""(?<file>[^""]*)""", RegexOptions.CultureInvariant)]
+        private static partial Regex SourceFilenameRegex();
+
+        [GeneratedRegex(@"\bstart_frame\s*=\s*(?<value>-?[0-9]+)", RegexOptions.CultureInvariant)]
+        private static partial Regex StartFrameRegex();
 
         [GeneratedRegex(@"\bhidden\s*=\s*(?<value>true|false)\b", RegexOptions.CultureInvariant)]
         private static partial Regex HiddenRegex();
