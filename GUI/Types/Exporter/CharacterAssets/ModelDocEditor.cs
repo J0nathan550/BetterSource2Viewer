@@ -891,10 +891,13 @@ namespace GUI.Types.Exporter.CharacterAssets
 
                 // The original only turns its run to the target while the hero moves to attack, e.g. Razor during Static
                 // Link, and walks facing ahead otherwise. Its plain run plays the same aim blend, so he faces the target
-                // whenever the game sets the pose parameter
+                // whenever the game sets the pose parameter. Not when the original has a run of its own for that state,
+                // e.g. Windranger's Focus Fire, the game already plays that one
                 if (blend == null && sequence is { Activity: "ACT_DOTA_RUN", Looping: true, Delta: false, Multi: false, Modifiers.Count: 0 }
                     && FindOwn(sequence.Name) == null
-                    && original.FirstOrDefault(other => other.Multi && other.Activity == sequence.Activity && other.PoseParameters.Count > 0) is { } aimedRun)
+                    && original.FirstOrDefault(other => other.Multi && other.Activity == sequence.Activity && other.PoseParameters.Count > 0) is { } aimedRun
+                    && !original.Any(other => !other.Multi && other.Activity == sequence.Activity
+                        && other.Modifiers.Intersect(aimedRun.Modifiers, StringComparer.OrdinalIgnoreCase).Any()))
                 {
                     blend = FindBlend(aimedRun);
                 }
