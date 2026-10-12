@@ -32,6 +32,12 @@ namespace GUI.Types.Exporter.CharacterAssets
         public int? RequiredArcanaLevel { get; init; }
 
         /// <summary>
+        /// The hero model this is made for, by its index in <see cref="HeroDefinition.VariantModels"/>, e.g. 1 for an effect
+        /// that only shows on Night Stalker's night model, or null when it shows on all of them.
+        /// </summary>
+        public int? RequiredModelVariant { get; init; }
+
+        /// <summary>
         /// For "particle_control_point", the control point the item sets on the particle it names and the value it sets,
         /// e.g. the color of an arcana style's effect.
         /// </summary>
@@ -552,6 +558,7 @@ namespace GUI.Types.Exporter.CharacterAssets
                     ParseInt(GetValue(modifier, "level") ?? GetValue(modifier, "value") ?? GetValue(modifier, "skin")))
                 {
                     RequiredArcanaLevel = ParseInt(GetValue(modifier, "required_arcana_level")),
+                    RequiredModelVariant = ParseInt(GetValue(modifier, "required_model_variant")),
 
                     // Ones that depend on criteria, like the compendium level, cannot be told apart outside the game
                     ControlPoint = type == "particle_control_point" && GetValue(modifier, "criteria") == null

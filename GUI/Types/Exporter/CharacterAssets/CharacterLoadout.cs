@@ -295,13 +295,14 @@ namespace GUI.Types.Exporter.CharacterAssets
         /// The item's models for the hero's other models paired with those of the slot's default item, e.g. Night
         /// Stalker's night versions, see <see cref="EconItem.VariantModelPlayers"/>.
         /// </summary>
-        public IEnumerable<(string Model, string DefaultModel)> GetVariantModelSwaps(EquippedItem item)
+        public IEnumerable<(int Variant, string Model, string DefaultModel)> GetVariantModelSwaps(EquippedItem item)
         {
             var defaults = defaultVariantModels.GetValueOrDefault(item.Item.Slot) ?? [];
 
             return item.Item.VariantModelPlayers
                 .Zip(defaults)
-                .Where(static pair => !IsSamePath(pair.First, pair.Second));
+                .Select(static (pair, index) => (Variant: index + 1, Model: pair.First, DefaultModel: pair.Second))
+                .Where(static swap => !IsSamePath(swap.Model, swap.DefaultModel));
         }
 
         /// <summary>

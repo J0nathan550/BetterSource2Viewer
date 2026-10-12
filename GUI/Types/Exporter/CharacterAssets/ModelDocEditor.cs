@@ -1021,6 +1021,13 @@ namespace GUI.Types.Exporter.CharacterAssets
                     continue;
                 }
 
+                // This model's own blend of that name already is the sequence, e.g. the hero's additive turn layer. A copy
+                // of another animation would take its name and lay a full pose over everything the game layers it on
+                if (FindNode(sequence.Name) == null && FindOwn(sequence.Name) != null)
+                {
+                    continue;
+                }
+
                 // Blends go to this model's blend of the same kind, e.g. the aim poses Razor turns to his target with
                 var blend = (sequence.Delta || sequence.Multi) && FindOwn(sequence.Name) == null ? FindBlend(sequence) : null;
 

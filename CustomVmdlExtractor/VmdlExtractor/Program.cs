@@ -3862,12 +3862,21 @@ internal static class Program
         var present = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         var animFileBlocks = new List<(int Start, int End, string FieldIndent, string Name, string SourceFilename)>();
         var animFileClassRx = new Regex(@"\A\{\s*_class\s*=\s*""AnimFile""", RegexOptions.Compiled);
+        // Blends name a sequence too, and their compiled clip carries that same name, e.g. a hero's "turns" layer.
+        // An AnimFile injected for that clip would take the blend's name, the compiler then renames the blend and
+        // the server's sequence number for the turn layer plays a full pose instead of an additive one.
+        var sequenceNodeClassRx = new Regex(@"\A\{\s*_class\s*=\s*""(?:\w*Blend\w*|EmptyAnim)""", RegexOptions.Compiled);
         var nameInBlockRx = new Regex(@"^([ \t]*)name\s*=\s*""([^""]+)""\s*$", RegexOptions.Multiline | RegexOptions.Compiled);
         var srcFileRx = new Regex(@"^[ \t]*source_filename\s*=\s*""([^""]+)""\s*$", RegexOptions.Multiline | RegexOptions.Compiled);
 
         foreach (var (bStart, bEnd, _) in FindBalancedBracePairs(vmdlText))
         {
             var block = vmdlText.Substring(bStart, bEnd - bStart + 1);
+            if (sequenceNodeClassRx.IsMatch(block) && nameInBlockRx.Match(block) is { Success: true } sequenceName)
+            {
+                present.Add(sequenceName.Groups[2].Value);
+                continue;
+            }
             if (!animFileClassRx.IsMatch(block)) continue;
             var nm = nameInBlockRx.Match(block);
             if (!nm.Success) continue;

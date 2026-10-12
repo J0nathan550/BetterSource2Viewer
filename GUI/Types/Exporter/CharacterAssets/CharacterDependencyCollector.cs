@@ -1135,11 +1135,11 @@ namespace GUI.Types.Exporter.CharacterAssets
             var hero = loadout.Hero;
 
             // Particles of items without a model of their own play on the hero, as do those of models added to the hero's
-            var heroParticles = new List<string>();
+            var heroParticles = new List<VariantParticle>();
             var merged = new List<MergedModel>();
 
             // Items with no model of the hero's to be written over, with the models their own swaps write over
-            var slotless = new List<(MergedModel Model, List<string> Particles, List<string> Companions, List<string> Variants)>();
+            var slotless = new List<(MergedModel Model, List<VariantParticle> Particles, List<string> Companions, List<string> Variants)>();
 
             // What the hero's other models get added, by variant, e.g. the night versions of items that have no slot model
             var variantMerged = new Dictionary<int, List<MergedModel>>();
@@ -1179,13 +1179,12 @@ namespace GUI.Types.Exporter.CharacterAssets
             foreach (var item in loadout.Items)
             {
                 var isDefault = loadout.IsAppliedByGame(item);
-                var createdParticles = options.ItemParticles && !isDefault
-                    ? loadout.CreatedEffects
+                List<VariantParticle> createdEffects = options.ItemParticles && !isDefault
+                    ? [.. loadout.CreatedEffects
                         .Where(effect => effect.Item == item && IsEffectEnabled(loadout, options, effect))
-                        .Select(static effect => effect.Particle)
-                        .Distinct(StringComparer.OrdinalIgnoreCase)
-                        .ToList()
+                        .Select(static effect => new VariantParticle(effect.Particle, effect.Modifier.RequiredModelVariant))]
                     : [];
+                var createdParticles = GetVariantParticles(createdEffects, 0);
 
                 var model = options.ItemModels ? loadout.GetItemModel(item) : null;
                 var itemUnitSwaps = unitSwaps.Where(swap => swap.Item == item).ToList();
@@ -1214,7 +1213,7 @@ namespace GUI.Types.Exporter.CharacterAssets
                 {
                     if (loadout.IsWornByHero(item.Item.Slot))
                     {
-                        heroParticles.AddRange(createdParticles);
+                        heroParticles.AddRange(createdEffects);
 
                         // The item takes the slot without wearing anything in it, e.g. an arcana head that comes with
                         // the hero model it swaps in, so the slot's default model would show inside it
@@ -1251,7 +1250,7 @@ namespace GUI.Types.Exporter.CharacterAssets
                             GestureModifiers = GetGestureModifiers(hero, item),
                             PickedChoicesOnly = true,
                         });
-                        heroParticles.AddRange(createdParticles);
+                        heroParticles.AddRange(createdEffects);
 
                         if (defaultModel != null)
                         {
@@ -1267,7 +1266,7 @@ namespace GUI.Types.Exporter.CharacterAssets
                         // nothing moves any more, e.g. the Windranger arcana's hair
                         var (skin, bodyGroups) = GetModelLook(loadout, model, item.Skin, styleRemaps: false);
                         merged.Add(new MergedModel(NormalizePath(model), skin, bodyGroups) { PickedChoicesOnly = true });
-                        heroParticles.AddRange(createdParticles);
+                        heroParticles.AddRange(createdEffects);
                         plan.HiddenModels.Add(NormalizePath(defaultModel));
                         plan.Notes.Add($"{NormalizePath(model)} has cloth the game keeps apart from the hero, it was added to the hero's model");
                     }
@@ -1289,12 +1288,13 @@ namespace GUI.Types.Exporter.CharacterAssets
                         // swap for their night models, which would otherwise stay the default items'
                         if (personaModels == null || !CharacterLoadout.IsPersonaSlot(item.Item.Slot))
                         {
-                            foreach (var (variantModel, defaultVariantModel) in loadout.GetVariantModelSwaps(item))
+                            foreach (var (variant, variantModel, defaultVariantModel) in loadout.GetVariantModelSwaps(item))
                             {
                                 var (variantSkin, variantBodyGroups) = GetLook(variantModel, item.Skin);
 
                                 Enqueue(variantModel);
-                                plan.ModelReplacements.Add(new ModelReplacement(NormalizePath(variantModel), NormalizePath(defaultVariantModel), variantSkin, createdParticles)
+                                plan.ModelReplacements.Add(new ModelReplacement(NormalizePath(variantModel), NormalizePath(defaultVariantModel), variantSkin,
+                                    GetVariantParticles(createdEffects, variant))
                                 {
                                     BodyGroups = variantBodyGroups,
                                     Rename = rename,
@@ -1313,7 +1313,7 @@ namespace GUI.Types.Exporter.CharacterAssets
                             .Select(static modifier => NormalizePath(modifier.Asset!))
                             .ToList();
 
-                        slotless.Add((new MergedModel(NormalizePath(model), skin, bodyGroups) { PickedChoicesOnly = true }, createdParticles, companions,
+                        slotless.Add((new MergedModel(NormalizePath(model), skin, bodyGroups) { PickedChoicesOnly = true }, createdEffects, companions,
                             item.Item.VariantModelPlayers));
                     }
                     else if (!isDefault)
@@ -1397,7 +1397,7 @@ namespace GUI.Types.Exporter.CharacterAssets
                     var companion = plan.ModelReplacements[companionIndex];
 
                     plan.ModelReplacements[companionIndex] = new ModelReplacement(model.Model, companion.Target, model.Skin,
-                        [.. companion.Particles.Union(particles, StringComparer.OrdinalIgnoreCase)])
+                        [.. companion.Particles.Union(GetVariantParticles(particles, 0), StringComparer.OrdinalIgnoreCase)])
                     {
                         BodyGroups = model.BodyGroups,
                         Merged = companion.Merged,
@@ -1412,7 +1412,7 @@ namespace GUI.Types.Exporter.CharacterAssets
                     var companion = plan.ModelReplacements[companionIndex];
 
                     companion.Merged.Add(model);
-                    companion.Particles.AddRange(particles.Except(companion.Particles, StringComparer.OrdinalIgnoreCase));
+                    companion.Particles.AddRange(GetVariantParticles(particles, 0).Except(companion.Particles, StringComparer.OrdinalIgnoreCase));
                     plan.Notes.Add($"{model.Model} has no default model of its own, it was added to {companion.Target}, which it swaps to fit it");
                 }
                 else
@@ -1477,14 +1477,16 @@ namespace GUI.Types.Exporter.CharacterAssets
 
             Enqueue(heroModel);
 
-            if (!CharacterLoadout.IsSamePath(heroModel, hero.Model) || heroSkin != 0 || heroParticles.Count > 0 || merged.Count > 0 || heroBodyGroups.Count > 0
+            var dayHeroParticles = GetVariantParticles(heroParticles, 0);
+
+            if (!CharacterLoadout.IsSamePath(heroModel, hero.Model) || heroSkin != 0 || dayHeroParticles.Count > 0 || merged.Count > 0 || heroBodyGroups.Count > 0
                 || activityModifiers.Count > 0)
             {
                 plan.ModelReplacements.Add(new ModelReplacement(
                     NormalizePath(heroModel),
                     NormalizePath(hero.Model),
                     heroSkin,
-                    [.. heroParticles.Distinct(StringComparer.OrdinalIgnoreCase)])
+                    dayHeroParticles)
                 {
                     BodyGroups = heroBodyGroups,
                     Merged = merged,
@@ -1504,15 +1506,18 @@ namespace GUI.Types.Exporter.CharacterAssets
 
                 var target = NormalizePath(hero.VariantModels[variant]);
                 var existing = plan.ModelReplacements.FindIndex(replacement => CharacterLoadout.IsSamePath(replacement.Target, target));
+                var variantParticles = GetVariantParticles(heroParticles, variant);
 
                 if (existing >= 0)
                 {
-                    plan.ModelReplacements[existing].Merged.AddRange(variantModels);
+                    var replacement = plan.ModelReplacements[existing];
+                    replacement.Merged.AddRange(variantModels);
+                    replacement.Particles.AddRange(variantParticles.Except(replacement.Particles, StringComparer.OrdinalIgnoreCase));
                     continue;
                 }
 
                 Enqueue(target);
-                plan.ModelReplacements.Add(new ModelReplacement(target, target, 0, [.. heroParticles.Distinct(StringComparer.OrdinalIgnoreCase)])
+                plan.ModelReplacements.Add(new ModelReplacement(target, target, 0, variantParticles)
                 {
                     Merged = variantModels,
                     ActivityModifiers = activityModifiers,
@@ -1949,6 +1954,21 @@ namespace GUI.Types.Exporter.CharacterAssets
                 return loadout.IsShown(effect);
             }
         }
+
+        /// <summary>
+        /// A particle an item creates, with the hero model it is made for, see <see cref="AssetModifier.RequiredModelVariant"/>.
+        /// </summary>
+        private readonly record struct VariantParticle(string Particle, int? Variant);
+
+        /// <summary>
+        /// The particles that show on one of the hero's models, by its index in <see cref="HeroDefinition.VariantModels"/>:
+        /// the ones made for it and the ones made for every model, e.g. at night Night Stalker's items play their night
+        /// effects instead of the day ones.
+        /// </summary>
+        private static List<string> GetVariantParticles(IEnumerable<VariantParticle> particles, int variant) => [.. particles
+            .Where(particle => particle.Variant is null || particle.Variant == variant)
+            .Select(static particle => particle.Particle)
+            .Distinct(StringComparer.OrdinalIgnoreCase)];
 
         private static bool IsEconParticle(string path) => path.StartsWith("particles/econ/", StringComparison.OrdinalIgnoreCase);
 

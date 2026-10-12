@@ -2792,7 +2792,8 @@ namespace GUI.Forms
                     : loadout.IsWornByHero(item.Item.Slot) ? heroParticles : null;
 
                 particles?.AddRange(loadout.CreatedEffects
-                    .Where(effect => effect.Item == item
+                    // The preview wears the day models, so effects made for the hero's other models, like the night one, stay off
+                    .Where(effect => effect.Item == item && effect.Modifier.RequiredModelVariant is null or 0
                         && (tickedEffects.TryGetValue(effect.Particle, out var ticked) ? ticked : loadout.IsShown(effect)))
                     .Select(static effect => effect.Particle));
             }
