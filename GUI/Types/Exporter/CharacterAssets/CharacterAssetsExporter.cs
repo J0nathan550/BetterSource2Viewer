@@ -752,7 +752,7 @@ namespace GUI.Types.Exporter.CharacterAssets
                     using var resource = fileLoader.LoadFile(redirect.Particle + GameFileLoader.CompiledFileSuffix) ?? throw new FileNotFoundException("Could not be read");
                     using var contentFile = FileExtract.Extract(resource, fileLoader);
 
-                    var text = Encoding.UTF8.GetString(contentFile.Data ?? throw new InvalidDataException("Could not be decompiled"));
+                    var text = ParticleFixes.Apply(redirect.Particle, Encoding.UTF8.GetString(contentFile.Data ?? throw new InvalidDataException("Could not be decompiled")));
 
                     foreach (var (target, copy) in redirect.Redirects)
                     {

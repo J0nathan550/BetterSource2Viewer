@@ -640,6 +640,8 @@ namespace GUI.Types.Exporter.CharacterAssets
                 plan.Notes.Add($"{skippedModels} model{(skippedModels == 1 ? " the loadout does not change was" : "s the loadout does not change were")} left out, the game already has {(skippedModels == 1 ? "it" : "them")}");
             }
 
+            AddParticleFixes(plan, cancellationToken);
+
             foreach (var (particle, controlPoints) in loadout.ParticleControlPoints)
             {
                 if (plan.Resources.Contains(particle + GameFileLoader.CompiledFileSuffix, StringComparer.OrdinalIgnoreCase))
@@ -1657,6 +1659,89 @@ namespace GUI.Types.Exporter.CharacterAssets
                 foreach (var reference in references)
                 {
                     queue.Enqueue(reference);
+                }
+            }
+        }
+
+        /// <summary>
+        /// Adds to <see cref="CharacterExportPlan.ParticleRedirects"/> the fixed copies of the broken game particles the
+        /// exported particles play, see <see cref="ParticleFixes"/>, and of the game particles in between, which point at
+        /// the copies. The exported particles are written with their references pointed at the copies too.
+        /// </summary>
+        private void AddParticleFixes(CharacterExportPlan plan, CancellationToken cancellationToken)
+        {
+            var exported = plan.Resources
+                .Select(static path => NormalizePath(path[..^GameFileLoader.CompiledFileSuffix.Length]))
+                .Where(IsParticlePath)
+                .ToHashSet(StringComparer.OrdinalIgnoreCase);
+
+            var references = new Dictionary<string, List<string>>(StringComparer.OrdinalIgnoreCase);
+            var affected = new Dictionary<string, bool>(StringComparer.OrdinalIgnoreCase);
+
+            // Whether a particle is broken or plays one that is, a particle that plays itself is not while it is walked
+            bool IsAffected(string particle)
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+
+                if (affected.TryGetValue(particle, out var known))
+                {
+                    return known;
+                }
+
+                affected[particle] = false;
+                var isAffected = ParticleFixes.IsBroken(particle);
+
+                // Every reference is walked, the redirects need to know about each one
+                foreach (var reference in references[particle] = GetParticleReferences(particle))
+                {
+                    isAffected |= IsAffected(reference);
+                }
+
+                affected[particle] = isAffected;
+                return isAffected;
+            }
+
+            string GetOutput(string particle) => exported.Contains(particle) ? particle : ParticleFixes.GetCopyPath(particle);
+
+            var written = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            var pending = new Queue<string>(exported.Where(IsAffected));
+
+            while (pending.TryDequeue(out var particle))
+            {
+                if (!written.Add(particle))
+                {
+                    continue;
+                }
+
+                var redirects = references[particle]
+                    .Where(reference => affected[reference])
+                    .ToDictionary(static reference => reference, GetOutput, StringComparer.OrdinalIgnoreCase);
+                var output = GetOutput(particle);
+
+                // The particle can already be written with the copies of particles written over pointed at
+                var existing = plan.ParticleRedirects.FindIndex(redirect => CharacterLoadout.IsSamePath(redirect.Particle, particle)
+                    && CharacterLoadout.IsSamePath(redirect.Output, output));
+
+                if (existing >= 0)
+                {
+                    foreach (var (target, copy) in plan.ParticleRedirects[existing].Redirects)
+                    {
+                        redirects.TryAdd(target, copy);
+                    }
+
+                    plan.ParticleRedirects.RemoveAt(existing);
+                }
+
+                plan.ParticleRedirects.Add(new ParticleRedirect(particle, output, redirects));
+
+                if (ParticleFixes.Describe(particle) is { } description)
+                {
+                    plan.Notes.Add($"{particle} is broken in the game, a fixed copy was written to {output} ({description})");
+                }
+
+                foreach (var reference in redirects.Keys)
+                {
+                    pending.Enqueue(reference);
                 }
             }
         }

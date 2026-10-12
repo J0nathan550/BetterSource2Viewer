@@ -114,6 +114,7 @@
     <Compile Include="..\GUI\Types\Exporter\CharacterAssets\ItemsGameCatalog.cs" Link="Shared\Types\Exporter\CharacterAssets\%(Filename)%(Extension)" />
     <Compile Include="..\GUI\Types\Exporter\CharacterAssets\ItemsGameEditor.cs" Link="Shared\Types\Exporter\CharacterAssets\%(Filename)%(Extension)" />
     <Compile Include="..\GUI\Types\Exporter\CharacterAssets\ModelDocEditor.cs" Link="Shared\Types\Exporter\CharacterAssets\%(Filename)%(Extension)" />
+    <Compile Include="..\GUI\Types\Exporter\CharacterAssets\ParticleFixes.cs" Link="Shared\Types\Exporter\CharacterAssets\%(Filename)%(Extension)" />
     <Compile Include="..\GUI\Types\Exporter\CharacterAssets\VmatTextureRecolorer.cs" Link="Shared\Types\Exporter\CharacterAssets\%(Filename)%(Extension)" />
     <Compile Include="..\GUI\Types\Exporter\CharacterAssets\VpcfColorEditor.cs" Link="Shared\Types\Exporter\CharacterAssets\%(Filename)%(Extension)" />
     <Compile Include="..\GUI\Types\PackageViewer\IBetterBaseItem.cs" Link="Shared\Types\PackageViewer\%(Filename)%(Extension)" />
