@@ -20,11 +20,15 @@ sealed class SearchableComboBox : ComboBox
 {
     private const double ItemHeight = 24;
 
+    // Rows with pictures are about twice as tall, so fewer fit before the list gets taller than the screen
+    private const int MaxImageRows = 10;
+
     private readonly Popup popup;
     private readonly TextBox searchTextBox;
     private readonly ListBox listBox;
     private readonly Border popupContent;
     private Func<object?, string> itemText = static item => item?.ToString() ?? string.Empty;
+    private Func<object?, IImage?>? itemImage;
 
     protected override Type StyleKeyOverride => typeof(ComboBox);
 
@@ -44,14 +48,37 @@ sealed class SearchableComboBox : ComboBox
         set
         {
             itemText = value;
-            ItemTemplate = CreateTextTemplate(value);
+            ItemTemplate = CreateBoxTemplate();
         }
     }
+
+    /// <summary>
+    /// Gets the picture shown next to an item, or null for none. The pictures stay the caller's, which keeps them alive
+    /// while the box is shown. When set, the list's rows are tall enough for <see cref="ImageWidth"/> by
+    /// <see cref="ImageHeight"/>, and the box shows the chosen item's picture too.
+    /// </summary>
+    public Func<object?, IImage?>? ItemImage
+    {
+        get => itemImage;
+        set
+        {
+            itemImage = value;
+            ItemTemplate = CreateBoxTemplate();
+        }
+    }
+
+    /// <summary>Width of the box pictures are fit into in the list.</summary>
+    public double ImageWidth { get; set; } = 60;
+
+    /// <summary>Height of the box pictures are fit into in the list.</summary>
+    public double ImageHeight { get; set; } = 40;
+
+    private double RowHeight => itemImage != null ? Math.Max(ItemHeight, ImageHeight + 4) : ItemHeight;
 
     public SearchableComboBox()
     {
         IsTextSearchEnabled = false;
-        ItemTemplate = CreateTextTemplate(itemText);
+        ItemTemplate = CreateBoxTemplate();
 
         searchTextBox = new TextBox
         {
@@ -66,12 +93,7 @@ sealed class SearchableComboBox : ComboBox
         listBox = new ListBox
         {
             SelectionMode = SelectionMode.Single,
-            ItemTemplate = new FuncDataTemplate<object>((item, _) => new TextBlock
-            {
-                Text = itemText(item),
-                VerticalAlignment = VerticalAlignment.Center,
-                TextTrimming = TextTrimming.CharacterEllipsis,
-            }, supportsRecycling: false),
+            ItemTemplate = new FuncDataTemplate<object>((item, _) => CreateItemView(item, ImageWidth, ImageHeight, 6), supportsRecycling: false),
         };
         listBox.Classes.Add("searchList");
         ScrollViewer.SetHorizontalScrollBarVisibility(listBox, ScrollBarVisibility.Disabled);
@@ -105,9 +127,38 @@ sealed class SearchableComboBox : ComboBox
         LogicalChildren.Add(popup);
     }
 
-    private static FuncDataTemplate<object> CreateTextTemplate(Func<object?, string> text) => new(
-        (item, _) => new TextBlock { Text = text(item), TextTrimming = TextTrimming.CharacterEllipsis },
+    // The box is about as tall as a line of text, so its picture is shrunk to that
+    private FuncDataTemplate<object> CreateBoxTemplate() => new(
+        (item, _) => CreateItemView(item, ImageWidth * 20 / ImageHeight, 20, 4),
         supportsRecycling: false);
+
+    private Control CreateItemView(object? item, double imageWidth, double imageHeight, double spacing)
+    {
+        var text = new TextBlock
+        {
+            Text = itemText(item),
+            VerticalAlignment = VerticalAlignment.Center,
+            TextTrimming = TextTrimming.CharacterEllipsis,
+        };
+
+        if (itemImage == null)
+        {
+            return text;
+        }
+
+        var image = new Image
+        {
+            Source = itemImage(item),
+            Width = imageWidth,
+            Height = imageHeight,
+            Stretch = Stretch.Uniform,
+            Margin = new(0, 0, spacing, 0),
+            VerticalAlignment = VerticalAlignment.Center,
+        };
+        DockPanel.SetDock(image, Dock.Left);
+
+        return new DockPanel { Children = { image, text } };
+    }
 
     /// <summary>
     /// Opens the search, starting with the given text.
@@ -124,8 +175,8 @@ sealed class SearchableComboBox : ComboBox
         Filter();
 
         // Sized for every item, so the list does not jump around while it narrows down
-        var rows = Math.Clamp(ItemCount, 1, MaxDropDownItems);
-        listBox.Height = (rows * ItemHeight) + 2;
+        var rows = Math.Clamp(ItemCount, 1, itemImage != null ? Math.Min(MaxDropDownItems, MaxImageRows) : MaxDropDownItems);
+        listBox.Height = (rows * RowHeight) + 2;
         popupContent.Width = Math.Max(Bounds.Width, DropDownWidth);
 
         popup.IsOpen = true;
@@ -204,7 +255,7 @@ sealed class SearchableComboBox : ComboBox
 
     private void OnSearchKeyDown(object? sender, KeyEventArgs e)
     {
-        var page = Math.Max(1, (int)(listBox.Bounds.Height / ItemHeight) - 1);
+        var page = Math.Max(1, (int)(listBox.Bounds.Height / RowHeight) - 1);
 
         switch (e.Key)
         {

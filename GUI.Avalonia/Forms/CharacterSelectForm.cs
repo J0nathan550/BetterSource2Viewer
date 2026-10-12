@@ -249,6 +249,7 @@ namespace GUI.Forms
                 HorizontalAlignment = HorizontalAlignment.Stretch,
                 Margin = new(3),
             };
+            itemSetComboBox.ItemImage = choice => GetChoiceImage(choice, itemSetComboBox);
             itemSetComboBox.SelectionChanged += (_, _) => ItemSetComboBox_SelectedIndexChanged();
 
             // Loadout tabs
@@ -1353,11 +1354,12 @@ namespace GUI.Forms
                 var comboBox = new SearchableComboBox
                 {
                     HorizontalAlignment = HorizontalAlignment.Stretch,
-                    DropDownWidth = 360,
+                    DropDownWidth = 420,
                     MaxDropDownItems = 20,
                     Tag = slot,
                     Margin = new(3),
                 };
+                comboBox.ItemImage = choice => GetChoiceImage(choice, comboBox);
 
                 var colorButton = CreateColorButton(
                     slotRecolors.TryGetValue(slot.Name, out var savedColor) ? savedColor : null,
@@ -2790,6 +2792,21 @@ namespace GUI.Forms
 
                 return null;
             }
+        }
+
+        /// <summary>
+        /// The picture the store and inventory show an item or set with, or null when it has none in the package.
+        /// </summary>
+        private Bitmap? GetChoiceImage(object? choice, SearchableComboBox comboBox)
+        {
+            var (width, height) = ((int)comboBox.ImageWidth, (int)comboBox.ImageHeight);
+
+            return choice switch
+            {
+                ItemChoice { Item.ImageInventory: { } image } => GetThumbnail(CharacterIcons.GetInventoryImagePath(image), width, height),
+                ItemSet set => set.Images.Select(CharacterIcons.GetInventoryImagePath).Where(Exists).Select(path => GetThumbnail(path, width, height)).FirstOrDefault(),
+                _ => null,
+            };
         }
 
         /// <summary>

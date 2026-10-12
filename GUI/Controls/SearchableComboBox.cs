@@ -15,6 +15,9 @@ public class SearchableComboBox : ThemedComboBox
     private const int WM_LBUTTONDOWN = 0x0201;
     private const int WM_LBUTTONDBLCLK = 0x0203;
 
+    // Rows with pictures are about twice as tall, so fewer fit before the list gets taller than the screen
+    private const int MaxImageRows = 10;
+
     private ToolStripDropDown? popup;
     private ToolStripControlHost? host;
     private Panel? content;
@@ -29,6 +32,19 @@ public class SearchableComboBox : ThemedComboBox
 
     /// <summary>Whether the search is open.</summary>
     public bool SearchOpen => popup?.Visible == true;
+
+    /// <summary>
+    /// Gets the picture shown next to an item, or null for none. The pictures stay the caller's, which keeps them alive
+    /// while the box is shown. When set, the list's rows are tall enough for <see cref="ImageSize"/>, and the box shows
+    /// the chosen item's picture too.
+    /// </summary>
+    public Func<object, Image?>? ItemImage { get; set; }
+
+    /// <summary>The box pictures are fit into in the list, before scaling for DPI.</summary>
+    public Size ImageSize { get; set; } = new(60, 40);
+
+    /// <summary>The box pictures are fit into in the list, scaled for DPI.</summary>
+    public Size ScaledImageSize => new(this.AdjustForDPI(ImageSize.Width), this.AdjustForDPI(ImageSize.Height));
 
     /// <summary>
     /// Opens the search, starting with the given text.
@@ -46,10 +62,10 @@ public class SearchableComboBox : ThemedComboBox
         searchTextBox.SelectionStart = text.Length;
         Filter();
 
-        listBox.ItemHeight = ItemHeight;
+        listBox.ItemHeight = ItemImage != null ? Math.Max(ItemHeight, ScaledImageSize.Height + this.AdjustForDPI(4)) : ItemHeight;
 
         // Sized for every item, so the list does not jump around while it narrows down
-        var rows = Math.Clamp(Items.Count, 1, MaxDropDownItems);
+        var rows = Math.Clamp(Items.Count, 1, ItemImage != null ? Math.Min(MaxDropDownItems, MaxImageRows) : MaxDropDownItems);
         var searchPanel = searchTextBox.Parent!;
 
         host.Size = new Size(Math.Max(Width, DropDownWidth), searchPanel.Height + (listBox.ItemHeight * rows) + 2);
@@ -329,8 +345,77 @@ public class SearchableComboBox : ThemedComboBox
         bounds.X += padding;
         bounds.Width -= padding;
 
-        TextRenderer.DrawText(e.Graphics, GetItemText(listBox.Items[e.Index]), e.Font, bounds, DropDownForeColor, Color.Transparent,
+        var item = listBox.Items[e.Index];
+
+        if (ItemImage != null && item != null)
+        {
+            var imageSize = ScaledImageSize;
+            DrawImage(e.Graphics, ItemImage(item), new Rectangle(bounds.X, bounds.Y + ((bounds.Height - imageSize.Height) / 2), imageSize.Width, imageSize.Height));
+            bounds.X += imageSize.Width + padding;
+            bounds.Width -= imageSize.Width + padding;
+        }
+
+        TextRenderer.DrawText(e.Graphics, GetItemText(item), e.Font, bounds, DropDownForeColor, Color.Transparent,
             TextFormatFlags.Left | TextFormatFlags.VerticalCenter | TextFormatFlags.EndEllipsis | TextFormatFlags.NoPrefix);
+    }
+
+    /// <summary>
+    /// Draws the chosen item with its picture in front, shrunk to the height of the box.
+    /// </summary>
+    protected override void OnDrawItem(DrawItemEventArgs e)
+    {
+        if (ItemImage == null || e.Index < 0 || (e.State & DrawItemState.ComboBoxEdit) == 0)
+        {
+            base.OnDrawItem(e);
+            return;
+        }
+
+        var selected = (e.State & DrawItemState.Selected) == DrawItemState.Selected;
+
+        using (var brush = new SolidBrush(selected ? HighlightColor : DropDownBackColor))
+        {
+            e.Graphics.FillRectangle(brush, e.Bounds);
+        }
+
+        var item = Items[e.Index];
+        var bounds = e.Bounds;
+        var padding = this.AdjustForDPI(4);
+        var imageSize = ScaledImageSize;
+        var height = Math.Max(1, bounds.Height - 2);
+        var width = Math.Max(1, height * imageSize.Width / Math.Max(1, imageSize.Height));
+
+        if (item != null)
+        {
+            DrawImage(e.Graphics, ItemImage(item), new Rectangle(bounds.X + 1, bounds.Y + 1, width, height));
+        }
+
+        bounds.X += width + padding;
+        bounds.Width -= width + padding;
+
+        TextRenderer.DrawText(e.Graphics, GetItemText(item), e.Font, bounds, DropDownForeColor, Color.Transparent,
+            TextFormatFlags.Left | TextFormatFlags.VerticalCenter | TextFormatFlags.EndEllipsis | TextFormatFlags.NoPrefix);
+
+        e.DrawFocusRectangle();
+    }
+
+    /// <summary>
+    /// Draws a picture as large as fits in the box without changing its shape, centered in it.
+    /// </summary>
+    private static void DrawImage(Graphics graphics, Image? image, Rectangle box)
+    {
+        if (image == null || image.Width <= 0 || image.Height <= 0)
+        {
+            return;
+        }
+
+        var scale = Math.Min((float)box.Width / image.Width, (float)box.Height / image.Height);
+        var width = Math.Max(1, (int)(image.Width * scale));
+        var height = Math.Max(1, (int)(image.Height * scale));
+
+        var interpolation = graphics.InterpolationMode;
+        graphics.InterpolationMode = System.Drawing.Drawing2D.InterpolationMode.HighQualityBicubic;
+        graphics.DrawImage(image, box.X + ((box.Width - width) / 2), box.Y + ((box.Height - height) / 2), width, height);
+        graphics.InterpolationMode = interpolation;
     }
 
     /// <summary>

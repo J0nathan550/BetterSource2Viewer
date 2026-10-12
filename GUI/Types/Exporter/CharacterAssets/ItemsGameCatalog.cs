@@ -205,6 +205,12 @@ namespace GUI.Types.Exporter.CharacterAssets
         public required string DisplayName { get; init; }
         public List<EconItem> Items { get; } = [];
 
+        /// <summary>
+        /// The images the set is shown with as items_game.txt names them, best first: the inventory image of the bundle
+        /// the store sells it as, which is shaped like the items' own, then the set's tall portrait.
+        /// </summary>
+        public List<string> Images { get; } = [];
+
         public override string ToString() => DisplayName;
     }
 
@@ -374,6 +380,9 @@ namespace GUI.Types.Exporter.CharacterAssets
             var itemsByHero = new Dictionary<string, List<EconItem>>(StringComparer.OrdinalIgnoreCase);
             var itemsByName = new Dictionary<string, EconItem>(StringComparer.OrdinalIgnoreCase);
 
+            // Of every item, including the bundles sets are sold as, which are not items a hero wears
+            var imagesByName = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+
             if (itemsGame.GetSubCollection("items") is { } items)
             {
                 foreach (var (defIndex, itemData) in items)
@@ -381,6 +390,11 @@ namespace GUI.Types.Exporter.CharacterAssets
                     if (itemData.ValueType != KVValueType.Collection)
                     {
                         continue;
+                    }
+
+                    if (GetValue(itemData, "name") is { Length: > 0 } itemName && NullIfEmpty(GetValue(itemData, "image_inventory")) is { } image)
+                    {
+                        imagesByName.TryAdd(itemName, image);
                     }
 
                     var item = ReadItem(defIndex, itemData, prefabs, heroNames, localization);
@@ -408,7 +422,7 @@ namespace GUI.Types.Exporter.CharacterAssets
             cancellationToken.ThrowIfCancellationRequested();
             progress?.Report("Collecting item sets...");
 
-            var setsByHero = ReadItemSets(itemsGame, itemsByName, localization);
+            var setsByHero = ReadItemSets(itemsGame, itemsByName, imagesByName, localization);
             var unusualEffects = ReadUnusualEffects(itemsGame, localization);
 
             cancellationToken.ThrowIfCancellationRequested();
@@ -656,7 +670,8 @@ namespace GUI.Types.Exporter.CharacterAssets
             return null;
         }
 
-        private static Dictionary<string, List<ItemSet>> ReadItemSets(KVObject itemsGame, Dictionary<string, EconItem> itemsByName, Dictionary<string, string> localization)
+        private static Dictionary<string, List<ItemSet>> ReadItemSets(KVObject itemsGame, Dictionary<string, EconItem> itemsByName,
+            Dictionary<string, string> imagesByName, Dictionary<string, string> localization)
         {
             var setsByHero = new Dictionary<string, List<ItemSet>>(StringComparer.OrdinalIgnoreCase);
 
@@ -672,13 +687,24 @@ namespace GUI.Types.Exporter.CharacterAssets
                     continue;
                 }
 
+                var bundle = NullIfEmpty(GetValue(setData, "store_bundle"));
                 var set = new ItemSet
                 {
                     Key = key,
                     DisplayName = Localize(localization, GetValue(setData, "name"))
-                        ?? NullIfEmpty(GetValue(setData, "store_bundle"))
+                        ?? bundle
                         ?? key,
                 };
+
+                if (bundle != null && imagesByName.TryGetValue(bundle, out var bundleImage))
+                {
+                    set.Images.Add(bundleImage);
+                }
+
+                if (NullIfEmpty(GetValue(setData, "portrait_image")) is { } portrait)
+                {
+                    set.Images.Add(portrait);
+                }
 
                 foreach (var (itemName, _) in setItems)
                 {

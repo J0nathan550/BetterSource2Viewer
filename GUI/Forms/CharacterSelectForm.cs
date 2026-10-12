@@ -146,6 +146,8 @@ namespace GUI.Forms
 
             InitializeComponent();
 
+            itemSetComboBox.ItemImage = choice => GetChoiceImage(choice, itemSetComboBox.ScaledImageSize);
+
             skipUnchangedCheckBox = new CheckBox { AutoSize = true, Text = "Only models the loadout changes", Checked = true };
             includeTable.RowCount++;
             includeTable.RowStyles.Add(new RowStyle());
@@ -1055,10 +1057,12 @@ namespace GUI.Forms
                 var comboBox = new SearchableComboBox
                 {
                     Dock = DockStyle.Fill,
-                    DropDownWidth = this.AdjustForDPI(360),
+                    DropDownWidth = this.AdjustForDPI(420),
                     MaxDropDownItems = 20,
                     Tag = slot,
                 };
+
+                comboBox.ItemImage = choice => GetChoiceImage(choice, comboBox.ScaledImageSize);
 
                 var colorButton = new Button
                 {
@@ -2692,6 +2696,16 @@ namespace GUI.Forms
                 return null;
             }
         }
+
+        /// <summary>
+        /// The picture the store and inventory show an item or set with, or null when it has none in the package.
+        /// </summary>
+        private Image? GetChoiceImage(object choice, Size size) => choice switch
+        {
+            ItemChoice { Item.ImageInventory: { } image } => GetThumbnail(CharacterIcons.GetInventoryImagePath(image), size),
+            ItemSet set => set.Images.Select(CharacterIcons.GetInventoryImagePath).Where(Exists).Select(path => GetThumbnail(path, size)).FirstOrDefault(),
+            _ => null,
+        };
 
         /// <summary>
         /// Decodes an icon to show next to its choice, scaled down to the box it is shown in.

@@ -117,6 +117,12 @@ namespace GUI.Types.Exporter.CharacterAssets
         public static string GetImagePath(string folder, string icon) => $"panorama/images/{folder}/{CharacterLoadout.NormalizePath(icon)}_png.vtex_c";
 
         /// <summary>
+        /// The compiled image of an item's or set's picture in the store and inventory, named as items_game.txt does, e.g.
+        /// "econ/items/earthshaker/ti9_immortal/ti9_immortal".
+        /// </summary>
+        public static string GetInventoryImagePath(string image) => $"panorama/images/{CharacterLoadout.NormalizePath(image)}_png.vtex_c";
+
+        /// <summary>
         /// The hero's icons that at least one of its items swaps for a version of its own.
         /// </summary>
         /// <param name="exists">Whether a package path exists, versions without an image are left out.</param>
