@@ -111,6 +111,7 @@ namespace GUI.Forms
             ItemParticles = itemParticlesCheckBox.Checked,
             ItemEffects = GetItemEffects(),
             ParticleSwaps = GetParticleSwaps(),
+            VoiceLayerLines = GetVoiceLayerLines(),
             HeroParticles = heroParticlesCheckBox.Checked,
             ItemSounds = itemSoundsCheckBox.Checked,
             HeroSounds = heroSoundsCheckBox.Checked,
@@ -469,7 +470,7 @@ namespace GUI.Forms
         /// </summary>
         private bool IsLoadoutPicked()
         {
-            if (pickedEffects.Count > 0 || pickedModelEffects.Count > 0 || pickedAnimations.Count > 0 || pickedParticleSwaps.Count > 0 || pickedIcons.Count > 0 || pickedSounds.Count > 0 || pickedVoice || pickedUnusuals.Count > 0
+            if (pickedEffects.Count > 0 || pickedModelEffects.Count > 0 || pickedAnimations.Count > 0 || pickedParticleSwaps.Count > 0 || pickedVoiceLayerLines.Count > 0 || pickedIcons.Count > 0 || pickedSounds.Count > 0 || pickedVoice || pickedUnusuals.Count > 0
                 || slotRecolors.Count > 0 || effectRecolors.Count > 0)
             {
                 return true;
@@ -545,6 +546,7 @@ namespace GUI.Forms
             }
 
             SaveParticleSwaps(saved);
+            SaveVoiceLayerLines(saved);
 
             return saved;
         }
@@ -611,6 +613,7 @@ namespace GUI.Forms
             }
 
             RestoreParticleSwaps(saved);
+            RestoreVoiceLayerLines(saved);
 
             // Picking these by hand marks them picked, so the equipped items' choices do not replace them
             foreach (var (slot, comboBox, _) in iconRows)
@@ -1002,6 +1005,7 @@ namespace GUI.Forms
                 BuildItemSets(hero);
                 BuildIconRows(hero);
                 BuildSoundRows(hero);
+                BuildVoiceLayerRows(hero);
                 BuildParticleRows(hero);
                 ResetAnimationChoices(hero);
                 pickedEffects.Clear();
@@ -2662,6 +2666,8 @@ namespace GUI.Forms
             {
                 updatingSounds = false;
             }
+
+            UpdateVoiceLayerRows();
         }
 
         private void VoiceComboBox_SelectedIndexChanged(object? sender, EventArgs e)
@@ -2669,6 +2675,7 @@ namespace GUI.Forms
             if (!updatingSounds)
             {
                 pickedVoice = true;
+                UpdateVoiceLayerRows();
             }
         }
 

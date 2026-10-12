@@ -390,17 +390,24 @@ namespace GUI.Types.Exporter.CharacterAssets
         }
 
         /// <summary>
-        /// The hero's own lines, the ones no voice needs, of the rules that have a criteria, e.g. "IsGoodEchoSlam".
+        /// The lines of the rules that have a criteria, e.g. "IsGoodEchoSlam", in a voice: the hero's own when
+        /// <paramref name="criteria"/> is null, otherwise the ones of the voice an item switches it to, e.g. "eartharc_cosmos".
         /// </summary>
-        public List<string> GetHeroLines(string requirement)
+        public List<string> GetLines(string requirement, string? criteria)
         {
+            var voiceCriteria = customCriteria
+                .Where(pair => criteria != null && pair.Value.Equals(criteria, StringComparison.OrdinalIgnoreCase))
+                .Select(static pair => pair.Key)
+                .ToHashSet(StringComparer.OrdinalIgnoreCase);
+
             var anyVoiceCriteria = customCriteria
                 .Where(static pair => !pair.Value.StartsWith('!'))
                 .Select(static pair => pair.Key)
                 .ToHashSet(StringComparer.OrdinalIgnoreCase);
 
             return [.. groups
-                .Where(group => group.Requirements.Contains(requirement, StringComparer.OrdinalIgnoreCase) && !group.Requirements.Any(anyVoiceCriteria.Contains))
+                .Where(group => group.Requirements.Contains(requirement, StringComparer.OrdinalIgnoreCase)
+                    && (criteria == null ? !group.Requirements.Any(anyVoiceCriteria.Contains) : group.Requirements.Any(voiceCriteria.Contains)))
                 .SelectMany(static group => group.Lines)
                 .Distinct(StringComparer.OrdinalIgnoreCase)];
         }

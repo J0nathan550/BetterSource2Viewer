@@ -118,6 +118,9 @@ namespace GUI.Types.Exporter.CharacterAssets
         /// <summary>The versions of the hero's particles picked by hand, by the particle they are written over.</summary>
         public Dictionary<string, string> ParticleSwaps { get; set; } = [];
 
+        /// <summary>The voice lines picked for each <see cref="VoiceLayer"/>, by its sound event.</summary>
+        public Dictionary<string, List<string>> VoiceLayerLines { get; set; } = [];
+
         /// <summary>The icons picked by hand, by <see cref="GetIconKey"/>.</summary>
         public Dictionary<string, string> Icons { get; set; } = [];
 

@@ -80,6 +80,13 @@ namespace GUI.Types.Exporter.CharacterAssets
         [JsonIgnore]
         public IReadOnlyList<ParticleReplacement> ParticleSwaps { get; set; } = [];
 
+        /// <summary>
+        /// The voice lines picked for each <see cref="VoiceLayer"/>, by its sound event. A layer missing here speaks its
+        /// default lines, one with no lines is left out.
+        /// </summary>
+        [JsonIgnore]
+        public IReadOnlyDictionary<string, IReadOnlyList<string>> VoiceLayerLines { get; set; } = new Dictionary<string, IReadOnlyList<string>>();
+
         /// <summary>Every particle in the hero's particle folder, which covers its abilities.</summary>
         public bool HeroParticles { get; set; }
 
@@ -2260,11 +2267,20 @@ namespace GUI.Types.Exporter.CharacterAssets
                     continue;
                 }
 
-                // In the voice the hero speaks with, which writes its lines over the hero's own
-                var lines = rules.GetHeroLines(layer.Requirement)
-                    .Select(line => index.TryGetValue(voiceLines.GetValueOrDefault(line) ?? line, out var lineEvent) ? lineEvent.Data : null)
+                // A layer picked with no lines is left out
+                var lineNames = options.VoiceLayerLines.TryGetValue(layer.SoundEvent, out var picked)
+                    ? picked
+                    : VoiceLayers.GetDefaultLines(rules, layer, options.Voice?.Criteria, voiceLines);
+
+                var lines = lineNames
+                    .Select(line => index.TryGetValue(line, out var lineEvent) ? lineEvent.Data : null)
                     .OfType<KVObject>()
                     .ToList();
+
+                if (lines.Count == 0)
+                {
+                    continue;
+                }
 
                 var edit = GetEdit(target.File);
                 var voiceEventName = VoiceLayers.GetVoiceEventName(layer);
@@ -2278,7 +2294,7 @@ namespace GUI.Types.Exporter.CharacterAssets
                 edit.Events[layer.SoundEvent] = layered;
                 edit.Events[voiceEventName] = voiceEvent;
                 CollectEventSounds(voiceEvent, sounds, depth: 0);
-                edit.Details.Add($"{layer.SoundEvent} also speaks one of {lines.Count} {layer.Requirement} lines, where the game's rules have the hero say nothing");
+                edit.Details.Add($"{layer.SoundEvent} also speaks one of {lines.Count} voice lines, where the game's rules have the hero say nothing");
             }
 
             foreach (var edit in edits.Values)

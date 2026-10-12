@@ -1,18 +1,33 @@
 using System.Globalization;
 using System.Linq;
+using GUI.Utils;
 using ValveKeyValue;
+using ValvePak;
+using ValveResourceFormat;
+using ValveResourceFormat.IO;
 using ValveResourceFormat.Serialization.KeyValues;
 
 namespace GUI.Types.Exporter.CharacterAssets
 {
     /// <summary>
-    /// A sound the game plays where the hero's response rules have it say nothing, which gets the lines of a rule for a
-    /// similar situation layered on, so the hero speaks there too.
+    /// A situation of the hero's response rules whose lines a <see cref="VoiceLayer"/> can speak.
+    /// </summary>
+    /// <param name="Requirement">The criteria of the rules, e.g. "IsMegaEchoSlam".</param>
+    /// <param name="DisplayName">What it is, e.g. "Mega slam".</param>
+    sealed record VoiceSituation(string Requirement, string DisplayName);
+
+    /// <summary>
+    /// A sound the game plays where the hero's response rules have it say nothing, which gets lines of rules for similar
+    /// situations layered on, so the hero speaks there too.
     /// </summary>
     /// <param name="Hero">The hero's entity name.</param>
     /// <param name="SoundEvent">The sound event that gets the lines.</param>
-    /// <param name="Requirement">The criteria of the rules whose lines the hero speaks, e.g. "IsGoodEchoSlam".</param>
-    sealed record VoiceLayer(string Hero, string SoundEvent, string Requirement);
+    /// <param name="DisplayName">When the game plays it.</param>
+    /// <param name="Situations">The situations whose lines can be picked, the one spoken by default first.</param>
+    sealed record VoiceLayer(string Hero, string SoundEvent, string DisplayName, IReadOnlyList<VoiceSituation> Situations)
+    {
+        public VoiceSituation Default => Situations[0];
+    }
 
     /// <summary>
     /// The sounds that get voice lines layered on, see <see cref="VoiceLayer"/>. The voice lines are picked by the
@@ -24,11 +39,63 @@ namespace GUI.Types.Exporter.CharacterAssets
         [
             // Echo Slam's lines go by echoslam_count: none for <=0, good for >1,<=2, mega for >=3. A count of 1, e.g. two
             // heroes caught, matches no rule, and that is when the single slam sound plays
-            new("npc_dota_hero_earthshaker", "Hero_EarthShaker.EchoSlam.Single", "IsGoodEchoSlam"),
+            new("npc_dota_hero_earthshaker", "Hero_EarthShaker.EchoSlam.Single", "Echo Slam the game says nothing for, e.g. two heroes caught",
+            [
+                new("IsGoodEchoSlam", "Good slam"),
+                new("IsMegaEchoSlam", "Mega slam"),
+                new("IsFailEchoSlam", "Missed slam"),
+            ]),
         ];
 
         private const int FirstLayer = 2;
         private const int LastLayer = 9;
+
+        /// <summary>
+        /// The lines spoken when none were picked: the voice's lines of the default situation, or the hero's own ones as
+        /// the voice writes over them when it has none of its own.
+        /// </summary>
+        /// <param name="criteria">The voice's criteria, null for the hero's own voice.</param>
+        /// <param name="voiceLines">The voice line each of the hero's own lines becomes.</param>
+        public static List<string> GetDefaultLines(HeroResponseRules rules, VoiceLayer layer, string? criteria, IReadOnlyDictionary<string, string> voiceLines)
+        {
+            var lines = rules.GetLines(layer.Default.Requirement, criteria);
+
+            return lines.Count > 0
+                ? lines
+                : [.. rules.GetLines(layer.Default.Requirement, null).Select(line => voiceLines.GetValueOrDefault(line) ?? line)];
+        }
+
+        /// <summary>
+        /// The sounds each event of a sound event file plays, by event name, empty when the file cannot be read.
+        /// </summary>
+        /// <param name="file">The file as a source path, e.g. "soundevents/voscripts/game_sounds_vo_earthshaker.vsndevts".</param>
+        public static Dictionary<string, List<string>> ReadEventSounds(Package package, string file)
+        {
+            var sounds = new Dictionary<string, List<string>>(StringComparer.OrdinalIgnoreCase);
+            var path = CharacterLoadout.NormalizePath(file) + GameFileLoader.CompiledFileSuffix;
+
+            try
+            {
+                if (package.FindEntry(path) is not { } entry)
+                {
+                    return sounds;
+                }
+
+                using var resource = new Resource { FileName = path };
+                resource.Read(GameFileLoader.GetPackageEntryStream(package, entry));
+
+                foreach (var (name, definition) in resource.DataBlock?.AsKeyValueCollection().Children ?? [])
+                {
+                    sounds[name] = [.. GetValues(definition, "vsnd_files")];
+                }
+            }
+            catch (Exception e)
+            {
+                Log.Warn(nameof(VoiceLayers), $"Failed to read \"{path}\": {e.Message}");
+            }
+
+            return sounds;
+        }
 
         /// <summary>The name of the event that speaks the lines, which the sound plays as a layer.</summary>
         public static string GetVoiceEventName(VoiceLayer layer) => $"{layer.SoundEvent}.Voice";
