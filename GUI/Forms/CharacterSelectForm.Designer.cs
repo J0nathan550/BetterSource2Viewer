@@ -93,6 +93,11 @@ namespace GUI.Forms
             itemsGameCheckBox = new System.Windows.Forms.CheckBox();
             outputGroupBox = new ThemedGroupBox();
             outputTable = new System.Windows.Forms.TableLayoutPanel();
+            gameInstallLabel = new System.Windows.Forms.Label();
+            gameInstallTextBox = new ThemedTextBox();
+            gameInstallButton = new ThemedButton();
+            addonNameLabel = new System.Windows.Forms.Label();
+            addonNameTextBox = new ThemedTextBox();
             contentFolderLabel = new System.Windows.Forms.Label();
             contentFolderTextBox = new ThemedTextBox();
             contentFolderButton = new ThemedButton();
@@ -709,25 +714,75 @@ namespace GUI.Forms
             outputTable.ColumnStyles.Add(new System.Windows.Forms.ColumnStyle());
             outputTable.ColumnStyles.Add(new System.Windows.Forms.ColumnStyle(System.Windows.Forms.SizeType.Percent, 100F));
             outputTable.ColumnStyles.Add(new System.Windows.Forms.ColumnStyle());
-            outputTable.Controls.Add(contentFolderLabel, 0, 0);
-            outputTable.Controls.Add(contentFolderTextBox, 1, 0);
-            outputTable.Controls.Add(contentFolderButton, 2, 0);
-            outputTable.Controls.Add(gameFolderLabel, 0, 1);
-            outputTable.Controls.Add(gameFolderTextBox, 1, 1);
-            outputTable.Controls.Add(gameFolderButton, 2, 1);
+            outputTable.Controls.Add(gameInstallLabel, 0, 0);
+            outputTable.Controls.Add(gameInstallTextBox, 1, 0);
+            outputTable.Controls.Add(gameInstallButton, 2, 0);
+            outputTable.Controls.Add(addonNameLabel, 0, 1);
+            outputTable.Controls.Add(addonNameTextBox, 1, 1);
+            outputTable.Controls.Add(contentFolderLabel, 0, 2);
+            outputTable.Controls.Add(contentFolderTextBox, 1, 2);
+            outputTable.Controls.Add(contentFolderButton, 2, 2);
+            outputTable.Controls.Add(gameFolderLabel, 0, 3);
+            outputTable.Controls.Add(gameFolderTextBox, 1, 3);
+            outputTable.Controls.Add(gameFolderButton, 2, 3);
             outputTable.Dock = System.Windows.Forms.DockStyle.Top;
             outputTable.Name = "outputTable";
-            outputTable.RowCount = 2;
+            outputTable.RowCount = 4;
+            outputTable.RowStyles.Add(new System.Windows.Forms.RowStyle());
+            outputTable.RowStyles.Add(new System.Windows.Forms.RowStyle());
             outputTable.RowStyles.Add(new System.Windows.Forms.RowStyle());
             outputTable.RowStyles.Add(new System.Windows.Forms.RowStyle());
             outputTable.TabIndex = 0;
+            //
+            // gameInstallLabel
+            //
+            gameInstallLabel.Anchor = System.Windows.Forms.AnchorStyles.Left;
+            gameInstallLabel.AutoSize = true;
+            gameInstallLabel.Name = "gameInstallLabel";
+            gameInstallLabel.TabIndex = 0;
+            gameInstallLabel.Text = "Dota 2";
+            //
+            // gameInstallTextBox
+            //
+            gameInstallTextBox.Anchor = System.Windows.Forms.AnchorStyles.Left | System.Windows.Forms.AnchorStyles.Right;
+            gameInstallTextBox.Name = "gameInstallTextBox";
+            gameInstallTextBox.PlaceholderText = "steamapps\\common\\dota 2 beta";
+            gameInstallTextBox.TabIndex = 1;
+            gameInstallTextBox.WordWrap = false;
+            gameInstallTextBox.TextChanged += AddonTextBox_TextChanged;
+            //
+            // gameInstallButton
+            //
+            gameInstallButton.Name = "gameInstallButton";
+            gameInstallButton.Size = new System.Drawing.Size(36, 27);
+            gameInstallButton.TabIndex = 2;
+            gameInstallButton.Text = "...";
+            gameInstallButton.UseVisualStyleBackColor = false;
+            gameInstallButton.Click += GameInstallButton_Click;
+            //
+            // addonNameLabel
+            //
+            addonNameLabel.Anchor = System.Windows.Forms.AnchorStyles.Left;
+            addonNameLabel.AutoSize = true;
+            addonNameLabel.Name = "addonNameLabel";
+            addonNameLabel.TabIndex = 3;
+            addonNameLabel.Text = "Addon name";
+            //
+            // addonNameTextBox
+            //
+            addonNameTextBox.Anchor = System.Windows.Forms.AnchorStyles.Left | System.Windows.Forms.AnchorStyles.Right;
+            addonNameTextBox.Name = "addonNameTextBox";
+            addonNameTextBox.PlaceholderText = "my_mod";
+            addonNameTextBox.TabIndex = 4;
+            addonNameTextBox.WordWrap = false;
+            addonNameTextBox.TextChanged += AddonTextBox_TextChanged;
             //
             // contentFolderLabel
             //
             contentFolderLabel.Anchor = System.Windows.Forms.AnchorStyles.Left;
             contentFolderLabel.AutoSize = true;
             contentFolderLabel.Name = "contentFolderLabel";
-            contentFolderLabel.TabIndex = 0;
+            contentFolderLabel.TabIndex = 5;
             contentFolderLabel.Text = "Content";
             //
             // contentFolderTextBox
@@ -735,7 +790,7 @@ namespace GUI.Forms
             contentFolderTextBox.Anchor = System.Windows.Forms.AnchorStyles.Left | System.Windows.Forms.AnchorStyles.Right;
             contentFolderTextBox.Name = "contentFolderTextBox";
             contentFolderTextBox.PlaceholderText = "dota 2 beta\\content\\dota_addons\\<addon>";
-            contentFolderTextBox.TabIndex = 1;
+            contentFolderTextBox.TabIndex = 6;
             contentFolderTextBox.WordWrap = false;
             contentFolderTextBox.TextChanged += ContentFolderTextBox_TextChanged;
             //
@@ -743,7 +798,7 @@ namespace GUI.Forms
             //
             contentFolderButton.Name = "contentFolderButton";
             contentFolderButton.Size = new System.Drawing.Size(36, 27);
-            contentFolderButton.TabIndex = 2;
+            contentFolderButton.TabIndex = 7;
             contentFolderButton.Text = "...";
             contentFolderButton.UseVisualStyleBackColor = false;
             contentFolderButton.Click += ContentFolderButton_Click;
@@ -753,7 +808,7 @@ namespace GUI.Forms
             gameFolderLabel.Anchor = System.Windows.Forms.AnchorStyles.Left;
             gameFolderLabel.AutoSize = true;
             gameFolderLabel.Name = "gameFolderLabel";
-            gameFolderLabel.TabIndex = 3;
+            gameFolderLabel.TabIndex = 8;
             gameFolderLabel.Text = "Game";
             //
             // gameFolderTextBox
@@ -761,7 +816,7 @@ namespace GUI.Forms
             gameFolderTextBox.Anchor = System.Windows.Forms.AnchorStyles.Left | System.Windows.Forms.AnchorStyles.Right;
             gameFolderTextBox.Name = "gameFolderTextBox";
             gameFolderTextBox.PlaceholderText = "dota 2 beta\\game\\dota_addons\\<addon>";
-            gameFolderTextBox.TabIndex = 4;
+            gameFolderTextBox.TabIndex = 9;
             gameFolderTextBox.TextChanged += GameFolderTextBox_TextChanged;
             gameFolderTextBox.WordWrap = false;
             //
@@ -769,7 +824,7 @@ namespace GUI.Forms
             //
             gameFolderButton.Name = "gameFolderButton";
             gameFolderButton.Size = new System.Drawing.Size(36, 27);
-            gameFolderButton.TabIndex = 5;
+            gameFolderButton.TabIndex = 10;
             gameFolderButton.Text = "...";
             gameFolderButton.UseVisualStyleBackColor = false;
             gameFolderButton.Click += GameFolderButton_Click;
@@ -922,6 +977,11 @@ namespace GUI.Forms
         private System.Windows.Forms.CheckBox itemsGameCheckBox;
         private ThemedGroupBox outputGroupBox;
         private System.Windows.Forms.TableLayoutPanel outputTable;
+        private System.Windows.Forms.Label gameInstallLabel;
+        private ThemedTextBox gameInstallTextBox;
+        private ThemedButton gameInstallButton;
+        private System.Windows.Forms.Label addonNameLabel;
+        private ThemedTextBox addonNameTextBox;
         private System.Windows.Forms.Label contentFolderLabel;
         private ThemedTextBox contentFolderTextBox;
         private ThemedButton contentFolderButton;

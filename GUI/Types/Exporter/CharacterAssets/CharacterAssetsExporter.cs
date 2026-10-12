@@ -105,6 +105,96 @@ namespace GUI.Types.Exporter.CharacterAssets
             await RunInDialogAsync(vpkPath, package, loadout, options, contentRoot, gameRoot).ConfigureAwait(true);
         }
 
+        /// <summary>The folder under both "content" and "game" that holds the game's addons.</summary>
+        public const string AddonsFolderName = "dota_addons";
+
+        /// <summary>
+        /// Whether a name works as an addon folder name: lowercase letters, digits and underscores.
+        /// </summary>
+        public static bool IsValidAddonName(string name) => AddonNameRegex().IsMatch(name);
+
+        [GeneratedRegex("^[a-z0-9_]+$")]
+        private static partial Regex AddonNameRegex();
+
+        /// <summary>
+        /// The content and game folders of an addon named <paramref name="addonName"/> in the game's install folder,
+        /// "dota 2 beta/content/dota_addons/name" and "dota 2 beta/game/dota_addons/name".
+        /// </summary>
+        public static (string Content, string Game) GetAddonFolders(string gameInstallFolder, string addonName) => (
+            Path.Combine(gameInstallFolder, "content", AddonsFolderName, addonName),
+            Path.Combine(gameInstallFolder, "game", AddonsFolderName, addonName));
+
+        /// <summary>
+        /// Splits a content folder laid out like "dota 2 beta/content/dota_addons/name" into the install folder and the addon name.
+        /// </summary>
+        public static bool TryParseAddonFolder(string contentFolder, out string gameInstallFolder, out string addonName)
+        {
+            gameInstallFolder = string.Empty;
+            addonName = string.Empty;
+
+            if (!Path.IsPathFullyQualified(contentFolder))
+            {
+                return false;
+            }
+
+            var name = Path.TrimEndingDirectorySeparator(Path.GetFullPath(contentFolder));
+            var addons = Path.GetDirectoryName(name);
+            var content = Path.GetDirectoryName(addons);
+            var install = Path.GetDirectoryName(content);
+
+            if (install == null || addons == null || content == null
+                || !Path.GetFileName(addons).Equals(AddonsFolderName, StringComparison.OrdinalIgnoreCase)
+                || !Path.GetFileName(content).Equals("content", StringComparison.OrdinalIgnoreCase))
+            {
+                return false;
+            }
+
+            gameInstallFolder = install;
+            addonName = Path.GetFileName(name);
+            return true;
+        }
+
+        /// <summary>
+        /// The game's install folder ("dota 2 beta") that a file inside it, such as the opened VPK, belongs to.
+        /// </summary>
+        public static string? FindGameInstallFolder(string? path)
+        {
+            for (var folder = string.IsNullOrEmpty(path) ? null : Path.GetDirectoryName(Path.GetFullPath(path)); folder != null; folder = Path.GetDirectoryName(folder))
+            {
+                if (Directory.Exists(Path.Combine(folder, "game", "dota")))
+                {
+                    return folder;
+                }
+            }
+
+            return null;
+        }
+
+        /// <summary>
+        /// Creates the addon's content and game folders up front, so the game finds the addon even when the export
+        /// writes nothing compiled into its game folder.
+        /// </summary>
+        private static void CreateAddonFolders(string contentRoot, string? gameRoot, IProgress<string> progress)
+        {
+            foreach (var folder in new[] { contentRoot, gameRoot ?? GetGameFolder(contentRoot) })
+            {
+                if (folder == null || Directory.Exists(folder))
+                {
+                    continue;
+                }
+
+                try
+                {
+                    Directory.CreateDirectory(folder);
+                    progress.Report($"Created \"{folder}\"");
+                }
+                catch (Exception e) when (e is IOException or UnauthorizedAccessException)
+                {
+                    progress.Report($"Failed to create \"{folder}\": {e.Message}");
+                }
+            }
+        }
+
         /// <summary>
         /// The game folder of an addon from its content folder, which mirror each other under the game's install:
         /// "content/dota_addons/name" goes with "game/dota_addons/name".
@@ -189,6 +279,8 @@ namespace GUI.Types.Exporter.CharacterAssets
             var startTimestamp = Stopwatch.GetTimestamp();
 
             Log.Info(nameof(CharacterAssetsExporter), $"Character export of {loadout.Hero.Name} started to \"{contentRoot}\"");
+
+            CreateAddonFolders(contentRoot, gameRoot, progress);
 
             var originalOut = Console.Out;
             var originalError = Console.Error;

@@ -86,6 +86,7 @@ namespace GUI.Forms
         private bool previewLoading;
         private bool closed;
         private string? derivedGameFolder;
+        private bool updatingAddonFolders;
         private WinForms.DialogResult result = WinForms.DialogResult.Cancel;
 
         private readonly Window window;
@@ -130,6 +131,8 @@ namespace GUI.Forms
         private readonly RadioButton recommendedRadioButton;
         private readonly RadioButton customRadioButton;
         private readonly TextBlock exportHintLabel;
+        private readonly TextBox gameInstallTextBox;
+        private readonly TextBox addonNameTextBox;
         private readonly TextBox contentFolderTextBox;
         private readonly TextBox gameFolderTextBox;
         private readonly TextBlock summaryLabel;
@@ -393,6 +396,12 @@ namespace GUI.Forms
             includeGroupBox.Margin = new(3);
 
             // Addon folders
+            gameInstallTextBox = new TextBox { PlaceholderText = "steamapps/common/dota 2 beta", Margin = new(3) };
+            addonNameTextBox = new TextBox { PlaceholderText = "my_mod", Margin = new(3) };
+
+            var gameInstallButton = new Button { Content = "...", Width = 36, Margin = new(3) };
+            gameInstallButton.Click += async (_, _) => await PickGameInstallFolderAsync().ConfigureAwait(true);
+
             contentFolderTextBox = new TextBox { PlaceholderText = "dota 2 beta/content/dota_addons/<addon>", Margin = new(3) };
             gameFolderTextBox = new TextBox { PlaceholderText = "dota 2 beta/game/dota_addons/<addon>", Margin = new(3) };
 
@@ -403,12 +412,17 @@ namespace GUI.Forms
             gameFolderButton.Click += async (_, _) => await PickGameFolderAsync().ConfigureAwait(true);
 
             var outputTable = new Grid { ColumnDefinitions = new ColumnDefinitions("Auto,*,Auto") };
-            AddCell(outputTable, new TextBlock { Text = "Content", Margin = new(3, 0, 6, 0) }, 0, 0);
-            AddCell(outputTable, contentFolderTextBox, 0, 1);
-            AddCell(outputTable, contentFolderButton, 0, 2);
-            AddCell(outputTable, new TextBlock { Text = "Game", Margin = new(3, 0, 6, 0) }, 1, 0);
-            AddCell(outputTable, gameFolderTextBox, 1, 1);
-            AddCell(outputTable, gameFolderButton, 1, 2);
+            AddCell(outputTable, new TextBlock { Text = "Dota 2", Margin = new(3, 0, 6, 0) }, 0, 0);
+            AddCell(outputTable, gameInstallTextBox, 0, 1);
+            AddCell(outputTable, gameInstallButton, 0, 2);
+            AddCell(outputTable, new TextBlock { Text = "Addon name", Margin = new(3, 0, 6, 0) }, 1, 0);
+            AddCell(outputTable, addonNameTextBox, 1, 1);
+            AddCell(outputTable, new TextBlock { Text = "Content", Margin = new(3, 0, 6, 0) }, 2, 0);
+            AddCell(outputTable, contentFolderTextBox, 2, 1);
+            AddCell(outputTable, contentFolderButton, 2, 2);
+            AddCell(outputTable, new TextBlock { Text = "Game", Margin = new(3, 0, 6, 0) }, 3, 0);
+            AddCell(outputTable, gameFolderTextBox, 3, 1);
+            AddCell(outputTable, gameFolderButton, 3, 2);
 
             var outputGroupBox = Controls.GroupBox.Create("Addon folders", outputTable);
             outputGroupBox.Margin = new(3);
@@ -581,8 +595,16 @@ namespace GUI.Forms
             gameFolderTextBox.Text = Settings.Config.CharacterExportGameDir;
             contentFolderTextBox.Text = Settings.Config.CharacterExportContentDir;
             ContentFolderTextBox_TextChanged();
+
+            if (string.IsNullOrEmpty(gameInstallTextBox.Text) && CharacterAssetsExporter.FindGameInstallFolder(package.FileName) is { } gameInstall)
+            {
+                SetFolder(gameInstallTextBox, gameInstall);
+            }
+
             contentFolderTextBox.TextChanged += (_, _) => ContentFolderTextBox_TextChanged();
             gameFolderTextBox.TextChanged += (_, _) => UpdateFolderToolTips();
+            gameInstallTextBox.TextChanged += (_, _) => AddonTextBox_TextChanged();
+            addonNameTextBox.TextChanged += (_, _) => AddonTextBox_TextChanged();
             UpdateFolderToolTips();
 
             var lastHeroIndex = FindHero(hero => hero.Name.Equals(preferences.LastHero, StringComparison.OrdinalIgnoreCase));
@@ -1886,6 +1908,16 @@ namespace GUI.Forms
                 return;
             }
 
+            if (addonNameTextBox.Text?.Trim() is { Length: > 0 } addonName && !CharacterAssetsExporter.IsValidAddonName(addonName))
+            {
+                await AppMessageDialogs.ShowMessageAsync(
+                    $"\"{addonName}\" can't be an addon name. Use only lowercase letters, digits and underscores, like \"my_mod\".",
+                    "Check the addon name",
+                    MessageIcon.Warning).ConfigureAwait(true);
+                addonNameTextBox.Focus();
+                return;
+            }
+
             if (ContentFolder == null || !Path.IsPathFullyQualified(ContentFolder))
             {
                 await PickContentFolderAsync().ConfigureAwait(true);
@@ -1931,6 +1963,55 @@ namespace GUI.Forms
             }
         }
 
+        private async Task PickGameInstallFolderAsync()
+        {
+            if (await AppFileDialogs.PickFolderAsync("Choose the Dota 2 folder, e.g. steamapps/common/dota 2 beta", AppFileDialogs.RememberIn.SaveDirectory).ConfigureAwait(true) is { } folder)
+            {
+                SetFolder(gameInstallTextBox, folder);
+            }
+        }
+
+        /// <summary>
+        /// Fills in the addon's content and game folders from the Dota 2 folder and the addon name.
+        /// </summary>
+        private void AddonTextBox_TextChanged()
+        {
+            UpdateFolderToolTips();
+
+            var gameInstall = gameInstallTextBox.Text?.Trim() ?? string.Empty;
+            var addonName = addonNameTextBox.Text?.Trim() ?? string.Empty;
+
+            if (updatingAddonFolders || !Path.IsPathFullyQualified(gameInstall) || !CharacterAssetsExporter.IsValidAddonName(addonName))
+            {
+                return;
+            }
+
+            var (content, game) = CharacterAssetsExporter.GetAddonFolders(gameInstall, addonName);
+
+            updatingAddonFolders = true;
+            SetFolder(gameFolderTextBox, game);
+            SetFolder(contentFolderTextBox, content);
+            derivedGameFolder = game;
+            updatingAddonFolders = false;
+        }
+
+        /// <summary>
+        /// Shows the Dota 2 folder and addon name of a content folder chosen by hand, when it is laid out like one.
+        /// </summary>
+        private void UpdateAddonFieldsFromContentFolder()
+        {
+            if (updatingAddonFolders || ContentFolder is not { } content
+                || !CharacterAssetsExporter.TryParseAddonFolder(content, out var gameInstall, out var addonName))
+            {
+                return;
+            }
+
+            updatingAddonFolders = true;
+            SetFolder(gameInstallTextBox, gameInstall);
+            addonNameTextBox.Text = addonName;
+            updatingAddonFolders = false;
+        }
+
         private async Task PickGameFolderAsync()
         {
             if (await AppFileDialogs.PickFolderAsync("Choose the addon's game folder, e.g. game/dota_addons/<addon>", AppFileDialogs.RememberIn.SaveDirectory).ConfigureAwait(true) is { } folder)
@@ -1958,6 +2039,10 @@ namespace GUI.Forms
         /// </summary>
         private void UpdateFolderToolTips()
         {
+            ToolTip.SetTip(gameInstallTextBox, "The Dota 2 install folder, which has the \"content\" and \"game\" folders." +
+                (gameInstallTextBox.Text?.Trim() is { Length: > 0 } gameInstall ? $"\n{gameInstall}" : string.Empty));
+            ToolTip.SetTip(addonNameTextBox, "Names the addon: lowercase letters, digits and underscores.\n" +
+                "Fills in content/dota_addons/<name> and game/dota_addons/<name>, which the export creates so Dota 2 lists the addon.");
             ToolTip.SetTip(contentFolderTextBox, "The addon's content folder, which gets the models, particles and sound events as sources." +
                 (ContentFolder is { } content ? $"\n{content}" : string.Empty));
             ToolTip.SetTip(gameFolderTextBox, "The addon's game folder, which gets the compiled icons. Filled in from the content folder when it can be." +
@@ -1980,6 +2065,7 @@ namespace GUI.Forms
 
             derivedGameFolder = derived;
 
+            UpdateAddonFieldsFromContentFolder();
             UpdateFolderToolTips();
         }
 
