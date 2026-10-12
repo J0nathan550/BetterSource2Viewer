@@ -83,7 +83,7 @@ static partial class UpdateChecker
     }
 
     /// <summary>The GitHub repository that builds, releases and attests the updates.</summary>
-    public const string Repository = "J0nathan550/Source2Viewer-d2pfx";
+    public const string Repository = "J0nathan550/BetterSource2Viewer";
     public const string RepositoryId = "1379849563";
 
     // Every release carries the manifest for both channels, so the newest release always has the current one
