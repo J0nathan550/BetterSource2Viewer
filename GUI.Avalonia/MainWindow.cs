@@ -34,7 +34,7 @@ namespace GUI
     sealed class MainWindow : Window, IDisposable
     {
         private const string OpenFileFilter = "Valve Resource Format (*.*_c, *.vpk)|*.*_c;*.vpk;*.vcs|All files (*.*)|*.*";
-        private const string AppTitle = "Source 2 Viewer";
+        private static string AppTitle => Themer.AppTitle;
 
         private readonly TabControl mainTabs;
         private readonly DocumentTab consoleTab;
@@ -155,6 +155,7 @@ namespace GUI
         {
             // Placed like the WinForms logo and menu strip, which sit above the middle of the bar
             var logo = AppIcons.Create("Logo", 32);
+            Themer.AttachBetterBranding(this, logo, () => UpdateWindowTitle(SelectedTab?.ToolTipText));
             logo.Margin = new(4, 2, 4, 0);
             logo.VerticalAlignment = VerticalAlignment.Top;
             logo.Cursor = new Cursor(StandardCursorType.Hand);

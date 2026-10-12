@@ -11,7 +11,7 @@ using Svg.Skia;
 
 namespace GUI.Utils
 {
-    public static class Themer
+    public static partial class Themer
     {
         public class ThemeColors
         {
@@ -55,6 +55,9 @@ namespace GUI.Utils
             Light = 1,
             Dark = 2,
             Gray = 3,
+            BetterSystem = 4,
+            BetterLight = 5,
+            BetterDark = 6,
         }
 
         private static readonly ThemeColors DarkTheme = new()
@@ -139,6 +142,8 @@ namespace GUI.Utils
                 AppTheme.Gray => GrayTheme,
                 _ => LightTheme,
             };
+
+            InitializeBetterTheme();
 
             Application.SetColorMode(CurrentThemeColors.ColorMode);
         }
@@ -437,7 +442,7 @@ namespace GUI.Utils
             return path;
         }
 
-        public static SKBitmap SvgToSkiaBitmap(SKSvg svg, int width, int height)
+        public static SKBitmap SvgToSkiaBitmap(SKSvg svg, int width, int height, bool tintIcon = true)
         {
             if (svg.Picture == null)
             {
@@ -456,13 +461,14 @@ namespace GUI.Utils
             canvas.Scale(scale);
             canvas.DrawPicture(svg.Picture);
             canvas.Flush();
+            TintBetterIcon(skBitmap, tintIcon);
 
             return skBitmap;
         }
 
-        public static Bitmap SvgToBitmap(SKSvg svg, int width, int height)
+        public static Bitmap SvgToBitmap(SKSvg svg, int width, int height, bool tintIcon = true)
         {
-            using var skBitmap = SvgToSkiaBitmap(svg, width, height);
+            using var skBitmap = SvgToSkiaBitmap(svg, width, height, tintIcon);
             return skBitmap.ToBitmap();
         }
 

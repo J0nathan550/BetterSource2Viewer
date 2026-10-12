@@ -47,7 +47,7 @@ class GraphPalette
     }
 
     public static GraphPalette ForCurrentTheme()
-        => new(Themer.CurrentTheme == Themer.AppTheme.Dark, Themer.CurrentThemeColors);
+        => new(Themer.CurrentTheme is Themer.AppTheme.Dark or Themer.AppTheme.BetterDark, Themer.CurrentThemeColors);
 
     public GraphPalette(bool isDark, Themer.ThemeColors chrome)
     {

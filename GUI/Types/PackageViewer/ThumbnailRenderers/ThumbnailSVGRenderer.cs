@@ -58,7 +58,7 @@ internal class ThumbnailSVGRenderer : ThumbnailRenderer
             renderHeight = Math.Max(1, (int)Math.Round(originalHeight * scale));
         }
 
-        var svgBitmap = Themer.SvgToBitmap(svg, renderWidth, renderHeight);
+        var svgBitmap = Themer.SvgToBitmap(svg, renderWidth, renderHeight, tintIcon: false);
 
         if (svgBitmap == null || (renderWidth == size && renderHeight == size))
         {

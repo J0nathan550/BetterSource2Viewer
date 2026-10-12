@@ -167,7 +167,7 @@ namespace GUI.Controls
 
             // Explorer
             var themes = Enum.GetValues<Themer.AppTheme>();
-            var theme = Combo(themes.Select(static theme => theme.ToString()).ToArray(), Math.Clamp(config.Theme, 0, themes.Length - 1), i =>
+            var theme = Combo(themes.Select(Themer.GetDisplayName).ToArray(), Math.Clamp(config.Theme, 0, themes.Length - 1), i =>
             {
                 config.Theme = i;
                 Themer.ApplyTheme(themes[i]);

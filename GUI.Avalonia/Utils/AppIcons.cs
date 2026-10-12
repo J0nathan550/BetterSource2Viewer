@@ -28,7 +28,7 @@ static class AppIcons
     private const string AssetTypesPrefix = "AssetTypes.";
     private const string AliasesResource = "GUI.Icons.AssetTypes.aliases.txt";
 
-    private static readonly Dictionary<(string Name, bool Light, int Size), Bitmap?> Cache = [];
+    private static readonly Dictionary<(string Name, bool Light, bool Purple, int Size), Bitmap?> Cache = [];
     private static readonly Dictionary<string, string> ExtensionAliases = LoadAliases();
     private static readonly HashSet<string> Resources = [.. Program.Assembly.GetManifestResourceNames().Where(static r => r.StartsWith(ResourcePrefix, StringComparison.Ordinal))];
 
@@ -41,14 +41,15 @@ static class AppIcons
     public static Bitmap? Get(string name, int renderSize = DefaultRenderSize)
     {
         var light = !Themer.IsDarkModeEnabled;
+        var purple = Themer.IsBetterTheme;
 
-        if (Cache.TryGetValue((name, light, renderSize), out var bitmap))
+        if (Cache.TryGetValue((name, light, purple, renderSize), out var bitmap))
         {
             return bitmap;
         }
 
-        bitmap = Load(name, light, renderSize);
-        Cache[(name, light, renderSize)] = bitmap;
+        bitmap = Load(name, light, purple, renderSize);
+        Cache[(name, light, purple, renderSize)] = bitmap;
         return bitmap;
     }
 
@@ -144,7 +145,7 @@ static class AppIcons
         return Resources.Contains($"{ResourcePrefix}{name}.svg");
     }
 
-    private static Bitmap? Load(string name, bool light, int renderSize)
+    private static Bitmap? Load(string name, bool light, bool purple, int renderSize)
     {
         var resource = $"{ResourcePrefix}{name}_light.svg";
 
@@ -184,6 +185,11 @@ static class AppIcons
             canvas.Translate(-bounds.Left, -bounds.Top);
             canvas.DrawPicture(picture);
             canvas.Flush();
+        }
+
+        if (purple)
+        {
+            BetterIconTint.Apply(skBitmap);
         }
 
         using var image = SKImage.FromBitmap(skBitmap);

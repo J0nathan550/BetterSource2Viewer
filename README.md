@@ -1,6 +1,6 @@
-# Source2Viewer - d2pfx
+# BetterSource2Viewer
 
-Source2Viewer - d2pfx is a modded build of [Source 2 Viewer](https://github.com/ValveResourceFormat/ValveResourceFormat) (ValveResourceFormat), made for the [d2pfx](https://h6rd.github.io/Dota2PornFxWeb/) community.
+BetterSource2Viewer is a modded build of [Source 2 Viewer](https://github.com/ValveResourceFormat/ValveResourceFormat) (ValveResourceFormat), made for the [d2pfx](https://h6rd.github.io/Dota2PornFxWeb/) community.
 
 It adds a custom VMDL extraction option to the package viewer's right-click menu, built on top of [VmdlExtractor](https://github.com/fvckmindself/VmdlExtractor) by [fvckmindself](https://github.com/fvckmindself).
 

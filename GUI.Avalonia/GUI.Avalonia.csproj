@@ -58,6 +58,8 @@
     <!-- Named GUI.Icons.* like in the WinForms GUI, the node graph renderer loads its icons by those names -->
     <EmbeddedResource Include="..\GUI\Icons\**" Link="Icons\%(RecursiveDir)%(Filename)%(Extension)" />
     <AvaloniaResource Include="..\Misc\Icons\source2viewer.ico" Link="Assets\source2viewer.ico" />
+    <AvaloniaResource Include="..\Misc\Icons\better-s2v.ico" Link="Assets\better-s2v.ico" />
+    <AvaloniaResource Include="..\Misc\Icons\better-s2v-icon.png" Link="Assets\better-s2v-icon.png" />
   </ItemGroup>
 
   <!--
@@ -67,6 +69,8 @@
   -->
   <ItemGroup>
     <Compile Include="..\GUI\Utils\AssertTraceListener.cs" Link="Shared\Utils\%(Filename)%(Extension)" />
+    <Compile Include="..\GUI\Utils\BetterIconTint.cs" Link="Shared\Utils\%(Filename)%(Extension)" />
+    <Compile Include="..\GUI\Utils\BetterThemeMigration.cs" Link="Shared\Utils\%(Filename)%(Extension)" />
     <Compile Include="..\GUI\Utils\GuiLoggerAdapter.cs" Link="Shared\Utils\%(Filename)%(Extension)" />
     <Compile Include="..\GUI\Utils\HighlightLanguage.cs" Link="Shared\Utils\%(Filename)%(Extension)" />
     <Compile Include="..\GUI\Utils\HumanReadableByteSizeFormatter.cs" Link="Shared\Utils\%(Filename)%(Extension)" />

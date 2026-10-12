@@ -44,6 +44,8 @@
   <ItemGroup>
     <EmbeddedResource Include="Icons\**" />
     <EmbeddedResource Include="..\Misc\Icons\vpk.ico" Link="Utils\vpk.ico" />
+    <EmbeddedResource Include="..\Misc\Icons\better-s2v.ico" Link="Utils\better-s2v.ico" />
+    <EmbeddedResource Include="..\Misc\Icons\better-s2v-icon.png" Link="Utils\better-s2v-icon.png" />
     <EmbeddedResource Include="Utils\industrial_sunset_puresky.vtex_c" />
   </ItemGroup>
   <ItemGroup>

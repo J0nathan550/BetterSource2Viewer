@@ -105,7 +105,7 @@ namespace GUI.Forms
             label3.MaximumSize = new System.Drawing.Size(463, 0);
             label3.Name = "label3";
             label3.TabIndex = 10;
-            label3.Text = "Source2Viewer - d2pfx is a modded build of Source 2 Viewer, made for the d2pfx community.\r\nBased on Source 2 Viewer / ValveResourceFormat by its original authors.\r\nThis is open-source software under the MIT license.\r\nThis project is not affiliated with Valve Software. Source 2 is a trademark and/or registered trademark of Valve Corporation.";
+            label3.Text = "BetterSource2Viewer is a modded build of Source 2 Viewer, made for the d2pfx community.\r\nBased on Source 2 Viewer / ValveResourceFormat by its original authors.\r\nThis is open-source software under the MIT license.\r\nThis project is not affiliated with Valve Software. Source 2 is a trademark and/or registered trademark of Valve Corporation.";
             // 
             // icon
             //
@@ -278,7 +278,7 @@ namespace GUI.Forms
             groupBox1.Size = new System.Drawing.Size(493, 144);
             groupBox1.TabIndex = 19;
             groupBox1.TabStop = false;
-            groupBox1.Text = "Source2Viewer d2pfx";
+            groupBox1.Text = "BetterSource2Viewer";
             // 
             // tableLayoutPanel1
             //

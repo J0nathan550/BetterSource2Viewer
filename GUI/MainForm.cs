@@ -143,6 +143,7 @@ namespace GUI
             AppIcons.Load(this.AdjustForDPI(24));
 
             mainLogo.Image = Themer.SvgToBitmap(AppIcons.ExtensionSVGS["Logo"], mainLogo.Width, mainLogo.Height);
+            Themer.ApplyBetterBranding(this, mainLogo);
         }
 
         public void OpenCommandLineArgFiles(string[] args)
@@ -398,8 +399,8 @@ namespace GUI
         private void UpdateWindowTitle(string? toolTipText)
         {
             Text = string.IsNullOrEmpty(toolTipText)
-                ? "Source 2 Viewer"
-                : $"Source 2 Viewer - {toolTipText}";
+                ? Themer.AppTitle
+                : $"{Themer.AppTitle} - {toolTipText}";
         }
 
         /// <summary>

@@ -7,7 +7,7 @@ using Avalonia.Themes.Fluent;
 
 namespace GUI.Utils
 {
-    public static class Themer
+    public static partial class Themer
     {
         // This enum is used to store the setting of which theme the user has selected, keep consistent with the WinForms GUI.
         public enum AppTheme
@@ -16,6 +16,9 @@ namespace GUI.Utils
             Light = 1,
             Dark = 2,
             Gray = 3,
+            BetterSystem = 4,
+            BetterLight = 5,
+            BetterDark = 6,
         }
 
         /// <summary>
@@ -84,10 +87,12 @@ namespace GUI.Utils
         {
             AppTheme.Dark => DarkTheme,
             AppTheme.Gray => GrayTheme,
+            AppTheme.BetterLight => BetterLightTheme,
+            AppTheme.BetterDark => BetterDarkTheme,
             _ => LightTheme,
         };
 
-        public static bool IsDarkModeEnabled => CurrentTheme != AppTheme.Light;
+        public static bool IsDarkModeEnabled => CurrentTheme is not (AppTheme.Light or AppTheme.BetterLight);
 
         /// <summary>Height of the main window's logo and menu bar, which is also its title bar.</summary>
         public const int MainTitleBarHeight = 48;
@@ -96,6 +101,8 @@ namespace GUI.Utils
 
         public static void InitializeTheme()
         {
+            BetterThemeMigration.ApplyOnce();
+
             var theme = (AppTheme)Settings.Config.Theme;
 
             if (!Enum.IsDefined(theme))
@@ -113,7 +120,7 @@ namespace GUI.Utils
             AppTheme.Light => "Light",
             AppTheme.Dark => "Dark (Source 2 Viewer)",
             AppTheme.Gray => "Gray",
-            _ => theme.ToString(),
+            _ => GetBetterDisplayName(theme),
         };
 
         public static AppTheme SelectedTheme { get; private set; } = AppTheme.System;
@@ -134,9 +141,9 @@ namespace GUI.Utils
                 // Re-resolves the System theme when the OS switches between light and dark
                 app.ActualThemeVariantChanged += (_, _) =>
                 {
-                    if (SelectedTheme == AppTheme.System)
+                    if (SelectedTheme is AppTheme.System or AppTheme.BetterSystem)
                     {
-                        ApplyTheme(AppTheme.System);
+                        ApplyTheme(SelectedTheme);
                     }
                 };
                 FollowingSystem = true;
@@ -144,14 +151,14 @@ namespace GUI.Utils
 
             app.RequestedThemeVariant = theme switch
             {
-                AppTheme.Light => ThemeVariant.Light,
-                AppTheme.Dark or AppTheme.Gray => ThemeVariant.Dark,
+                AppTheme.Light or AppTheme.BetterLight => ThemeVariant.Light,
+                AppTheme.Dark or AppTheme.Gray or AppTheme.BetterDark => ThemeVariant.Dark,
                 _ => ThemeVariant.Default,
             };
 
             var resolved = theme == AppTheme.System
                 ? (app.ActualThemeVariant == ThemeVariant.Dark ? AppTheme.Dark : AppTheme.Light)
-                : theme;
+                : ResolveBetterTheme(theme, app.ActualThemeVariant == ThemeVariant.Dark);
 
             if (resolved == CurrentTheme && ThemeApplied)
             {
@@ -161,7 +168,7 @@ namespace GUI.Utils
             CurrentTheme = resolved;
             ThemeApplied = true;
 
-            ApplyPalette(app, CurrentThemeColors, resolved == AppTheme.Light);
+            ApplyPalette(app, CurrentThemeColors, !IsDarkModeEnabled);
 
             ThemeChanged?.Invoke(null, EventArgs.Empty);
         }

@@ -1468,7 +1468,19 @@ namespace GUI.Types.Exporter.CharacterAssets
                 : new Regex($@"(?<![\w$]){string.Join('|', renamed.OrderByDescending(static name => name.Length).Select(Regex.Escape))}(?!\w)",
                     RegexOptions.CultureInvariant);
 
-            string Rename(string text) => renamedRegex?.Replace(text, match => $"{prefix}_{match.Value}") ?? text;
+            // Cloth simulated on proxy meshes names its nodes after the mesh's place among all of the model's proxy
+            // meshes, which come after this model's own
+            var proxyOffset = ProxyNodeRegex().Matches(vmdl).Select(static match => int.Parse(match.Groups["mesh"].Value, CultureInfo.InvariantCulture) + 1).DefaultIfEmpty(0).Max();
+
+            string Rename(string text)
+            {
+                text = renamedRegex?.Replace(text, match => $"{prefix}_{match.Value}") ?? text;
+
+                return proxyOffset == 0 ? text : ProxyNodeRegex().Replace(text, match =>
+                    $"$cloth_m{int.Parse(match.Groups["mesh"].Value, CultureInfo.InvariantCulture) + proxyOffset}p");
+            }
+
+            vmdl = AddClothProxyMeshes(vmdl, otherVmdl, objects);
 
             if (SoftbodyChildrenRegex().Match(vmdl) is { Success: true } ownChildren)
             {
@@ -1508,6 +1520,47 @@ namespace GUI.Types.Exporter.CharacterAssets
 
             var node = Rename(otherVmdl[GetLineStart(otherVmdl, softbody.Start)..softbody.End]);
             return Validate(vmdl.Insert(rootChildren.Index + rootChildren.Length, $"\n{node},"));
+        }
+
+        /// <summary>
+        /// Adds the proxy meshes another model simulates cloth on to this one's, which sit apart from the soft body.
+        /// Without them the cloth nodes named after their vertices are missing.
+        /// </summary>
+        private static string AddClothProxyMeshes(string vmdl, string otherVmdl, List<(int Start, int End)> otherObjects)
+        {
+            var list = otherObjects.FirstOrDefault(range => ObjectHeaderRegex().Match(otherVmdl, range.Start) is { Success: true } header
+                && header.Groups["class"].Value == "ClothProxyMeshList");
+
+            if (list == default)
+            {
+                return vmdl;
+            }
+
+            var entries = new StringBuilder();
+            var end = 0;
+
+            foreach (var (start, objectEnd) in otherObjects.Where(range => range.Start > list.Start && range.End < list.End).OrderBy(static range => range.Start))
+            {
+                // Only the list's own children, not what they contain
+                if (start < end)
+                {
+                    continue;
+                }
+
+                end = objectEnd;
+                entries.Append('\n').Append(otherVmdl[GetLineStart(otherVmdl, start)..objectEnd]).Append(',');
+            }
+
+            if (ClothProxyMeshListChildrenRegex().Match(vmdl) is { Success: true } ownList)
+            {
+                return vmdl.Insert(ownList.Index + ownList.Length, entries.ToString());
+            }
+
+            var rootChildren = RootNodeChildrenRegex().Match(vmdl);
+
+            return rootChildren.Success
+                ? vmdl.Insert(rootChildren.Index + rootChildren.Length, $"\n{otherVmdl[GetLineStart(otherVmdl, list.Start)..list.End]},")
+                : vmdl;
         }
 
         /// <summary>
@@ -2475,6 +2528,12 @@ namespace GUI.Types.Exporter.CharacterAssets
 
         [GeneratedRegex(@"_class\s*=\s*""Softbody""\s*children\s*=\s*\[", RegexOptions.CultureInvariant)]
         private static partial Regex SoftbodyChildrenRegex();
+
+        [GeneratedRegex(@"_class\s*=\s*""ClothProxyMeshList""\s*children\s*=\s*\[", RegexOptions.CultureInvariant)]
+        private static partial Regex ClothProxyMeshListChildrenRegex();
+
+        [GeneratedRegex(@"\$cloth_m(?<mesh>[0-9]+)p", RegexOptions.CultureInvariant)]
+        private static partial Regex ProxyNodeRegex();
 
         [GeneratedRegex(@"_class\s*=\s*""ClothParams""", RegexOptions.CultureInvariant)]
         private static partial Regex ClothParamsRegex();

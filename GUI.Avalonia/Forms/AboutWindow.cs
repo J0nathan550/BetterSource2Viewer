@@ -46,7 +46,7 @@ namespace GUI.Forms
             // Credits, laid out like the WinForms AboutForm: the text, then a row of link buttons
             var credits = new TextBlock
             {
-                Text = "Source2Viewer - d2pfx is a modded build of Source 2 Viewer, made for the d2pfx community.\n" +
+                Text = "BetterSource2Viewer is a modded build of Source 2 Viewer, made for the d2pfx community.\n" +
                     "Based on Source 2 Viewer / ValveResourceFormat by its original authors.\n" +
                     "This is open-source software under the MIT license.\n" +
                     "This project is not affiliated with Valve Software. Source 2 is a trademark and/or registered trademark of Valve Corporation.",
@@ -60,7 +60,7 @@ namespace GUI.Forms
             links.Children.Add(LinkButton("_Discord", () => OpenUrl("https://discord.com/invite/PBvG8D9MxT")));
             links.Children.Add(LinkButton("_Licenses", ShowLicenses));
 
-            var creditsGroup = Controls.GroupBox.Create("Source2Viewer d2pfx", new StackPanel { Children = { credits, links } }, new Avalonia.Thickness(16, 10, 13, 13));
+            var creditsGroup = Controls.GroupBox.Create("BetterSource2Viewer", new StackPanel { Children = { credits, links } }, new Avalonia.Thickness(16, 10, 13, 13));
 
             var logo = AppIcons.Create("Logo", 148);
             logo.Margin = new(6, -4, 0, 0);

@@ -56,7 +56,7 @@ namespace GUI.Controls
             openExplorerOnStartCheckbox.Checked = Settings.Config.OpenExplorerOnStart != 0;
             textViewerFontSize.Value = Settings.Config.TextViewerFontSize;
 
-            themeComboBox.Items.AddRange(Enum.GetNames<Themer.AppTheme>());
+            themeComboBox.Items.AddRange(Array.ConvertAll(Enum.GetValues<Themer.AppTheme>(), Themer.GetDisplayName));
             themeComboBox.SelectedIndex = Math.Clamp(Settings.Config.Theme, 0, themeComboBox.Items.Count - 1);
 
             var quickPreviewFlags = (Settings.QuickPreviewFlags)Settings.Config.QuickFilePreview;

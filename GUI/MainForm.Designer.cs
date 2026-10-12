@@ -612,7 +612,7 @@ namespace GUI
             Name = "MainForm";
             SizeGripStyle = SizeGripStyle.Show;
             StartPosition = FormStartPosition.CenterScreen;
-            Text = "Source2Viewer - d2pfx";
+            Text = "BetterSource2Viewer";
             Load += MainForm_Load;
             DragDrop += MainForm_DragDrop;
             DragEnter += MainForm_DragEnter;
