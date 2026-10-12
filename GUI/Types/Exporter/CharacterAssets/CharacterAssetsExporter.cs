@@ -672,9 +672,6 @@ namespace GUI.Types.Exporter.CharacterAssets
         }
 
         /// <summary>
-        /// A compiled model's sequences in the order they are numbered by, with the activity and modifiers of each.
-        /// </summary>
-        /// <summary>
         /// The number of frames of each of a model's sequences, by name.
         /// </summary>
         private static Dictionary<string, int> GetFrameCounts(IFileLoader fileLoader, string model)
@@ -695,7 +692,10 @@ namespace GUI.Types.Exporter.CharacterAssets
             return counts;
         }
 
-        private static List<OriginalSequence> GetSequences(IFileLoader fileLoader, string model)
+        /// <summary>
+        /// A compiled model's sequences in the order they are numbered by, with the activity and modifiers of each.
+        /// </summary>
+        public static List<OriginalSequence> GetSequences(IFileLoader fileLoader, string model)
         {
             using var resource = fileLoader.LoadFileCompiled(CharacterLoadout.NormalizePath(model));
 

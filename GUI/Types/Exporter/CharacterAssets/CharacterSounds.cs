@@ -389,6 +389,22 @@ namespace GUI.Types.Exporter.CharacterAssets
             return separator > 0 ? $"{key[..separator]}_persona{key[separator..]}" : key;
         }
 
+        /// <summary>
+        /// The hero's own lines, the ones no voice needs, of the rules that have a criteria, e.g. "IsGoodEchoSlam".
+        /// </summary>
+        public List<string> GetHeroLines(string requirement)
+        {
+            var anyVoiceCriteria = customCriteria
+                .Where(static pair => !pair.Value.StartsWith('!'))
+                .Select(static pair => pair.Key)
+                .ToHashSet(StringComparer.OrdinalIgnoreCase);
+
+            return [.. groups
+                .Where(group => group.Requirements.Contains(requirement, StringComparer.OrdinalIgnoreCase) && !group.Requirements.Any(anyVoiceCriteria.Contains))
+                .SelectMany(static group => group.Lines)
+                .Distinct(StringComparer.OrdinalIgnoreCase)];
+        }
+
         private HashSet<string> GetSituation(string[] requirements)
             => requirements.Where(requirement => !customCriteria.ContainsKey(requirement)).ToHashSet(StringComparer.OrdinalIgnoreCase);
     }
@@ -643,7 +659,10 @@ namespace GUI.Types.Exporter.CharacterAssets
             return dot > 0 && dot < eventName.Length - 1 ? eventName[(dot + 1)..] : eventName;
         }
 
-        private static string GetItemName(EconItem item, int? style)
+        /// <summary>
+        /// An item's name, with the style's when the item has several and the asset modifier is for one of them.
+        /// </summary>
+        public static string GetItemName(EconItem item, int? style)
         {
             var styleName = style is { } index && item.Styles.Count > 1
                 ? item.Styles.FirstOrDefault(itemStyle => itemStyle.Index == index)?.Name

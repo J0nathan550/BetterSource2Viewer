@@ -583,17 +583,35 @@ namespace GUI.Types.Exporter.CharacterAssets
             .Value;
 
         /// <summary>
+        /// The activity modifiers applied to the hero's models: <see cref="PickedActivityModifiers"/> when set, otherwise
+        /// <see cref="WornActivityModifiers"/>.
+        /// </summary>
+        public List<ActivityModifier> ActivityModifiers => PickedActivityModifiers is { } picked ? [.. picked] : WornActivityModifiers;
+
+        /// <summary>
+        /// The activity modifiers to apply in place of the ones the worn items set, e.g. leaving out an arcana head's or
+        /// adding the attack of a totem that is not worn. Null applies <see cref="WornActivityModifiers"/>.
+        /// </summary>
+        public IReadOnlyList<ActivityModifier>? PickedActivityModifiers { get; set; }
+
+        /// <summary>
         /// The activity modifiers the items worn by the hero set on it, which make the hero play the sequences made for
         /// them, e.g. an arcana's spawn and teleport animations.
         /// </summary>
-        public List<ActivityModifier> ActivityModifiers => [.. Items
+        public List<ActivityModifier> WornActivityModifiers => [.. Items
             .Where(item => IsWornByHero(item.Item.Slot))
             .SelectMany(static item => item.Modifiers)
-            .Where(static modifier => modifier is { Type: "activity", LoadoutOnly: false, Modifier.Length: > 0 })
-            .Select(static modifier => new ActivityModifier(
-                modifier.Asset is null || modifier.Asset.Equals("ALL", StringComparison.OrdinalIgnoreCase) ? null : modifier.Asset,
-                modifier.Modifier!))
+            .Where(IsActivityModifier)
+            .Select(ToActivityModifier)
             .Distinct()];
+
+        /// <summary>Whether an item's asset modifier sets an activity modifier on the hero outside the loadout screen.</summary>
+        public static bool IsActivityModifier(AssetModifier modifier) => modifier is { Type: "activity", LoadoutOnly: false, Modifier.Length: > 0 };
+
+        /// <summary>The activity modifier an item's asset modifier sets, see <see cref="IsActivityModifier"/>.</summary>
+        public static ActivityModifier ToActivityModifier(AssetModifier modifier) => new(
+            modifier.Asset is null || modifier.Asset.Equals("ALL", StringComparison.OrdinalIgnoreCase) ? null : modifier.Asset,
+            modifier.Modifier!);
 
         /// <summary>
         /// The model an item shows. Items can swap their own model for a style, and other items can swap it for a

@@ -112,6 +112,12 @@ namespace GUI.Types.Exporter.CharacterAssets
         /// <summary>The particles models create themselves that were kept or taken out by hand, by particle.</summary>
         public Dictionary<string, bool> ModelEffects { get; set; } = [];
 
+        /// <summary>The activity modifiers ticked or unticked by hand, by name.</summary>
+        public Dictionary<string, bool> Animations { get; set; } = [];
+
+        /// <summary>The versions of the hero's particles picked by hand, by the particle they are written over.</summary>
+        public Dictionary<string, string> ParticleSwaps { get; set; } = [];
+
         /// <summary>The icons picked by hand, by <see cref="GetIconKey"/>.</summary>
         public Dictionary<string, string> Icons { get; set; } = [];
 

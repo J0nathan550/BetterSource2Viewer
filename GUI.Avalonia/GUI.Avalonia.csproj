@@ -105,6 +105,8 @@
     <Compile Include="..\GUI\Types\Exporter\CubemapCrossLayout.cs" Link="Shared\Types\Exporter\%(Filename)%(Extension)" />
     <Compile Include="..\GUI\Types\Exporter\CustomVmatExporter.cs" Link="Shared\Types\Exporter\%(Filename)%(Extension)" />
     <Compile Include="..\GUI\Types\Exporter\CustomVmdlExporter.cs" Link="Shared\Types\Exporter\%(Filename)%(Extension)" />
+    <Compile Include="..\GUI\Types\Exporter\CharacterAssets\CharacterAnimations.cs" Link="Shared\Types\Exporter\CharacterAssets\%(Filename)%(Extension)" />
+    <Compile Include="..\GUI\Types\Exporter\CharacterAssets\CharacterParticles.cs" Link="Shared\Types\Exporter\CharacterAssets\%(Filename)%(Extension)" />
     <Compile Include="..\GUI\Types\Exporter\CharacterAssets\CharacterAssetsExporter.cs" Link="Shared\Types\Exporter\CharacterAssets\%(Filename)%(Extension)" />
     <Compile Include="..\GUI\Types\Exporter\CharacterAssets\CharacterDependencyCollector.cs" Link="Shared\Types\Exporter\CharacterAssets\%(Filename)%(Extension)" />
     <Compile Include="..\GUI\Types\Exporter\CharacterAssets\CharacterExportPreferences.cs" Link="Shared\Types\Exporter\CharacterAssets\%(Filename)%(Extension)" />
@@ -115,6 +117,7 @@
     <Compile Include="..\GUI\Types\Exporter\CharacterAssets\ItemsGameEditor.cs" Link="Shared\Types\Exporter\CharacterAssets\%(Filename)%(Extension)" />
     <Compile Include="..\GUI\Types\Exporter\CharacterAssets\ModelDocEditor.cs" Link="Shared\Types\Exporter\CharacterAssets\%(Filename)%(Extension)" />
     <Compile Include="..\GUI\Types\Exporter\CharacterAssets\ParticleFixes.cs" Link="Shared\Types\Exporter\CharacterAssets\%(Filename)%(Extension)" />
+    <Compile Include="..\GUI\Types\Exporter\CharacterAssets\VoiceLayers.cs" Link="Shared\Types\Exporter\CharacterAssets\%(Filename)%(Extension)" />
     <Compile Include="..\GUI\Types\Exporter\CharacterAssets\VmatTextureRecolorer.cs" Link="Shared\Types\Exporter\CharacterAssets\%(Filename)%(Extension)" />
     <Compile Include="..\GUI\Types\Exporter\CharacterAssets\VpcfColorEditor.cs" Link="Shared\Types\Exporter\CharacterAssets\%(Filename)%(Extension)" />
     <Compile Include="..\GUI\Types\PackageViewer\IBetterBaseItem.cs" Link="Shared\Types\PackageViewer\%(Filename)%(Extension)" />

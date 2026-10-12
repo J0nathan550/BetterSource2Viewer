@@ -73,6 +73,13 @@ namespace GUI.Types.Exporter.CharacterAssets
         [JsonIgnore]
         public IReadOnlyDictionary<string, bool> ItemEffects { get; set; } = new Dictionary<string, bool>();
 
+        /// <summary>
+        /// Versions of the hero's particles picked by hand, which win over the ones the worn items swap in, e.g. a totem's
+        /// effects without the totem. A source that is the target itself keeps the game's own particle.
+        /// </summary>
+        [JsonIgnore]
+        public IReadOnlyList<ParticleReplacement> ParticleSwaps { get; set; } = [];
+
         /// <summary>Every particle in the hero's particle folder, which covers its abilities.</summary>
         public bool HeroParticles { get; set; }
 
@@ -560,6 +567,15 @@ namespace GUI.Types.Exporter.CharacterAssets
             {
                 cancellationToken.ThrowIfCancellationRequested();
                 AddItemRoots(loadout, item, options, equippedAssets, plan);
+            }
+
+            // Like the worn items' swaps, they are only exported as they are when the defaults are not written over
+            if (options.ItemParticles && !options.ReplaceDefaults)
+            {
+                foreach (var picked in options.ParticleSwaps.Where(static picked => !CharacterLoadout.IsSamePath(picked.Source, picked.Target)))
+                {
+                    Enqueue(picked.Source);
+                }
             }
 
             if (options.ReplaceDefaults)
@@ -1147,6 +1163,21 @@ namespace GUI.Types.Exporter.CharacterAssets
             var variantMerged = new Dictionary<int, List<MergedModel>>();
             var replacedParticles = new Dictionary<string, ParticleReplacement>(StringComparer.OrdinalIgnoreCase);
             var usedParticles = GetUsedParticles(loadout, equippedAssets);
+
+            // Picked by hand, they win over what the worn items swap the same particles for
+            var pickedParticles = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+
+            foreach (var picked in options.ItemParticles ? options.ParticleSwaps : [])
+            {
+                if (!pickedParticles.Add(picked.Target) || CharacterLoadout.IsSamePath(picked.Source, picked.Target))
+                {
+                    continue;
+                }
+
+                replacedParticles.Add(picked.Target, picked);
+                plan.ParticleReplacements.Add(picked);
+                Enqueue(picked.Source);
+            }
             // The hero's other variants are written over like units, their items have no model of their own either
             var unitSwaps = (options.ItemModels ? loadout.UnitModelSwaps : [])
                 .Concat(options.HeroModel ? loadout.VariantModelSwaps : [])
@@ -1276,12 +1307,17 @@ namespace GUI.Types.Exporter.CharacterAssets
                     {
                         var (skin, bodyGroups) = GetLook(model, item.Skin);
 
+                        // Pieces the game keeps apart from the hero play the versions of their own sequences for the
+                        // hero's activity modifiers, which nothing sets on them in the addon either
+                        var itemActivityModifiers = loadout.IsWornByHero(item.Item.Slot) ? loadout.ActivityModifiers : [];
+
                         // Also covers default items that another item swaps for a refit, or whose parts an arcana hides
                         if (!CharacterLoadout.IsSamePath(model, defaultModel) || skin != 0 || createdParticles.Count > 0 || bodyGroups.Count > 0)
                         {
                             plan.ModelReplacements.Add(new ModelReplacement(NormalizePath(model), NormalizePath(defaultModel), skin, createdParticles)
                             {
                                 BodyGroups = bodyGroups,
+                                ActivityModifiers = itemActivityModifiers,
                                 Rename = rename,
                             });
                         }
@@ -1299,6 +1335,7 @@ namespace GUI.Types.Exporter.CharacterAssets
                                     GetVariantParticles(createdEffects, variant))
                                 {
                                     BodyGroups = variantBodyGroups,
+                                    ActivityModifiers = itemActivityModifiers,
                                     Rename = rename,
                                 });
                             }
@@ -1351,6 +1388,11 @@ namespace GUI.Types.Exporter.CharacterAssets
                     }
 
                     var replacement = new ParticleReplacement(NormalizePath(modifier.Modifier), NormalizePath(modifier.Asset));
+
+                    if (pickedParticles.Contains(replacement.Target))
+                    {
+                        continue;
+                    }
 
                     // Items also refit the particles of other items, which only matters with those equipped
                     if (IsEconParticle(replacement.Target) && !usedParticles.Contains(replacement.Target))
@@ -2060,7 +2102,7 @@ namespace GUI.Types.Exporter.CharacterAssets
         /// <summary>
         /// Whether only this hero uses the particle, as opposed to effects every hero plays, like items' or stuns.
         /// </summary>
-        private static bool IsHeroParticle(HeroDefinition hero, string path)
+        public static bool IsHeroParticle(HeroDefinition hero, string path)
             => IsEconParticle(path)
                 || (hero.ParticleFolder != null && path.StartsWith(NormalizePath(hero.ParticleFolder).TrimEnd('/') + "/", StringComparison.OrdinalIgnoreCase))
                 || path.Contains(hero.ShortName, StringComparison.OrdinalIgnoreCase)
@@ -2135,6 +2177,17 @@ namespace GUI.Types.Exporter.CharacterAssets
             var edits = new Dictionary<string, SoundEventEdit>(StringComparer.OrdinalIgnoreCase);
             var sounds = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
 
+            SoundEventEdit GetEdit(string file)
+            {
+                if (!edits.TryGetValue(file, out var edit))
+                {
+                    edit = new SoundEventEdit(file, ReadEventNames(file));
+                    edits.Add(edit.File, edit);
+                }
+
+                return edit;
+            }
+
             SoundEventEdit? Replace(string target, string source)
             {
                 if (!index.TryGetValue(target, out var targetEvent))
@@ -2149,12 +2202,7 @@ namespace GUI.Types.Exporter.CharacterAssets
                     return null;
                 }
 
-                if (!edits.TryGetValue(targetEvent.File, out var edit))
-                {
-                    edit = new SoundEventEdit(targetEvent.File, ReadEventNames(targetEvent.File));
-                    edits.Add(edit.File, edit);
-                }
-
+                var edit = GetEdit(targetEvent.File);
                 edit.Events[target] = sourceEvent.Data;
                 CollectEventSounds(sourceEvent.Data, sounds, depth: 0);
                 AddPlayedEvents(edit, sourceEvent, sounds, depth: 0);
@@ -2167,9 +2215,12 @@ namespace GUI.Types.Exporter.CharacterAssets
                 Replace(target, source)?.Details.Add($"{target} <- {source}");
             }
 
+            var rules = HeroResponseRules.Load(package, hero);
+            IReadOnlyDictionary<string, string> voiceLines = new Dictionary<string, string>();
+
             if (options.Voice is { Criteria: { } criteria } voice)
             {
-                var mapping = HeroResponseRules.Load(package, hero)?.MapVoice(criteria, hero.ChatWheel, voice.ChatWheelSwaps, GetModelSpeechCriteria(loadout));
+                var mapping = rules?.MapVoice(criteria, hero.ChatWheel, voice.ChatWheelSwaps, GetModelSpeechCriteria(loadout));
 
                 if (mapping == null || mapping.Lines.Count == 0)
                 {
@@ -2198,7 +2249,36 @@ namespace GUI.Types.Exporter.CharacterAssets
 
                     voiceEdit?.Details.Add($"{replaced} of the hero's {mapping.HeroLines} voice lines <- the {criteria} voice, " +
                         $"{chatWheelReplaced} of the {chatWheelSounds.Count} chat wheel lines as the voice swaps them");
+                    voiceLines = mapping.Lines;
                 }
+            }
+
+            foreach (var layer in VoiceLayers.All)
+            {
+                if (layer.Hero != hero.Name || rules == null || !index.TryGetValue(layer.SoundEvent, out var target))
+                {
+                    continue;
+                }
+
+                // In the voice the hero speaks with, which writes its lines over the hero's own
+                var lines = rules.GetHeroLines(layer.Requirement)
+                    .Select(line => index.TryGetValue(voiceLines.GetValueOrDefault(line) ?? line, out var lineEvent) ? lineEvent.Data : null)
+                    .OfType<KVObject>()
+                    .ToList();
+
+                var edit = GetEdit(target.File);
+                var voiceEventName = VoiceLayers.GetVoiceEventName(layer);
+
+                if (VoiceLayers.CreateVoiceEvent(lines) is not { } voiceEvent
+                    || VoiceLayers.AddLayer(edit.Events.GetValueOrDefault(layer.SoundEvent) ?? target.Data, voiceEventName) is not { } layered)
+                {
+                    continue;
+                }
+
+                edit.Events[layer.SoundEvent] = layered;
+                edit.Events[voiceEventName] = voiceEvent;
+                CollectEventSounds(voiceEvent, sounds, depth: 0);
+                edit.Details.Add($"{layer.SoundEvent} also speaks one of {lines.Count} {layer.Requirement} lines, where the game's rules have the hero say nothing");
             }
 
             foreach (var edit in edits.Values)

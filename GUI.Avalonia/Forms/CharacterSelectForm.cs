@@ -29,7 +29,7 @@ namespace GUI.Forms
     /// Picks a hero, the cosmetic item it wears in each loadout slot and the icons it shows, with a preview of the
     /// result, for <see cref="CharacterAssetsExporter"/>. Same API as the WinForms one so the exporter is shared.
     /// </summary>
-    sealed class CharacterSelectForm : IDisposable
+    sealed partial class CharacterSelectForm : IDisposable
     {
         private const string PersonaSelectorSlot = "persona_selector";
         private const string NoUnusualEffect = "(none)";
@@ -159,6 +159,7 @@ namespace GUI.Forms
             MergeAdditionalWearables = IsChecked(mergeWearablesCheckBox),
             ItemParticles = IsChecked(itemParticlesCheckBox),
             ItemEffects = GetItemEffects(),
+            ParticleSwaps = GetParticleSwaps(),
             HeroParticles = IsChecked(heroParticlesCheckBox),
             ItemSounds = IsChecked(itemSoundsCheckBox),
             HeroSounds = IsChecked(heroSoundsCheckBox),
@@ -271,6 +272,8 @@ namespace GUI.Forms
             loadoutTabControl.Items.Add(new TabItem { Header = "Items", Content = ScrollPage(slotsTable) });
             loadoutTabControl.Items.Add(new TabItem { Header = "Icons", Content = ScrollPage(iconsTable) });
             loadoutTabControl.Items.Add(new TabItem { Header = "Sounds", Content = ScrollPage(soundsTable) });
+            loadoutTabControl.Items.Add(CreateParticlesTab());
+            loadoutTabControl.Items.Add(CreateAnimationsTab());
             loadoutTabControl.Items.Add(new TabItem { Header = "Effects", Content = effectsPanel });
 
             // Export switches
@@ -797,7 +800,7 @@ namespace GUI.Forms
         /// </summary>
         private bool IsLoadoutPicked()
         {
-            if (pickedEffects.Count > 0 || pickedModelEffects.Count > 0 || pickedIcons.Count > 0 || pickedSounds.Count > 0 || pickedVoice || pickedUnusuals.Count > 0
+            if (pickedEffects.Count > 0 || pickedModelEffects.Count > 0 || pickedAnimations.Count > 0 || pickedParticleSwaps.Count > 0 || pickedIcons.Count > 0 || pickedSounds.Count > 0 || pickedVoice || pickedUnusuals.Count > 0
                 || slotRecolors.Count > 0 || effectRecolors.Count > 0)
             {
                 return true;
@@ -833,6 +836,7 @@ namespace GUI.Forms
             var saved = new SavedLoadout
             {
                 Effects = new(pickedEffects),
+                Animations = new(pickedAnimations),
                 ModelEffects = new(pickedModelEffects),
             };
 
@@ -870,6 +874,8 @@ namespace GUI.Forms
                 saved.VoicePicked = true;
                 saved.Voice = voice.Criteria;
             }
+
+            SaveParticleSwaps(saved);
 
             return saved;
         }
@@ -930,6 +936,13 @@ namespace GUI.Forms
                 pickedModelEffects[particle] = kept;
             }
 
+            foreach (var (modifier, ticked) in saved.Animations ?? [])
+            {
+                pickedAnimations[modifier] = ticked;
+            }
+
+            RestoreParticleSwaps(saved);
+
             // Picking these by hand marks them picked, so the equipped items' choices do not replace them
             foreach (var (slot, comboBox, _) in iconRows)
             {
@@ -957,7 +970,12 @@ namespace GUI.Forms
         }
 
         public CharacterLoadout CreateLoadout()
-            => CharacterLoadout.Create(catalog, SelectedHero ?? throw new InvalidOperationException("No hero is selected"), GetEquippedItems());
+        {
+            var loadout = CharacterLoadout.Create(catalog, SelectedHero ?? throw new InvalidOperationException("No hero is selected"), GetEquippedItems());
+            loadout.PickedActivityModifiers = GetPickedActivityModifiers(loadout);
+
+            return loadout;
+        }
 
         private void ApplyOptions(CharacterExportOptions options)
         {
@@ -1238,6 +1256,8 @@ namespace GUI.Forms
                 BuildItemSets(hero);
                 BuildIconRows(hero);
                 BuildSoundRows(hero);
+                BuildParticleRows(hero);
+                ResetAnimationChoices(hero);
                 pickedEffects.Clear();
                 pickedModelEffects.Clear();
                 pickedUnusuals.Clear();
@@ -2087,7 +2107,9 @@ namespace GUI.Forms
             pedestalCheckBox.IsEnabled = loadoutHasPedestal && !IsRecommended;
             UpdateIconChoices(loadout);
             UpdateSoundChoices(loadout);
+            UpdateParticleChoices(loadout);
             BuildEffectRows(loadout);
+            BuildAnimationRows(loadout);
         }
 
         /// <summary>
@@ -2804,6 +2826,7 @@ namespace GUI.Forms
             return choice switch
             {
                 ItemChoice { Item.ImageInventory: { } image } => GetThumbnail(CharacterIcons.GetInventoryImagePath(image), width, height),
+                ParticleSwapChoice { Items: [var (item, _), ..] } when item.ImageInventory is { } image => GetThumbnail(CharacterIcons.GetInventoryImagePath(image), width, height),
                 ItemSet set => set.Images.Select(CharacterIcons.GetInventoryImagePath).Where(Exists).Select(path => GetThumbnail(path, width, height)).FirstOrDefault(),
                 _ => null,
             };

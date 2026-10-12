@@ -110,6 +110,7 @@ namespace GUI.Forms
             MergeAdditionalWearables = mergeWearablesCheckBox.Checked,
             ItemParticles = itemParticlesCheckBox.Checked,
             ItemEffects = GetItemEffects(),
+            ParticleSwaps = GetParticleSwaps(),
             HeroParticles = heroParticlesCheckBox.Checked,
             ItemSounds = itemSoundsCheckBox.Checked,
             HeroSounds = heroSoundsCheckBox.Checked,
@@ -147,6 +148,8 @@ namespace GUI.Forms
             InitializeComponent();
 
             itemSetComboBox.ItemImage = choice => GetChoiceImage(choice, itemSetComboBox.ScaledImageSize);
+            CreateParticlesTab();
+            CreateAnimationsTab();
 
             skipUnchangedCheckBox = new CheckBox { AutoSize = true, Text = "Only models the loadout changes", Checked = true };
             includeTable.RowCount++;
@@ -466,7 +469,7 @@ namespace GUI.Forms
         /// </summary>
         private bool IsLoadoutPicked()
         {
-            if (pickedEffects.Count > 0 || pickedModelEffects.Count > 0 || pickedIcons.Count > 0 || pickedSounds.Count > 0 || pickedVoice || pickedUnusuals.Count > 0
+            if (pickedEffects.Count > 0 || pickedModelEffects.Count > 0 || pickedAnimations.Count > 0 || pickedParticleSwaps.Count > 0 || pickedIcons.Count > 0 || pickedSounds.Count > 0 || pickedVoice || pickedUnusuals.Count > 0
                 || slotRecolors.Count > 0 || effectRecolors.Count > 0)
             {
                 return true;
@@ -503,6 +506,7 @@ namespace GUI.Forms
             {
                 Effects = new(pickedEffects),
                 ModelEffects = new(pickedModelEffects),
+                Animations = new(pickedAnimations),
             };
 
             foreach (var row in slotRows)
@@ -539,6 +543,8 @@ namespace GUI.Forms
                 saved.VoicePicked = true;
                 saved.Voice = voice.Criteria;
             }
+
+            SaveParticleSwaps(saved);
 
             return saved;
         }
@@ -599,6 +605,13 @@ namespace GUI.Forms
                 pickedModelEffects[particle] = kept;
             }
 
+            foreach (var (modifier, ticked) in saved.Animations ?? [])
+            {
+                pickedAnimations[modifier] = ticked;
+            }
+
+            RestoreParticleSwaps(saved);
+
             // Picking these by hand marks them picked, so the equipped items' choices do not replace them
             foreach (var (slot, comboBox, _) in iconRows)
             {
@@ -626,7 +639,12 @@ namespace GUI.Forms
         }
 
         public CharacterLoadout CreateLoadout()
-            => CharacterLoadout.Create(catalog, SelectedHero ?? throw new InvalidOperationException("No hero is selected"), GetEquippedItems());
+        {
+            var loadout = CharacterLoadout.Create(catalog, SelectedHero ?? throw new InvalidOperationException("No hero is selected"), GetEquippedItems());
+            loadout.PickedActivityModifiers = GetPickedActivityModifiers(loadout);
+
+            return loadout;
+        }
 
         private void ApplyOptions(CharacterExportOptions options)
         {
@@ -984,6 +1002,8 @@ namespace GUI.Forms
                 BuildItemSets(hero);
                 BuildIconRows(hero);
                 BuildSoundRows(hero);
+                BuildParticleRows(hero);
+                ResetAnimationChoices(hero);
                 pickedEffects.Clear();
                 pickedModelEffects.Clear();
                 pickedUnusuals.Clear();
@@ -1857,7 +1877,9 @@ namespace GUI.Forms
             pedestalCheckBox.Enabled = loadoutHasPedestal && !isRecommended;
             UpdateIconChoices(loadout);
             UpdateSoundChoices(loadout);
+            UpdateParticleChoices(loadout);
             BuildEffectRows(loadout);
+            BuildAnimationRows(loadout);
         }
 
         /// <summary>
@@ -2703,6 +2725,7 @@ namespace GUI.Forms
         private Image? GetChoiceImage(object choice, Size size) => choice switch
         {
             ItemChoice { Item.ImageInventory: { } image } => GetThumbnail(CharacterIcons.GetInventoryImagePath(image), size),
+            ParticleSwapChoice { Items: [var (item, _), ..] } when item.ImageInventory is { } image => GetThumbnail(CharacterIcons.GetInventoryImagePath(image), size),
             ItemSet set => set.Images.Select(CharacterIcons.GetInventoryImagePath).Where(Exists).Select(path => GetThumbnail(path, size)).FirstOrDefault(),
             _ => null,
         };
