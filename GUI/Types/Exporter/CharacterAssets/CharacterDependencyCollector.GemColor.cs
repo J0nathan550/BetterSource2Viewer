@@ -2,6 +2,7 @@ using System.Linq;
 using System.Threading;
 using ValveResourceFormat.IO;
 using ValveResourceFormat.ResourceTypes;
+using ValveResourceFormat.Serialization.KeyValues;
 
 namespace GUI.Types.Exporter.CharacterAssets
 {
@@ -206,6 +207,50 @@ namespace GUI.Types.Exporter.CharacterAssets
                 {
                     yield return NormalizePath(entry.GetFullPath()[..^GameFileLoader.CompiledFileSuffix.Length]);
                 }
+            }
+        }
+
+        /// <summary>
+        /// The particle the equipped items show in place of one, e.g. the arcana's eye glow for Rictus Ripper's empty head
+        /// ambient, or the particle itself.
+        /// </summary>
+        private static string GetShownParticle(CharacterLoadout loadout, string particle) => loadout.Items
+            .SelectMany(static item => item.Modifiers)
+            .Where(modifier => modifier is { Type: "particle", LoadoutOnly: false, Asset: { } asset } && CharacterLoadout.IsSamePath(asset, particle)
+                && IsParticlePath(modifier.Modifier))
+            .Select(static modifier => NormalizePath(modifier.Modifier!))
+            .FirstOrDefault() ?? particle;
+
+        /// <summary>
+        /// Whether a model has every attachment a particle follows in the configuration it plays under on a model, see
+        /// <see cref="ModelDocEditor.ResolveParticle"/>, so it shows on that model where it is meant to.
+        /// </summary>
+        private bool FitsModel(string particle, string model)
+        {
+            try
+            {
+                using var modelResource = fileLoader.LoadFileCompiled(NormalizePath(model));
+                using var particleResource = fileLoader.LoadFileCompiled(particle);
+
+                if (modelResource?.DataBlock is not Model modelData || particleResource?.DataBlock is not ParticleSystem particleSystem)
+                {
+                    return false;
+                }
+
+                var config = ModelDocEditor.ResolveParticle(fileLoader, particle).Config;
+                var attachments = (particleSystem.GetUpgradedData().GetArray("m_controlPointConfigurations") ?? [])
+                    .Where(configuration => configuration.GetStringProperty("m_name", string.Empty).Equals(config, StringComparison.OrdinalIgnoreCase))
+                    .SelectMany(static configuration => configuration.GetArray("m_drivers") ?? [])
+                    .Select(static driver => driver.GetStringProperty("m_attachmentName", string.Empty))
+                    .Where(static attachment => attachment.Length > 0)
+                    .ToList();
+
+                return attachments.Count > 0 && attachments.All(modelData.Attachments.ContainsKey);
+            }
+            catch (Exception e)
+            {
+                progress?.Report($"  ! failed to read the attachments of \"{particle}\" or \"{model}\": {e.Message}");
+                return false;
             }
         }
 

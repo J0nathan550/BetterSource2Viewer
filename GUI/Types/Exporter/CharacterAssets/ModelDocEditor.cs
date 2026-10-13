@@ -1109,7 +1109,13 @@ namespace GUI.Types.Exporter.CharacterAssets
                 var layeredName = sequence.Name[1..];
                 var source = played.GetValueOrDefault(layeredName) ?? FindNode(layeredName);
 
-                if (source == null)
+                if (source == null && aliases.ContainsKey(layeredName))
+                {
+                    // What it belongs to plays this model's blend, which has no such sequence, a hidden one holds the number
+                    source = PickSource(sequence);
+                    copies.Append('\n').Append(GetPlaceholderText(vmdl, source, sequence.Name));
+                }
+                else if (source == null)
                 {
                     // What it belongs to is numbered as another model's blend, so it is a part like any other
                     source = PickSource(sequence);
@@ -1345,9 +1351,9 @@ namespace GUI.Types.Exporter.CharacterAssets
             /// </returns>
             public (int Action, int Number, int State, int Extra, int Foreign) Compare(string originalName, string name, IReadOnlyCollection<string> modifiers)
             {
-                var wanted = Split(originalName).Except(originalModelWords).ToHashSet(StringComparer.Ordinal);
+                var wanted = Unglue(Split(originalName), originalModelWords).Except(originalModelWords).ToHashSet(StringComparer.Ordinal);
                 var modifierWords = modifiers.SelectMany(Split).ToHashSet(StringComparer.Ordinal);
-                var own = Split(name).Concat(modifierWords).Except(ownModelWords).ToHashSet(StringComparer.Ordinal);
+                var own = Unglue(Split(name), ownModelWords).Concat(modifierWords).Except(ownModelWords).ToHashSet(StringComparer.Ordinal);
 
                 static bool IsAction(string word) => !States.Contains(word) && !char.IsAsciiDigit(word[0]);
 
@@ -1375,6 +1381,21 @@ namespace GUI.Types.Exporter.CharacterAssets
                 foreach (var state in states)
                 {
                     yield return state;
+                }
+            }
+
+            /// <summary>
+            /// Takes a model word off the front of words it is written together with, e.g. "turn" for the original demon's
+            /// "demonturns", which another model calls "turns".
+            /// </summary>
+            private static IEnumerable<string> Unglue(IEnumerable<string> words, HashSet<string> modelWords)
+            {
+                foreach (var word in words)
+                {
+                    var prefix = modelWords.FirstOrDefault(modelWord => modelWord.Length >= 3 && word.Length - modelWord.Length >= 3
+                        && word.StartsWith(modelWord, StringComparison.Ordinal));
+
+                    yield return prefix == null ? word : word[prefix.Length..];
                 }
             }
 

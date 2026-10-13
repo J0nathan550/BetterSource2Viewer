@@ -180,7 +180,10 @@ namespace GUI.Types.Exporter.CharacterAssets
             // Saved loadouts may still have one, the taunt animations stay in the model as the hero's own
             items = [.. items.Where(static item => !ItemsGameCatalog.IsTauntSlot(item.Item.Slot))];
 
-            var loadout = new CharacterLoadout(hero, items, defaultModels, slots, unitModels, slotUnitModels, itemModels);
+            var loadout = new CharacterLoadout(hero, items, defaultModels, slots, unitModels, slotUnitModels, itemModels)
+            {
+                Sets = catalog.GetSets(hero),
+            };
             loadout.combinedDefaultSlots.UnionWith(combinedDefaultSlots);
 
             foreach (var (slot, models) in slotVariantModels)
@@ -615,6 +618,24 @@ namespace GUI.Types.Exporter.CharacterAssets
         /// adding the attack of a totem that is not worn. Null applies <see cref="WornActivityModifiers"/>.
         /// </summary>
         public IReadOnlyList<ActivityModifier>? PickedActivityModifiers { get; set; }
+
+        /// <summary>The item sets the hero's items belong to, see <see cref="GetSetMates"/>.</summary>
+        public IReadOnlyList<ItemSet> Sets { get; init; } = [];
+
+        /// <summary>
+        /// The other equipped items of the sets an item belongs to, or named as parts of the same set, e.g. "Rictus Ripper -
+        /// Head" for "Rictus Ripper - Demon", which is sold apart from the set.
+        /// </summary>
+        public IEnumerable<EquippedItem> GetSetMates(EquippedItem item)
+        {
+            static string? GetSetName(string name) => name.LastIndexOf(" - ", StringComparison.Ordinal) is > 0 and var dash ? name[..dash] : null;
+
+            var setName = GetSetName(item.Item.Name);
+
+            return Items.Where(other => other != item
+                && (Sets.Any(set => set.Items.Contains(item.Item) && set.Items.Contains(other.Item))
+                    || (setName != null && setName.Equals(GetSetName(other.Item.Name), StringComparison.OrdinalIgnoreCase))));
+        }
 
         /// <summary>
         /// The activity modifiers the items worn by the hero set on it, which make the hero play the sequences made for

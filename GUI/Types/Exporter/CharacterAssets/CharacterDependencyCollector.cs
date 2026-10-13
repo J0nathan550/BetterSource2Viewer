@@ -1418,7 +1418,7 @@ namespace GUI.Types.Exporter.CharacterAssets
 
                 if (options.ItemModels)
                 {
-                    AddTransformationReplacements(loadout, item, rename, createdParticles, plan);
+                    AddTransformationReplacements(loadout, options, item, rename, createdParticles, plan);
                 }
 
                 // Shared particles have an option of their own, so they can be exported without the hero's
@@ -1982,12 +1982,21 @@ namespace GUI.Types.Exporter.CharacterAssets
         /// Models of forms the hero transforms into, which items can swap like the hero's own.
         /// </summary>
         /// <param name="particles">
-        /// The particles the item creates, which go with the form it swaps in when it wears no model of its own, e.g. the
-        /// eye of Rictus Ripper's demon form.
+        /// The particles the item creates, which go with the form it swaps in when it wears no model of its own.
         /// </param>
-        private void AddTransformationReplacements(CharacterLoadout loadout, EquippedItem item, bool rename, List<string> particles, CharacterExportPlan plan)
+        private void AddTransformationReplacements(CharacterLoadout loadout, CharacterExportOptions options, EquippedItem item, bool rename,
+            List<string> particles, CharacterExportPlan plan)
         {
             var formParticles = loadout.GetItemModel(item) == null ? particles : [];
+
+            var mates = loadout.GetSetMates(item).ToHashSet();
+            var mateEffects = options.ItemParticles
+                ? loadout.CreatedEffects
+                    .Where(effect => mates.Contains(effect.Item) && effect.Modifier.RequiredModelVariant is null or 0 && IsEffectEnabled(loadout, options, effect))
+                    .Select(static effect => effect.Particle)
+                    .Distinct(StringComparer.OrdinalIgnoreCase)
+                    .ToList()
+                : [];
 
             foreach (var modifier in item.Modifiers)
             {
@@ -1999,13 +2008,19 @@ namespace GUI.Types.Exporter.CharacterAssets
                 var (skin, bodyGroups) = GetModelLook(loadout, modifier.Modifier, item.Skin, styleRemaps: !rename);
                 var activityModifiers = loadout.ActivityModifiers;
 
+                // The form also gets what the rest of its set creates on the hero where the form has the points it follows,
+                // e.g. the eye of Rictus Ripper's head on its demon, which the game hides with the head. Swapped versions are
+                // written over them, so they come along too.
+                List<string> modelParticles = [.. formParticles.Concat(mateEffects.Where(particle => FitsModel(GetShownParticle(loadout, particle), modifier.Modifier)))
+                    .Distinct(StringComparer.OrdinalIgnoreCase)];
+
                 if (CharacterLoadout.IsSamePath(modifier.Asset, modifier.Modifier) && skin == 0 && bodyGroups.Count == 0 && activityModifiers.Count == 0
-                    && formParticles.Count == 0)
+                    && modelParticles.Count == 0)
                 {
                     continue;
                 }
 
-                plan.ModelReplacements.Add(new ModelReplacement(NormalizePath(modifier.Modifier), NormalizePath(modifier.Asset), skin, [.. formParticles])
+                plan.ModelReplacements.Add(new ModelReplacement(NormalizePath(modifier.Modifier), NormalizePath(modifier.Asset), skin, modelParticles)
                 {
                     BodyGroups = bodyGroups,
                     ActivityModifiers = activityModifiers,
