@@ -1017,6 +1017,7 @@ namespace GUI.Types.Exporter.CharacterAssets
             var played = new Dictionary<string, AnimFileNode>(StringComparer.OrdinalIgnoreCase);
             var layered = new List<OriginalSequence>();
             var copied = 0;
+            string? bindPoseNode = null;
 
             foreach (var sequence in original)
             {
@@ -1024,6 +1025,36 @@ namespace GUI.Types.Exporter.CharacterAssets
                 if (IsLayered(sequence.Name))
                 {
                     layered.Add(sequence);
+                    continue;
+                }
+
+                // The server sends the bind pose's number while it changes the hero's model, e.g. back from Terrorblade's
+                // demon form, and the hero stood in it until the next activity. It plays the idle instead
+                if (IsBindPose(sequence) && plainIdle.Looping)
+                {
+                    var ownPose = FindNode(sequence.Name);
+                    // Without the idle's activity, or the client would pick it as one more idle and play the rare idle less
+                    var idleText = ClearOwnActivity(GetNodeText(vmdl, plainIdle.Start, plainIdle.End, plainIdle.Name, ownPose?.Name.Value ?? sequence.Name));
+
+                    if (ownPose != null && topLevel.Contains(ownPose))
+                    {
+                        replacements.Add((ownPose, idleText[..^1]));
+                    }
+                    else
+                    {
+                        // A bind pose node of the same name is moved out of the way, see below
+                        bindPoseNode = FindOwn(sequence.Name);
+                        copies.Append('\n').Append(idleText);
+                        copied++;
+
+                        if (bindPoseNode == null)
+                        {
+                            sequences.Add(sequence.Name);
+                        }
+                    }
+
+                    played[sequence.Name] = plainIdle;
+                    remapped.Add($"{sequence.Name} plays {plainIdle.Name.Value}");
                     continue;
                 }
 
@@ -1141,6 +1172,13 @@ namespace GUI.Types.Exporter.CharacterAssets
                 vmdl = string.Concat(vmdl.AsSpan(0, lineStart), text, vmdl.AsSpan(node.End));
             }
 
+            // The model's own bind pose keeps a name of its own, after the original's numbers
+            if (bindPoseNode != null)
+            {
+                vmdl = BindPoseNodeRegex().Replace(vmdl, match => match.Groups["name"].Value.Equals(bindPoseNode, StringComparison.OrdinalIgnoreCase)
+                    ? $"{match.Groups["prefix"].Value}{bindPoseNode}_reference\"" : match.Value);
+            }
+
             var order = original.Select(sequence => aliases.GetValueOrDefault(sequence.Name) ?? FindOwn(sequence.Name) ?? $"@{FindOwn(sequence.Name[1..])}").ToList();
             order.AddRange(sequences.Except(order, StringComparer.OrdinalIgnoreCase));
 
@@ -1253,6 +1291,13 @@ namespace GUI.Types.Exporter.CharacterAssets
 
             return Validate(string.Concat(vmdl.AsSpan(0, includeStart), children.ToString(), vmdl.AsSpan(GetLineEnd(vmdl, include.End))));
         }
+
+        /// <summary>
+        /// Whether an original sequence is the model's bind pose, which plays no animation, e.g. "bindPose" or "bind_pose".
+        /// </summary>
+        private static bool IsBindPose(OriginalSequence sequence)
+            => sequence.Activity is not { Length: > 0 } && !sequence.Delta && !sequence.Multi
+                && sequence.Name.Replace("_", string.Empty, StringComparison.Ordinal).Equals("bindpose", StringComparison.OrdinalIgnoreCase);
 
         /// <summary>
         /// A hidden copy of an animation that plays for no activity, standing in for the "@name" sequence the compiler
@@ -2776,8 +2821,22 @@ namespace GUI.Types.Exporter.CharacterAssets
             return nodeText + ",";
         }
 
+        /// <summary>
+        /// A node's text without an activity of its own, the activities of its children are kept.
+        /// </summary>
+        private static string ClearOwnActivity(string nodeText)
+        {
+            var propertyIndentation = GetIndentation(nodeText, nodeText.IndexOf('{', StringComparison.Ordinal)) + 1;
+
+            return ActivityNameRegex().Replace(nodeText, match => GetIndentation(nodeText, match.Index) == propertyIndentation
+                ? "activity_name = \"\"" : match.Value);
+        }
+
         [GeneratedRegex(@"\G\{\s*_class\s*=\s*""(?<class>[^""]*)""(?:\s*name\s*=\s*""(?<name>[^""]*)"")?", RegexOptions.CultureInvariant)]
         private static partial Regex ObjectHeaderRegex();
+
+        [GeneratedRegex(@"(?<prefix>_class\s*=\s*""AnimBindPose""\s*name\s*=\s*"")(?<name>[^""]*)""", RegexOptions.CultureInvariant)]
+        private static partial Regex BindPoseNodeRegex();
 
         [GeneratedRegex(@"_class\s*=\s*""Anim\w*Layer""", RegexOptions.CultureInvariant)]
         private static partial Regex AnimLayerRegex();
