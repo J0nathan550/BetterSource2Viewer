@@ -2489,6 +2489,15 @@ namespace GUI.Types.Exporter.CharacterAssets
 
             static string Format(float value) => value.ToString("0.0#####", CultureInfo.InvariantCulture);
 
+            // Newer formats dropped the world location flag for a transform input, and an unknown key is ignored, which
+            // leaves the value relative to the particle's first control point: offset by wherever the hero stands
+            var formatVersion = ParticleFormatRegex().Match(vpcf) is { Success: true } format
+                ? int.Parse(format.Groups["version"].ValueSpan, CultureInfo.InvariantCulture)
+                : 0;
+            var worldLocation = formatVersion >= TransformInputFormatVersion
+                ? "m_transformInput = { m_nType = \"PT_TYPE_INVALID\" }"
+                : "m_bUseWorldLocation = true";
+
             foreach (var (number, value) in controlPoints.OrderBy(static controlPoint => controlPoint.Key))
             {
                 operators.Append(CultureInfo.InvariantCulture, $$"""
@@ -2497,7 +2506,7 @@ namespace GUI.Types.Exporter.CharacterAssets
                         _class = "C_OP_SetSingleControlPointPosition"
                         m_nCP1 = {{number}}
                         m_vecCP1Pos = [ {{Format(value.X)}}, {{Format(value.Y)}}, {{Format(value.Z)}} ]
-                        m_bUseWorldLocation = true
+                        {{worldLocation}}
                     },
                     """);
             }
@@ -2951,6 +2960,12 @@ namespace GUI.Types.Exporter.CharacterAssets
 
         [GeneratedRegex(@"""(?<path>[^""]+\.vpcf)""", RegexOptions.CultureInvariant | RegexOptions.IgnoreCase)]
         private static partial Regex QuotedParticlePathRegex();
+
+        // The particle format that replaced m_bUseWorldLocation with m_transformInput
+        private const int TransformInputFormatVersion = 57;
+
+        [GeneratedRegex(@"format:vpcf(?<version>\d+)", RegexOptions.CultureInvariant)]
+        private static partial Regex ParticleFormatRegex();
 
         // Only the root's own, which the decompiler writes one tab in
         [GeneratedRegex(@"^\tm_PreEmissionOperators\s*=\s*\[", RegexOptions.CultureInvariant | RegexOptions.Multiline)]

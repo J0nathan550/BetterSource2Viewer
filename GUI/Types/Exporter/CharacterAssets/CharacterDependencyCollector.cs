@@ -1736,8 +1736,12 @@ namespace GUI.Types.Exporter.CharacterAssets
 
         private List<string> GetAnimatedBones(CharacterLoadout loadout, EquippedItem item, string model)
         {
+            // Weapons go over the default weapon even when they loop parts of their own, e.g. the chains of Wraith King's
+            // Crimson Unbroken Fealty, so they stay the hero's weapon like any other sword
+            var playsOwnCycle = item.Item.PlaysOwnCycle && !item.Item.Slot.Contains("weapon", StringComparison.OrdinalIgnoreCase);
+
             if (!item.Item.SkipModelCombine
-                || !(CharacterLoadout.IsPersonaSlot(item.Item.Slot) || item.Item.PlaysOwnCycle)
+                || !(CharacterLoadout.IsPersonaSlot(item.Item.Slot) || playsOwnCycle)
                 || !loadout.IsWornByHero(item.Item.Slot)
                 || (loadout.HeroModel ?? loadout.Hero.Model) is not { } heroModelPath)
             {
