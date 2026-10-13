@@ -313,6 +313,7 @@ namespace GUI.Types.Exporter.CharacterAssets
                 failed += ExportRawFiles(plan.RawFiles, contentRoot, fileLoader, progress, writtenFiles, cancellationToken);
                 failed += ApplyParticleRedirects(plan.ParticleRedirects, contentRoot, fileLoader, progress);
                 failed += ApplyControlPoints(plan.ParticleControlPoints, contentRoot, progress);
+                failed += ApplyGemColorTint(plan, contentRoot, progress);
                 failed += ApplyReplacements(plan, contentRoot, fileLoader, progress);
                 failed += ApplyMaterialCopies(plan, contentRoot, progress);
                 if (options.ParticleRecolorOptions.Count > 0)

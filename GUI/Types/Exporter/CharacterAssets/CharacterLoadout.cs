@@ -406,6 +406,17 @@ namespace GUI.Types.Exporter.CharacterAssets
             .DistinctBy(static effect => (effect.Item, effect.Particle));
 
         /// <summary>
+        /// The particles the equipped items only create in the loadout screen, e.g. the eye of Rictus Ripper's demon form,
+        /// which are exported only when ticked by hand, see <see cref="CharacterExportOptions.ItemEffects"/>.
+        /// </summary>
+        public IEnumerable<CreatedEffect> LoadoutOnlyEffects => Items
+            .SelectMany(static item => item.Modifiers
+                .Where(static modifier => modifier is { Type: "particle_create", LoadoutOnly: true, Modifier: { } particle }
+                    && particle.EndsWith(".vpcf", StringComparison.OrdinalIgnoreCase))
+                .Select(modifier => new CreatedEffect(item, modifier)))
+            .DistinctBy(static effect => (effect.Item, effect.Particle));
+
+        /// <summary>
         /// The control points the equipped items set on particles, by particle as a package source path and then by
         /// control point, e.g. the color an arcana style gives its effects.
         /// </summary>

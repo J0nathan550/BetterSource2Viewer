@@ -155,6 +155,117 @@ namespace GUI.Types.Exporter.CharacterAssets
             return AttributeRegex().Replace(vmat, literal);
         }
 
+        /// <summary>
+        /// Whether a particle has colors of its own that <see cref="TintParticle"/> changes, as opposed to only white,
+        /// grey and black ones, see <see cref="CharacterExportOptions.TintOtherEffects"/>.
+        /// </summary>
+        public static bool HasTintableColor(IFileLoader fileLoader, string particle)
+        {
+            using var resource = fileLoader.LoadFileCompiled(particle);
+
+            return resource?.DataBlock is ParticleSystem particleSystem && HasTintableColor(particleSystem.Data);
+        }
+
+        /// <summary>
+        /// Gives the colors a decompiled particle sets the hue of <paramref name="color"/>, e.g. the cyan of Terrorblade's
+        /// Metamorphosis, which takes no gem color, in the arcana's red. White, grey and black stay as they are, and the
+        /// paler a color the less it changes.
+        /// </summary>
+        public static string TintParticle(string vpcf, Color color) => TintableColorRegex().Replace(vpcf, match =>
+        {
+            var channels = new int[3];
+
+            for (var i = 0; i < 3; i++)
+            {
+                channels[i] = int.Parse(match.Groups[$"c{i}"].ValueSpan, CultureInfo.InvariantCulture);
+            }
+
+            var (r, g, b) = Tint(channels[0], channels[1], channels[2], color);
+            return $"{match.Groups["prefix"].Value}{r}, {g}, {b}";
+        });
+
+        private static (int R, int G, int B) Tint(int r, int g, int b, Color target)
+        {
+            var max = Math.Max(r, Math.Max(g, b));
+            var min = Math.Min(r, Math.Min(g, b));
+            var saturation = max == 0 ? 0f : (max - min) / (float)max;
+
+            // Fully tinted from moderately saturated up, untouched below barely tinted greys
+            var amount = Math.Clamp((saturation - MinTintSaturation) / 0.45f, 0f, 1f);
+
+            if (amount <= 0f)
+            {
+                return (r, g, b);
+            }
+
+            var targetMax = Math.Max(target.R, Math.Max(target.G, target.B));
+            var targetMin = Math.Min(target.R, Math.Min(target.G, target.B));
+            var targetSaturation = targetMax == 0 ? 0f : (targetMax - targetMin) / (float)targetMax;
+            var targetValue = targetMax / 255f;
+
+            var value = max / 255f * (1f - amount + (amount * targetValue));
+            return FromHsv(target.GetHue(), targetSaturation * amount, value);
+        }
+
+        private const float MinTintSaturation = 0.15f;
+
+        private static (int R, int G, int B) FromHsv(float hue, float saturation, float value)
+        {
+            var chroma = value * saturation;
+            var x = chroma * (1f - MathF.Abs((hue / 60f % 2f) - 1f));
+            var m = value - chroma;
+
+            var (r, g, b) = (int)(hue / 60f) switch
+            {
+                0 => (chroma, x, 0f),
+                1 => (x, chroma, 0f),
+                2 => (0f, chroma, x),
+                3 => (0f, x, chroma),
+                4 => (x, 0f, chroma),
+                _ => (chroma, 0f, x),
+            };
+
+            static int ToByte(float channel) => (int)MathF.Round(Math.Clamp(channel, 0f, 1f) * 255f);
+
+            return (ToByte(r + m), ToByte(g + m), ToByte(b + m));
+        }
+
+        private static bool HasTintableColor(KVObject value)
+        {
+            if (value.ValueType == KVValueType.Collection)
+            {
+                foreach (var (key, child) in value)
+                {
+                    if (TintableColorKeys.Contains(key) && child.ValueType == KVValueType.Array && IsSaturated(child))
+                    {
+                        return true;
+                    }
+                }
+            }
+
+            return value.ValueType is KVValueType.Collection or KVValueType.Array && value.Values.Any(HasTintableColor);
+        }
+
+        private static bool IsSaturated(KVObject color)
+        {
+            var channels = color.Values.Take(3)
+                .Select(static channel => float.TryParse(channel.ToString(), NumberStyles.Float, CultureInfo.InvariantCulture, out var number) ? number : 0f)
+                .ToArray();
+
+            if (channels.Length < 3)
+            {
+                return false;
+            }
+
+            var max = channels.Max();
+            return max > 0f && (max - channels.Min()) / max > MinTintSaturation;
+        }
+
+        private static readonly HashSet<string> TintableColorKeys = new(StringComparer.Ordinal)
+        {
+            "m_ConstantColor", "m_ColorMin", "m_ColorMax", "m_ColorFade", "m_Color", "m_LiteralColor",
+        };
+
         private static bool ReadsControlPoint(KVObject value)
         {
             if (value.ValueType == KVValueType.Collection)
@@ -204,6 +315,10 @@ namespace GUI.Types.Exporter.CharacterAssets
         // m_nCP1 of C_OP_SetSingleControlPointPosition, m_nCP1 to m_nCP4 of C_OP_SetControlPointPositions and the like
         [GeneratedRegex(@"^m_nCP\d$", RegexOptions.CultureInvariant)]
         private static partial Regex SetControlPointKeyRegex();
+
+        // Particles store their colors as 0 to 255 integers, an alpha after them is left alone
+        [GeneratedRegex(@"(?<prefix>\b(?:m_ConstantColor|m_ColorMin|m_ColorMax|m_ColorFade|m_Color|m_LiteralColor)\s*=\s*\[\s*)(?<c0>\d+)\s*,\s*(?<c1>\d+)\s*,\s*(?<c2>\d+)\b(?!\.)", RegexOptions.CultureInvariant)]
+        private static partial Regex TintableColorRegex();
 
         [GeneratedRegex(@"(?<=[a-z])([A-Z])", RegexOptions.CultureInvariant)]
         private static partial Regex WordStartRegex();

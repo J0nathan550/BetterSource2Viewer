@@ -108,6 +108,7 @@
     <Compile Include="..\GUI\Types\Exporter\CharacterAssets\CharacterAnimations.cs" Link="Shared\Types\Exporter\CharacterAssets\%(Filename)%(Extension)" />
     <Compile Include="..\GUI\Types\Exporter\CharacterAssets\CharacterParticles.cs" Link="Shared\Types\Exporter\CharacterAssets\%(Filename)%(Extension)" />
     <Compile Include="..\GUI\Types\Exporter\CharacterAssets\CharacterAssetsExporter.cs" Link="Shared\Types\Exporter\CharacterAssets\%(Filename)%(Extension)" />
+    <Compile Include="..\GUI\Types\Exporter\CharacterAssets\CharacterAssetsExporter.GemColor.cs" Link="Shared\Types\Exporter\CharacterAssets\%(Filename)%(Extension)" />
     <Compile Include="..\GUI\Types\Exporter\CharacterAssets\CharacterDependencyCollector.cs" Link="Shared\Types\Exporter\CharacterAssets\%(Filename)%(Extension)" />
     <Compile Include="..\GUI\Types\Exporter\CharacterAssets\CharacterDependencyCollector.GemColor.cs" Link="Shared\Types\Exporter\CharacterAssets\%(Filename)%(Extension)" />
     <Compile Include="..\GUI\Types\Exporter\CharacterAssets\CharacterGemColor.cs" Link="Shared\Types\Exporter\CharacterAssets\%(Filename)%(Extension)" />

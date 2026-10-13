@@ -179,6 +179,7 @@ namespace GUI.Forms
             ReplaceDefaults = IsChecked(replaceDefaultsCheckBox),
             ParticleRecolorOptions = new Dictionary<string, DrawingColor>(effectRecolors, StringComparer.OrdinalIgnoreCase),
             GemColor = GetGemColor(),
+            TintOtherEffects = GetTintOtherEffects(),
             ReplaceSharedParticles = IsChecked(replaceSharedParticlesCheckBox),
 
             RenameModels = IsChecked(renameModelsCheckBox),
@@ -2133,7 +2134,8 @@ namespace GUI.Forms
             effectRows.Clear();
             modelEffectRows.Clear();
 
-            var effects = loadout.CreatedEffects.Where(static effect => !effect.Item.Item.IsDefault && !effect.IsUnusual).ToList();
+            var effects = loadout.CreatedEffects.Concat(loadout.LoadoutOnlyEffects)
+                .Where(static effect => !effect.Item.Item.IsDefault && !effect.IsUnusual).ToList();
             var items = loadout.Items
                 .Where(item => !item.Item.IsDefault && (catalog.GetUnusualEffects(item.Item).Count > 0 || effects.Any(effect => effect.Item == item)))
                 .ToList();
@@ -2431,9 +2433,11 @@ namespace GUI.Forms
         private CheckBox CreateEffectCheckBox(CharacterLoadout loadout, CreatedEffect effect)
         {
             var stagedForLoadout = IsStagedForLoadout(effect.Particle);
-            var shown = loadout.IsShown(effect) && !stagedForLoadout;
+            var loadoutOnly = effect.Modifier.LoadoutOnly;
+            var shown = loadout.IsShown(effect) && !stagedForLoadout && !loadoutOnly;
             var required = effect.Modifier.RequiredArcanaLevel switch
             {
+                _ when loadoutOnly => " (loadout screen only)",
                 null => string.Empty,
                 0 => " (without an arcana)",
                 var level => $" (arcana level {level})",
@@ -2449,6 +2453,8 @@ namespace GUI.Forms
 
             ToolTip.SetTip(checkBox, shown
                 ? effect.Particle
+                : loadoutOnly
+                    ? $"{effect.Particle}\nThe game only shows it in the loadout screen. Ticked, it is exported with the model the item wears or swaps in"
                 : stagedForLoadout
                     ? $"{effect.Particle}\nIt is set up for the loadout screen at the world origin and left out by default. Ticked, it is exported to follow the model"
                     : $"{effect.Particle}\nThe game does not show it with the equipped items, it is made for another arcana level");

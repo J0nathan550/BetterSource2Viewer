@@ -8,12 +8,15 @@ namespace GUI.Types.Exporter.CharacterAssets
     sealed partial class CharacterDependencyCollector
     {
         private readonly Dictionary<string, bool> gemColorParticles = new(StringComparer.OrdinalIgnoreCase);
+        private readonly Dictionary<string, bool> tintableParticles = new(StringComparer.OrdinalIgnoreCase);
 
         /// <summary>
         /// Exports the hero's game particles that take the gem color as they are, so they get it written in, see
         /// <see cref="CharacterExportOptions.GemColor"/>: the ones of its abilities, and the parts of the exported particles
         /// and of those its models play. The game gives every particle the hero creates the arcana's color, so it is not
-        /// enough to color the ones the items swap in. Effects every hero plays are left alone.
+        /// enough to color the ones the items swap in. Effects every hero plays are left alone. With
+        /// <see cref="CharacterExportOptions.TintOtherEffects"/>, the ones that take no gem color but have colors to tint are
+        /// exported too.
         /// </summary>
         private void AddGemColorParticles(CharacterLoadout loadout, CharacterExportOptions options, HashSet<string> equippedAssets,
             CharacterExportPlan plan, CancellationToken cancellationToken)
@@ -42,7 +45,8 @@ namespace GUI.Types.Exporter.CharacterAssets
                     continue;
                 }
 
-                if (!exported.Contains(particle) && !replaced.Contains(particle) && ReadsGemColor(particle))
+                if (!exported.Contains(particle) && !replaced.Contains(particle)
+                    && (ReadsGemColor(particle) || (options.TintOtherEffects && IsTintable(particle))))
                 {
                     visited.Add(particle);
                     Visit(particle, includeSounds: false, plan);
@@ -58,15 +62,16 @@ namespace GUI.Types.Exporter.CharacterAssets
 
             if (added > 0)
             {
-                plan.Notes.Add($"{added} game particle{(added == 1 ? "" : "s")} of {hero.DisplayName} that take the gem color {(added == 1 ? "was" : "were")} written with it");
+                plan.Notes.Add($"{added} game particle{(added == 1 ? "" : "s")} of {hero.DisplayName} {(added == 1 ? "was" : "were")} written to show the gem color");
             }
         }
 
         /// <summary>
         /// Gives every exported particle that takes the gem color the picked one, see <see cref="CharacterExportOptions.GemColor"/>,
-        /// including the copies of game particles the export writes. Control points the items set win.
+        /// including the copies of game particles the export writes. Control points the items set win. With
+        /// <see cref="CharacterExportOptions.TintOtherEffects"/>, the hero's exported particles get their colors tinted too.
         /// </summary>
-        private void SetGemColorControlPoints(CharacterExportOptions options, CharacterExportPlan plan, CancellationToken cancellationToken)
+        private void SetGemColorControlPoints(CharacterLoadout loadout, CharacterExportOptions options, CharacterExportPlan plan, CancellationToken cancellationToken)
         {
             if (options.GemColor is not { } color)
             {
@@ -83,6 +88,11 @@ namespace GUI.Types.Exporter.CharacterAssets
             foreach (var (particle, output) in outputs)
             {
                 cancellationToken.ThrowIfCancellationRequested();
+
+                if (options.TintOtherEffects && IsHeroParticle(loadout.Hero, particle) && IsTintable(particle))
+                {
+                    plan.TintedParticles.Add(output);
+                }
 
                 if (!ReadsGemColor(particle))
                 {
@@ -106,6 +116,11 @@ namespace GUI.Types.Exporter.CharacterAssets
             if (colored > 0)
             {
                 plan.Notes.Add($"{colored} particle{(colored == 1 ? " was" : "s were")} given the gem color R:{color.R} G:{color.G} B:{color.B}");
+            }
+
+            if (plan.TintedParticles.Count > 0)
+            {
+                plan.Notes.Add($"{plan.TintedParticles.Count} particle{(plan.TintedParticles.Count == 1 ? " was" : "s were")} tinted with the gem color's hue");
             }
         }
 
@@ -192,6 +207,25 @@ namespace GUI.Types.Exporter.CharacterAssets
                     yield return NormalizePath(entry.GetFullPath()[..^GameFileLoader.CompiledFileSuffix.Length]);
                 }
             }
+        }
+
+        private bool IsTintable(string particle)
+        {
+            if (!tintableParticles.TryGetValue(particle, out var tintable))
+            {
+                try
+                {
+                    tintable = CharacterGemColor.HasTintableColor(fileLoader, particle);
+                }
+                catch (Exception e)
+                {
+                    progress?.Report($"  ! failed to read \"{particle}\": {e.Message}");
+                }
+
+                tintableParticles[particle] = tintable;
+            }
+
+            return tintable;
         }
 
         private bool ReadsGemColor(string particle)

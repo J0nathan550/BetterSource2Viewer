@@ -139,6 +139,9 @@ namespace GUI.Types.Exporter.CharacterAssets
         /// <summary>Whether the gem color was turned on or off by hand, null when it follows the equipped items.</summary>
         public bool? GemColorEnabled { get; set; }
 
+        /// <summary>False when the effects that take no gem color were left untinted by hand, see <see cref="CharacterExportOptions.TintOtherEffects"/>.</summary>
+        public bool? GemColorTintsOthers { get; set; }
+
         public static string GetIconKey(IconSlot slot) => $"{slot.ModifierType}:{slot.Asset}";
     }
 

@@ -12,6 +12,7 @@ namespace GUI.Forms
         // Picked by hand, null follows the equipped items: their own color, and on when they have one
         private DrawingColor? pickedGemColor;
         private bool? pickedGemColorEnabled;
+        private bool tintOtherEffects = true;
 
         private GemColorChoice? itemGemColor;
         private bool updatingGemColor;
@@ -20,13 +21,17 @@ namespace GUI.Forms
         private readonly Button gemColorButton = new() { Width = 64, Height = 24, Margin = new(0, 0, 6, 0) };
         private readonly ComboBox gemColorComboBox = new() { Width = 240, Margin = new(0, 0, 6, 0) };
         private readonly TextBlock gemColorValueLabel = new() { VerticalAlignment = VerticalAlignment.Center };
+        private readonly CheckBox gemTintCheckBox = new() { Content = "Also tint the hero's effects that take no gem color, e.g. Metamorphosis", IsChecked = true, Margin = new(12, 6, 3, 3) };
 
         /// <summary>The color the effects get, see <see cref="CharacterExportOptions.GemColor"/>, or null to leave them as they are.</summary>
         private DrawingColor? GetGemColor() => (pickedGemColorEnabled ?? itemGemColor != null) ? CurrentGemColor : null;
 
         private DrawingColor CurrentGemColor => pickedGemColor ?? itemGemColor?.Color ?? (catalog.GemColors.Count > 0 ? catalog.GemColors[0].Choice.Color : DrawingColor.Red);
 
-        private bool IsGemColorPicked => pickedGemColor != null || pickedGemColorEnabled != null;
+        private bool IsGemColorPicked => pickedGemColor != null || pickedGemColorEnabled != null || !tintOtherEffects;
+
+        /// <summary>See <see cref="CharacterExportOptions.TintOtherEffects"/>.</summary>
+        private bool GetTintOtherEffects() => tintOtherEffects && GetGemColor() != null;
 
         private TabItem CreateGemColorTab()
         {
@@ -61,6 +66,16 @@ namespace GUI.Forms
             };
             ToolTip.SetTip(gemColorComboBox, "The colors prismatic gems come in");
 
+            gemTintCheckBox.IsCheckedChanged += (_, _) =>
+            {
+                if (!updatingGemColor)
+                {
+                    tintOtherEffects = gemTintCheckBox.IsChecked == true;
+                }
+            };
+            ToolTip.SetTip(gemTintCheckBox, "Gives their colors the picked color's hue, white, grey and black stay as they are. " +
+                "The game shows them in their own colors even with the arcana.");
+
             var panel = new StackPanel();
             panel.Children.Add(new TextBlock
             {
@@ -77,6 +92,7 @@ namespace GUI.Forms
                 Margin = new(12, 0, 3, 3),
                 Children = { gemColorButton, gemColorComboBox, gemColorValueLabel },
             });
+            panel.Children.Add(gemTintCheckBox);
 
             return new TabItem { Header = "Prismatic color", Content = ScrollPage(panel) };
         }
@@ -88,6 +104,7 @@ namespace GUI.Forms
         {
             pickedGemColor = null;
             pickedGemColorEnabled = null;
+            tintOtherEffects = true;
         }
 
         /// <summary>
@@ -166,6 +183,8 @@ namespace GUI.Forms
                 gemColorButton.Background = new SolidColorBrush(Color.FromRgb(color.R, color.G, color.B));
                 gemColorButton.IsEnabled = enabled;
                 gemColorComboBox.IsEnabled = enabled;
+                gemTintCheckBox.IsEnabled = enabled;
+                gemTintCheckBox.IsChecked = tintOtherEffects;
                 gemColorComboBox.SelectedItem = gemColorComboBox.Items.OfType<ComboBoxItem>()
                     .FirstOrDefault(item => item.Tag is GemColorChoice choice && choice.Color.ToArgb() == color.ToArgb());
                 gemColorValueLabel.Text = $"R:{color.R} G:{color.G} B:{color.B}  #{color.R:X2}{color.G:X2}{color.B:X2}";
@@ -180,12 +199,14 @@ namespace GUI.Forms
         {
             saved.GemColor = pickedGemColor?.ToArgb();
             saved.GemColorEnabled = pickedGemColorEnabled;
+            saved.GemColorTintsOthers = tintOtherEffects ? null : false;
         }
 
         private void RestoreGemColor(SavedLoadout saved)
         {
             pickedGemColor = saved.GemColor is { } argb ? DrawingColor.FromArgb(argb) : null;
             pickedGemColorEnabled = saved.GemColorEnabled;
+            tintOtherEffects = saved.GemColorTintsOthers ?? true;
         }
     }
 }

@@ -243,6 +243,14 @@ namespace GUI.Types.Exporter.CharacterAssets
         public Color? GemColor { get; set; }
 
         /// <summary>
+        /// With <see cref="GemColor"/>, also gives the hero's effects that take no gem color its hue, see
+        /// <see cref="CharacterGemColor.TintParticle"/>, e.g. the cyan glow of Terrorblade's Metamorphosis, which the game
+        /// shows as it is even with the arcana.
+        /// </summary>
+        [JsonIgnore]
+        public bool TintOtherEffects { get; set; }
+
+        /// <summary>
         /// The options that make an addon of only what the loadout changes about the hero: its look written over the
         /// default assets, the effects the game shows with the items, the sounds and icons picked, and nothing the game
         /// already has as it is, materials included.
@@ -476,6 +484,12 @@ namespace GUI.Types.Exporter.CharacterAssets
         /// <summary>The color written into <see cref="GemColorMaterials"/>, see <see cref="CharacterExportOptions.GemColor"/>.</summary>
         public Color? GemColor { get; set; }
 
+        /// <summary>
+        /// The exported particles, by source path, whose colors get the hue of <see cref="GemColor"/>, see
+        /// <see cref="CharacterExportOptions.TintOtherEffects"/>.
+        /// </summary>
+        public HashSet<string> TintedParticles { get; } = new(StringComparer.OrdinalIgnoreCase);
+
         /// <summary>The materials that read the gem color, by package source path, which get <see cref="GemColor"/> written in.</summary>
         public HashSet<string> GemColorMaterials { get; } = new(StringComparer.OrdinalIgnoreCase);
 
@@ -698,7 +712,7 @@ namespace GUI.Types.Exporter.CharacterAssets
                 }
             }
 
-            SetGemColorControlPoints(options, plan, cancellationToken);
+            SetGemColorControlPoints(loadout, options, plan, cancellationToken);
 
             if (options.Materials || options.RecolorOptions.Count > 0)
             {
@@ -1084,9 +1098,14 @@ namespace GUI.Types.Exporter.CharacterAssets
         {
             foreach (var modifier in item.Modifiers)
             {
-                // Only shown in the loadout screen, which a custom game does not have
+                // Only shown in the loadout screen, which a custom game does not have, unless ticked to show anyway
                 if (modifier.LoadoutOnly && !options.Pedestal)
                 {
+                    if (modifier.Type == "particle_create" && options.ItemParticles && IsPickedLoadoutEffect(options, modifier.Modifier))
+                    {
+                        Enqueue(modifier.Modifier!);
+                    }
+
                     continue;
                 }
 
@@ -1250,6 +1269,7 @@ namespace GUI.Types.Exporter.CharacterAssets
                 List<VariantParticle> createdEffects = options.ItemParticles && !isDefault
                     ? [.. loadout.CreatedEffects
                         .Where(effect => effect.Item == item && IsEffectEnabled(loadout, options, effect))
+                        .Concat(loadout.LoadoutOnlyEffects.Where(effect => effect.Item == item && IsPickedLoadoutEffect(options, effect.Particle)))
                         .Select(static effect => new VariantParticle(effect.Particle, effect.Modifier.RequiredModelVariant))]
                     : [];
                 var createdParticles = GetVariantParticles(createdEffects, 0);
@@ -1398,7 +1418,7 @@ namespace GUI.Types.Exporter.CharacterAssets
 
                 if (options.ItemModels)
                 {
-                    AddTransformationReplacements(loadout, item, rename, plan);
+                    AddTransformationReplacements(loadout, item, rename, createdParticles, plan);
                 }
 
                 // Shared particles have an option of their own, so they can be exported without the hero's
@@ -1961,8 +1981,14 @@ namespace GUI.Types.Exporter.CharacterAssets
         /// <summary>
         /// Models of forms the hero transforms into, which items can swap like the hero's own.
         /// </summary>
-        private void AddTransformationReplacements(CharacterLoadout loadout, EquippedItem item, bool rename, CharacterExportPlan plan)
+        /// <param name="particles">
+        /// The particles the item creates, which go with the form it swaps in when it wears no model of its own, e.g. the
+        /// eye of Rictus Ripper's demon form.
+        /// </param>
+        private void AddTransformationReplacements(CharacterLoadout loadout, EquippedItem item, bool rename, List<string> particles, CharacterExportPlan plan)
         {
+            var formParticles = loadout.GetItemModel(item) == null ? particles : [];
+
             foreach (var modifier in item.Modifiers)
             {
                 if (modifier.Type != "hero_model_change" || !IsAssetPath(modifier.Asset) || !IsAssetPath(modifier.Modifier))
@@ -1973,12 +1999,13 @@ namespace GUI.Types.Exporter.CharacterAssets
                 var (skin, bodyGroups) = GetModelLook(loadout, modifier.Modifier, item.Skin, styleRemaps: !rename);
                 var activityModifiers = loadout.ActivityModifiers;
 
-                if (CharacterLoadout.IsSamePath(modifier.Asset, modifier.Modifier) && skin == 0 && bodyGroups.Count == 0 && activityModifiers.Count == 0)
+                if (CharacterLoadout.IsSamePath(modifier.Asset, modifier.Modifier) && skin == 0 && bodyGroups.Count == 0 && activityModifiers.Count == 0
+                    && formParticles.Count == 0)
                 {
                     continue;
                 }
 
-                plan.ModelReplacements.Add(new ModelReplacement(NormalizePath(modifier.Modifier), NormalizePath(modifier.Asset), skin, [])
+                plan.ModelReplacements.Add(new ModelReplacement(NormalizePath(modifier.Modifier), NormalizePath(modifier.Asset), skin, [.. formParticles])
                 {
                     BodyGroups = bodyGroups,
                     ActivityModifiers = activityModifiers,
@@ -2158,6 +2185,13 @@ namespace GUI.Types.Exporter.CharacterAssets
         /// Whether an effect is exported: as ticked, else when the game shows it with the equipped items, leaving out the
         /// ones staged for the loadout screen, see <see cref="ModelDocEditor.IsStagedForLoadout"/>.
         /// </summary>
+        /// <summary>
+        /// Whether a particle the items only create in the loadout screen was ticked to be exported, see
+        /// <see cref="CharacterLoadout.LoadoutOnlyEffects"/>.
+        /// </summary>
+        private static bool IsPickedLoadoutEffect(CharacterExportOptions options, string? particle)
+            => IsParticlePath(particle) && options.ItemEffects.GetValueOrDefault(NormalizePath(particle));
+
         private bool IsEffectEnabled(CharacterLoadout loadout, CharacterExportOptions options, CreatedEffect effect)
         {
             if (options.ItemEffects.TryGetValue(effect.Particle, out var enabled))
