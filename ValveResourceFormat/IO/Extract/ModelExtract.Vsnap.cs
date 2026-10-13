@@ -46,14 +46,44 @@ partial class ModelExtract
 
             snapshot.AttributeData.TryGetValue(("position", "float3"), out var positionData);
             snapshot.AttributeData.TryGetValue(("skinning", "skinning"), out var skinningData);
+            snapshot.AttributeData.TryGetValue(("normal", "float3"), out var normalData);
+            snapshot.AttributeData.TryGetValue(("radius", "float"), out var radiusData);
+            snapshot.AttributeData.TryGetValue(("scratch_float", "float"), out var scratchFloatData);
+            snapshot.AttributeData.TryGetValue(("scratch_vec", "float3"), out var scratchVecData);
 
             var positions = positionData as Vector3[];
             var skinning = skinningData as ParticleSnapshot.SkinningData[];
+            var normals = normalData as Vector3[];
+            var radii = radiusData as float[];
+            var scratchFloats = scratchFloatData as float[];
+            var scratchVecs = scratchVecData as Vector3[];
             var particles = KVObject.Array();
 
             for (var i = 0; i < snapshot.NumParticles; i++)
             {
                 var particle = MakeNode("VSNAPParticle", ("origin", ToKVArray(positions?[i] ?? Vector3.Zero)));
+
+                // The compiler writes the forward vector of these angles as the particle normal,
+                // otherwise every normal defaults to +X and normal-oriented effects point the wrong way.
+                if (normals is not null && normals[i] != Vector3.Zero)
+                {
+                    particle.Add("angles", ToKVArray(EntityTransformHelper.ForwardDirectionToEulerAngles(normals[i])));
+                }
+
+                if (radii is not null)
+                {
+                    particle.Add("radius", radii[i]);
+                }
+
+                if (scratchFloats is not null)
+                {
+                    particle.Add("scratch_float", scratchFloats[i]);
+                }
+
+                if (scratchVecs is not null)
+                {
+                    particle.Add("scratch_vec", ToKVArray(scratchVecs[i]));
+                }
 
                 if (skinning is not null)
                 {
