@@ -566,6 +566,19 @@ namespace GUI.Types.Exporter.CharacterAssets
                         }
                     }
 
+                    if (replacement.Scale != 1f)
+                    {
+                        try
+                        {
+                            vmdl = ModelDocEditor.SetScale(vmdl, replacement.Scale);
+                            details.Add(string.Create(CultureInfo.InvariantCulture, $"scaled by {replacement.Scale:0.###}"));
+                        }
+                        catch (Exception e)
+                        {
+                            progress.Report($"  ! {replacement.Target}: the model was not scaled: {e.Message}");
+                        }
+                    }
+
                     var targetPath = GetOutputPath(outputRoot, Path.ChangeExtension(replacement.Target, "vmdl"));
                     Directory.CreateDirectory(Path.GetDirectoryName(targetPath)!);
                     File.WriteAllText(targetPath, vmdl);

@@ -560,6 +560,17 @@ namespace GUI.Types.Exporter.CharacterAssets
         public string? HeroModel => HeroModelItem is { } item ? GetHeroModelSwap(item) : Hero.Model;
 
         /// <summary>
+        /// How much bigger the worn items make the hero in matches than its own scale, e.g. a persona's model made at
+        /// another size. The game only applies it with the items equipped, so it has to be in the models written over the
+        /// hero's. 1 when no item changes it.
+        /// </summary>
+        public float HeroScale => Items
+            .Where(item => !IsAppliedByGame(item))
+            .SelectMany(static item => item.Modifiers)
+            .LastOrDefault(modifier => modifier is { Type: "hero_scale", LoadoutOnly: false, ModelScale: > 0 } && (modifier.Asset == null || IsHeroEntity(modifier.Asset)))?
+            .ModelScale / Hero.ModelScale ?? 1f;
+
+        /// <summary>
         /// The material group of the hero's model. The item that swaps the hero's model picks it with its "model_skin"
         /// modifier, or else its style's skin applies to that model, and to the hero's own model when the item has no
         /// model of its own. Items can also pick the hero's skin while wearing a model of their own, e.g. an arcana hair

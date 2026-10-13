@@ -1,5 +1,6 @@
 using System.Diagnostics.CodeAnalysis;
 using System.Drawing;
+using System.Globalization;
 using System.IO;
 using System.Linq;
 using System.Text.Json.Serialization;
@@ -393,6 +394,9 @@ namespace GUI.Types.Exporter.CharacterAssets
         /// made for either, null for models other than the hero's.
         /// </summary>
         public bool? RangedAttack { get; init; }
+
+        /// <summary>How much to scale the model, see <see cref="CharacterLoadout.HeroScale"/>.</summary>
+        public float Scale { get; init; } = 1f;
     }
 
     /// <summary>
@@ -1530,8 +1534,16 @@ namespace GUI.Types.Exporter.CharacterAssets
 
             var dayHeroParticles = GetVariantParticles(heroParticles, 0);
 
+            // Items written over the hero's are bone merged onto it, so they have to grow along with it
+            var heroScale = options.ItemModels ? loadout.HeroScale : 1f;
+
+            if (!options.ItemModels && loadout.HeroScale != 1f)
+            {
+                plan.Notes.Add(string.Create(CultureInfo.InvariantCulture, $"the items make the hero {loadout.HeroScale:0.##} times bigger, which needs the item models to be exported too, it was left out"));
+            }
+
             if (!CharacterLoadout.IsSamePath(heroModel, hero.Model) || heroSkin != 0 || dayHeroParticles.Count > 0 || merged.Count > 0 || heroBodyGroups.Count > 0
-                || activityModifiers.Count > 0)
+                || activityModifiers.Count > 0 || heroScale != 1f)
             {
                 plan.ModelReplacements.Add(new ModelReplacement(
                     NormalizePath(heroModel),
@@ -1575,6 +1587,57 @@ namespace GUI.Types.Exporter.CharacterAssets
                     RangedAttack = hero.RangedAttack,
                 });
             }
+
+            if (heroScale != 1f)
+            {
+                ScaleHeroModels(loadout, heroScale, plan);
+            }
+        }
+
+        /// <summary>
+        /// Scales the models written over the hero's and the ones it wears, see <see cref="CharacterLoadout.HeroScale"/>.
+        /// Worn default models nothing is written over still get written as they are, scaled, or they would stay small
+        /// on the bigger hero.
+        /// </summary>
+        private void ScaleHeroModels(CharacterLoadout loadout, float scale, CharacterExportPlan plan)
+        {
+            var hidden = plan.HiddenModels.ToHashSet(StringComparer.OrdinalIgnoreCase);
+            var worn = loadout.Hero.Slots
+                .Where(slot => slot.WornByHero && !CharacterLoadout.IsPersonaSlot(slot.Name))
+                .Select(slot => loadout.GetDefaultModel(slot.Name))
+                .Concat(loadout.AdditionalWearables
+                    .Where(wearable => loadout.IsAppliedByGame(wearable.Item) && loadout.IsWornByHero(wearable.Item.Item.Slot))
+                    .Select(static wearable => wearable.Model))
+                .OfType<string>()
+                .Select(NormalizePath)
+                .Where(model => !hidden.Contains(model))
+                .ToHashSet(StringComparer.OrdinalIgnoreCase);
+
+            worn.UnionWith(loadout.Hero.VariantModels.Select(NormalizePath));
+
+            for (var i = 0; i < plan.ModelReplacements.Count; i++)
+            {
+                var replacement = plan.ModelReplacements[i];
+
+                if (worn.Remove(replacement.Target))
+                {
+                    plan.ModelReplacements[i] = replacement with { Scale = scale };
+                }
+            }
+
+            worn.ExceptWith(loadout.Hero.VariantModels.Select(NormalizePath));
+
+            foreach (var model in worn)
+            {
+                Enqueue(model);
+                plan.ModelReplacements.Add(new ModelReplacement(model, model, 0, [])
+                {
+                    ActivityModifiers = loadout.ActivityModifiers,
+                    Scale = scale,
+                });
+            }
+
+            plan.Notes.Add(string.Create(CultureInfo.InvariantCulture, $"the items make the hero {scale:0.##} times bigger, its models were scaled to match"));
         }
 
         /// <summary>

@@ -958,7 +958,13 @@ namespace GUI.Types.Exporter.CharacterAssets
                     .Where(modifier => modifier.Activity == null || modifier.Activity.Equals(activity, StringComparison.OrdinalIgnoreCase))
                     .Select(static modifier => modifier.Name)
                     .ToHashSet(StringComparer.OrdinalIgnoreCase);
-                var wanted = sequence.Modifiers.Where(modifier => !applied.Contains(modifier)).ToHashSet(StringComparer.OrdinalIgnoreCase);
+                // The original's aggressive idle often stands in for its plain one, e.g. Crystal Maiden's has the same weight,
+                // while a replacement's can be a rare pose of its own, e.g. her persona's crouching wolf. A model with the
+                // original's sequence of its own keeps it
+                var wanted = sequence.Modifiers
+                    .Where(modifier => !applied.Contains(modifier)
+                        && !(own == null && activity.Equals("ACT_DOTA_IDLE", StringComparison.OrdinalIgnoreCase) && modifier.Equals("aggressive", StringComparison.OrdinalIgnoreCase)))
+                    .ToHashSet(StringComparer.OrdinalIgnoreCase);
 
                 return candidates
                     .Where(animation => activity.Equals(animation.Activity, StringComparison.OrdinalIgnoreCase))
@@ -1070,6 +1076,13 @@ namespace GUI.Types.Exporter.CharacterAssets
                 var text = neutral
                     ? GetNeutralLayerText(vmdl, source, own?.Name.Value ?? sequence.Name, sequence.Looping)
                     : GetNodeText(vmdl, source.Start, source.End, source.Name, own?.Name.Value ?? sequence.Name);
+
+                // The game only picks the original's looping sequence once, e.g. a persona's idle made of short ones the
+                // game chains would play one of them and freeze on its last frame
+                if (!neutral && sequence.Looping && !source.Looping)
+                {
+                    text = LoopingRegex().Replace(text, "looping = true", 1);
+                }
 
                 if (own == null)
                 {
@@ -2178,6 +2191,58 @@ namespace GUI.Types.Exporter.CharacterAssets
         }
 
         /// <summary>
+        /// Scales the whole model, its meshes, skeleton, animations, attachments and physics alike.
+        /// </summary>
+        /// <param name="vmdl">The .vmdl text.</param>
+        /// <param name="scale">How much bigger to make it, 1 leaves it as it is.</param>
+        public static string SetScale(string vmdl, float scale)
+        {
+            if (scale == 1f)
+            {
+                return vmdl;
+            }
+
+            var modifier = string.Create(CultureInfo.InvariantCulture, $$"""
+
+                {
+                    _class = "ModelModifier_ScaleAndMirror"
+                    scale = {{scale:0.######}}
+                    mirror_x = false
+                    mirror_y = false
+                    mirror_z = false
+                    flip_bone_forward = false
+                    swap_left_and_right_bones = false
+                },
+                """);
+
+            var modifierList = ModelModifierListChildrenRegex().Match(vmdl);
+
+            if (modifierList.Success)
+            {
+                return Validate(vmdl.Insert(modifierList.Index + modifierList.Length, Indent(modifier, 5)));
+            }
+
+            var rootChildren = RootNodeChildrenRegex().Match(vmdl);
+
+            if (!rootChildren.Success)
+            {
+                throw new InvalidDataException("The model's root node was not found");
+            }
+
+            var node = $$"""
+
+                {
+                    _class = "ModelModifierList"
+                    children =
+                    [{{Indent(modifier, 2)}}
+                    ]
+                },
+                """;
+
+            return Validate(vmdl.Insert(rootChildren.Index + rootChildren.Length, Indent(node, 3)));
+        }
+
+        /// <summary>
         /// The particles a compiled model creates itself when it spawns, from its "particles_list" and
         /// "particle_cfg_list" game data, as package source paths.
         /// </summary>
@@ -2719,6 +2784,9 @@ namespace GUI.Types.Exporter.CharacterAssets
 
         [GeneratedRegex(@"_class\s*=\s*""GameDataList""\s*children\s*=\s*\[", RegexOptions.CultureInvariant)]
         private static partial Regex GameDataListChildrenRegex();
+
+        [GeneratedRegex(@"_class\s*=\s*""ModelModifierList""\s*children\s*=\s*\[", RegexOptions.CultureInvariant)]
+        private static partial Regex ModelModifierListChildrenRegex();
 
         [GeneratedRegex(@"_class\s*=\s*""AnimationList""\s*children\s*=\s*\[", RegexOptions.CultureInvariant)]
         private static partial Regex AnimationListChildrenRegex();

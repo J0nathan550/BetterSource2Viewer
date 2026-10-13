@@ -48,6 +48,12 @@ namespace GUI.Types.Exporter.CharacterAssets
         /// <see cref="EquippedItem.Unusual"/>.
         /// </summary>
         public bool IsUnusual { get; init; }
+
+        /// <summary>
+        /// For "hero_scale", the scale the item gives the hero in matches in place of <see cref="HeroDefinition.ModelScale"/>,
+        /// e.g. a persona's, or null when it leaves it alone.
+        /// </summary>
+        public float? ModelScale { get; init; }
     }
 
     /// <summary>
@@ -166,6 +172,9 @@ namespace GUI.Types.Exporter.CharacterAssets
 
         /// <summary>Whether the hero attacks from range rather than in melee.</summary>
         public bool RangedAttack { get; init; }
+
+        /// <summary>The scale the game shows the hero's model at in matches.</summary>
+        public float ModelScale { get; init; } = 1f;
 
         public List<string> Abilities { get; } = [];
         public List<HeroSlot> Slots { get; } = [];
@@ -580,6 +589,7 @@ namespace GUI.Types.Exporter.CharacterAssets
                         && ParseVector(GetValue(modifier, "cp_position")) is { } position
                             ? (controlPoint, position)
                             : null,
+                    ModelScale = type == "hero_scale" ? ParseFloat(GetValue(modifier, "ModelScale")) : null,
                 });
             }
 
@@ -615,6 +625,9 @@ namespace GUI.Types.Exporter.CharacterAssets
 
         private static int? ParseInt(string? value)
             => int.TryParse(value, NumberStyles.Integer, CultureInfo.InvariantCulture, out var result) ? result : null;
+
+        private static float? ParseFloat(string? value)
+            => float.TryParse(value, NumberStyles.Float, CultureInfo.InvariantCulture, out var result) ? result : null;
 
         /// <summary>
         /// Parses three numbers separated by spaces, e.g. "150 255 70".
@@ -774,6 +787,7 @@ namespace GUI.Types.Exporter.CharacterAssets
                     VoiceFile = NullIfEmpty(GetValue(heroData, "VoiceFile")),
                     ParticleFolder = NullIfEmpty(GetValue(heroData, "particle_folder")),
                     RangedAttack = GetValue(heroData, "AttackCapabilities") == "DOTA_UNIT_CAP_RANGED_ATTACK",
+                    ModelScale = ParseFloat(GetValue(heroData, "ModelScale")) ?? 1f,
                 };
 
                 hero.VariantModels.Add(hero.Model!);
