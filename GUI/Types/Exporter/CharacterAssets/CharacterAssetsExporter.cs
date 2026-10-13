@@ -493,6 +493,17 @@ namespace GUI.Types.Exporter.CharacterAssets
                                     progress.Report($"  ! {replacement.Target}: the animations of {merged.Model} were not added: {e.Message}");
                                 }
                             }
+                            else
+                            {
+                                try
+                                {
+                                    vmdl = ModelDocEditor.AddClothEffectEvents(vmdl, mergedVmdl, details);
+                                }
+                                catch (Exception e)
+                                {
+                                    progress.Report($"  ! {replacement.Target}: the cloth effect events of {merged.Model} were not added: {e.Message}");
+                                }
+                            }
                         }
                         catch (Exception e)
                         {

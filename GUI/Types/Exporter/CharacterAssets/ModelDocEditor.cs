@@ -1496,6 +1496,7 @@ namespace GUI.Types.Exporter.CharacterAssets
 
                 // A model doc takes a single ClothParams node, so the merged model keeps this one's
                 var hasClothParams = ClothParamsRegex().IsMatch(vmdl);
+                var jointMaps = new List<(string? From, string To)>();
 
                 foreach (var (start, objectEnd) in objects.Where(range => range.Start > softbody.Start && range.End < softbody.End).OrderBy(static range => range.Start))
                 {
@@ -1507,15 +1508,37 @@ namespace GUI.Types.Exporter.CharacterAssets
 
                     end = objectEnd;
 
-                    if (hasClothParams && ObjectHeaderRegex().Match(otherVmdl, start) is { Success: true } header && header.Groups["class"].Value == "ClothParams")
+                    var header = ObjectHeaderRegex().Match(otherVmdl, start);
+                    var nodeClass = header.Success ? header.Groups["class"].Value : string.Empty;
+
+                    if (hasClothParams && nodeClass == "ClothParams")
                     {
                         continue;
                     }
 
-                    entries.Append('\n').Append(Rename(otherVmdl[GetLineStart(otherVmdl, start)..objectEnd])).Append(',');
+                    var text = Rename(otherVmdl[GetLineStart(otherVmdl, start)..objectEnd]);
+
+                    if (nodeClass.StartsWith("ClothEffect", StringComparison.Ordinal) && header.Groups["name"].Success)
+                    {
+                        if (MergeClothEffect(vmdl, text, header.Groups["name"].Value, prefix, jointMaps) is not { } effect)
+                        {
+                            continue;
+                        }
+
+                        text = effect;
+                    }
+
+                    entries.Append('\n').Append(text).Append(',');
                 }
 
-                return Validate(vmdl.Insert(ownChildren.Index + ownChildren.Length, entries.ToString()));
+                var merged = entries.ToString();
+
+                foreach (var (from, to) in jointMaps)
+                {
+                    merged = AddJointVertexMap(merged, from, to);
+                }
+
+                return Validate(vmdl.Insert(ownChildren.Index + ownChildren.Length, merged));
             }
 
             var rootChildren = RootNodeChildrenRegex().Match(vmdl);
@@ -1527,6 +1550,187 @@ namespace GUI.Types.Exporter.CharacterAssets
 
             var node = Rename(otherVmdl[GetLineStart(otherVmdl, softbody.Start)..softbody.End]);
             return Validate(vmdl.Insert(rootChildren.Index + rootChildren.Length, $"\n{node},"));
+        }
+
+        /// <summary>
+        /// The text of another model's cloth effect to add to this one's soft body, null when this model already has
+        /// one of that name. An effect without a vertex map stiffens all of the cloth, so it is given one that only the
+        /// other model's joints are painted with, see <paramref name="jointMaps"/>. When this model has the effect,
+        /// those joints are painted with its map instead, e.g. Tidehunter's arcana and its weapon both name their chain
+        /// stiffening "weapon_chain_ClothEffectStiffen".
+        /// </summary>
+        /// <param name="jointMaps">
+        /// Receives the vertex map the other model's joints get, for those painted with the first map, or all of them
+        /// when it is null.
+        /// </param>
+        private static string? MergeClothEffect(string vmdl, string effect, string name, string prefix, List<(string? From, string To)> jointMaps)
+        {
+            var ownMap = VertexMapRegex().Match(effect) is { Success: true } map ? map.Groups["map"].Value : null;
+
+            if (Regex.Match(vmdl, $@"_class\s*=\s*""ClothEffect\w*""\s*name\s*=\s*""{Regex.Escape(name)}""", RegexOptions.CultureInvariant) is { Success: true } existing)
+            {
+                var (start, end) = FindObjects(vmdl).Last(range => range.Start < existing.Index && range.End > existing.Index);
+
+                if (VertexMapRegex().Match(vmdl, start, end - start) is { Success: true } existingMap)
+                {
+                    jointMaps.Add((ownMap, existingMap.Groups["map"].Value));
+                }
+
+                return null;
+            }
+
+            if (ownMap != null || ObjectHeaderRegex().Match(effect, effect.IndexOf('{', StringComparison.Ordinal)) is not { Success: true } header)
+            {
+                return effect;
+            }
+
+            var newMap = $"{prefix}_{name}";
+            jointMaps.Add((null, newMap));
+
+            var nameEnd = header.Groups["name"].Index + header.Groups["name"].Length + 1;
+            var indent = new string('\t', GetLineIndentation(effect, header.Groups["name"].Index));
+
+            return effect.Insert(nameEnd, $"\n{indent}vertex_map = \"{newMap}\"");
+        }
+
+        /// <summary>
+        /// Paints the cloth chain joints in the text with another vertex map, the ones painted with
+        /// <paramref name="from"/>, or all of them when it is null.
+        /// </summary>
+        private static string AddJointVertexMap(string text, string? from, string to) => ClothJointRegex().Replace(text, joint =>
+        {
+            var body = joint.Value;
+            var maps = VertexMapRegex().Match(body);
+            var names = maps.Success ? maps.Groups["map"].Value.Split(',', StringSplitOptions.TrimEntries) : [];
+
+            if ((from != null && !names.Contains(from, StringComparer.Ordinal)) || names.Contains(to, StringComparer.Ordinal))
+            {
+                return body;
+            }
+
+            if (maps.Success)
+            {
+                return body.Insert(maps.Groups["map"].Index + maps.Groups["map"].Length, $",{to}");
+            }
+
+            var jointName = joint.Groups["name"];
+            var nameEnd = jointName.Index + jointName.Length + 1 - joint.Index;
+            var indent = new string('\t', GetLineIndentation(body, jointName.Index - joint.Index));
+
+            return body.Insert(nameEnd, $"\n{indent}vertex_map = \"{to}\"");
+        });
+
+        /// <summary>
+        /// Adds the cloth effect events of another model's sequences to this model's sequences of the same name. The
+        /// game plays a wearable's sequence of the same name as the hero's, whose events switch on the wearable's cloth
+        /// effects, e.g. the stiffening that holds the chain of Tidehunter's arcana anchor out while he swings it to
+        /// teleport. Merged into the hero, nothing would switch them on.
+        /// </summary>
+        /// <param name="vmdl">The .vmdl text of the model that gets the events, with the other model's cloth merged in.</param>
+        /// <param name="otherVmdl">The .vmdl text of the model whose events are added.</param>
+        /// <param name="details">Receives a description of what was added.</param>
+        public static string AddClothEffectEvents(string vmdl, string otherVmdl, ICollection<string>? details = null)
+        {
+            var otherObjects = FindObjects(otherVmdl);
+            var events = new Dictionary<string, List<(string Effect, string Text)>>(StringComparer.Ordinal);
+
+            foreach (var animation in GetAnimFiles(otherVmdl))
+            {
+                foreach (var (start, end) in otherObjects.Where(range => range.Start > animation.Start && range.End < animation.End))
+                {
+                    if (ObjectHeaderRegex().Match(otherVmdl, start) is not { Success: true } header || header.Groups["class"].Value != "AnimEvent"
+                        || ClothEffectEventRegex().Match(otherVmdl, start, end - start) is not { Success: true } clothEvent)
+                    {
+                        continue;
+                    }
+
+                    if (!events.TryGetValue(animation.Name.Value, out var list))
+                    {
+                        events[animation.Name.Value] = list = [];
+                    }
+
+                    var depth = GetIndentation(otherVmdl, start);
+                    var lines = otherVmdl[GetLineStart(otherVmdl, start)..end].Split('\n')
+                        .Select(line => line[Math.Min(depth, line.Length - line.TrimStart('\t').Length)..]);
+
+                    list.Add((clothEvent.Groups["effect"].Value, string.Join('\n', lines)));
+                }
+            }
+
+            if (events.Count == 0)
+            {
+                return vmdl;
+            }
+
+            var insertions = new List<(int Index, string Text)>();
+            var effects = new HashSet<string>(StringComparer.Ordinal);
+
+            foreach (var animation in GetAnimFiles(vmdl))
+            {
+                if (!events.TryGetValue(animation.Name.Value, out var list))
+                {
+                    continue;
+                }
+
+                var own = vmdl[animation.Start..animation.End];
+                var added = list
+                    .Where(added => !own.Contains($"FeEffectName = \"{added.Effect}\"", StringComparison.Ordinal)
+                        && Regex.IsMatch(vmdl, $@"_class\s*=\s*""ClothEffect\w*""\s*name\s*=\s*""{Regex.Escape(added.Effect)}""", RegexOptions.CultureInvariant))
+                    .ToList();
+
+                if (added.Count == 0)
+                {
+                    continue;
+                }
+
+                var depth = GetIndentation(vmdl, animation.Start);
+                var text = string.Concat(added.Select(added => "\n" + MoveIndentation(added.Text, depth + 2) + ","));
+
+                if (animation.ChildrenIndex is { } childrenIndex)
+                {
+                    insertions.Add((childrenIndex, text));
+                }
+                else
+                {
+                    var tabs = new string('\t', depth + 1);
+                    insertions.Add((animation.Name.Index + animation.Name.Length + 1, $"\n{tabs}children =\n{tabs}[{text}\n{tabs}]"));
+                }
+
+                effects.UnionWith(added.Select(static added => added.Effect));
+            }
+
+            foreach (var (index, text) in insertions.OrderByDescending(static insertion => insertion.Index))
+            {
+                vmdl = vmdl.Insert(index, text);
+            }
+
+            if (insertions.Count > 0)
+            {
+                details?.Add($"{insertions.Count} sequences switch on {string.Join(", ", effects)}");
+            }
+
+            return Validate(vmdl);
+        }
+
+        /// <summary>The number of tabs the line holding <paramref name="index"/> starts with.</summary>
+        private static int GetLineIndentation(string text, int index)
+        {
+            var lineStart = text.LastIndexOf('\n', Math.Max(index - 1, 0)) + 1;
+            var end = lineStart;
+
+            while (end < text.Length && text[end] == '\t')
+            {
+                end++;
+            }
+
+            return end - lineStart;
+        }
+
+        /// <summary>Indents every line of text that starts at no indentation by <paramref name="depth"/> tabs.</summary>
+        private static string MoveIndentation(string text, int depth)
+        {
+            var tabs = new string('\t', depth);
+            return string.Join('\n', text.Split('\n').Select(line => line.Length == 0 ? line : tabs + line));
         }
 
         /// <summary>
@@ -2547,6 +2751,15 @@ namespace GUI.Types.Exporter.CharacterAssets
 
         [GeneratedRegex(@"(?<prefix>_class\s*=\s*""ClothNode""\s*name\s*=\s*"")(?<name>[^""]*)""", RegexOptions.CultureInvariant)]
         private static partial Regex ClothNodeNameRegex();
+
+        [GeneratedRegex(@"\bvertex_map\s*=\s*""(?<map>[^""]*)""", RegexOptions.CultureInvariant)]
+        private static partial Regex VertexMapRegex();
+
+        [GeneratedRegex(@"\{\s*joint_name\s*=\s*""(?<name>[^""]*)""[^{}]*\}", RegexOptions.CultureInvariant)]
+        private static partial Regex ClothJointRegex();
+
+        [GeneratedRegex(@"event_class\s*=\s*""AE_CL_CLOTH_EFFECT""[^{}]*event_keys\s*=\s*\{[^{}]*?FeEffectName\s*=\s*""(?<effect>[^""]*)""", RegexOptions.CultureInvariant)]
+        private static partial Regex ClothEffectEventRegex();
 
         [GeneratedRegex(@"\bgame_class\s*=\s*""(?<class>[^""]*)""", RegexOptions.CultureInvariant)]
         private static partial Regex GameClassRegex();

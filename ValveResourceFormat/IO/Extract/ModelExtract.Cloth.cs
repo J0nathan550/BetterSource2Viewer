@@ -20,6 +20,8 @@ partial class ModelExtract
     // A node's compiled mass is this per unit of its rods' length, times the square of its joint's authored mass
     private const float ClothRodMassPerUnitLength = 8f;
 
+    private const int ClothEffectTypeStiffen = 3;
+
     // Goal damping compiles into how much of the way to its animated position a node is pulled on top of its goal
     // strength, with no closed form. These are -ln((1 - vertex attraction) / (1 - force attraction)) for the authored
     // goal strengths (rows) and goal dampings (columns), which grow with the damping.
@@ -122,12 +124,67 @@ partial class ModelExtract
 
         var (softbody, children) = MakeListNode("Softbody");
 
-        foreach (var node in alignments.Concat(chains).Concat(BuildClothFollowBones(cloth)))
+        foreach (var node in alignments.Concat(chains).Concat(BuildClothFollowBones(cloth)).Concat(BuildClothEffects(cloth, chains)))
         {
             children.Add(node);
         }
 
         lists.RootChildren.Add(softbody);
+    }
+
+    /// <summary>
+    /// The effects animation events switch on, e.g. a stiffen that holds a chain to its animated pose while a sequence
+    /// swings it around. Only stiffening is rebuilt. An effect keeps its vertex map when a joint declares it.
+    /// </summary>
+    private static List<KVObject> BuildClothEffects(ClothModel cloth, List<KVObject> chains)
+    {
+        var effects = new List<KVObject>();
+
+        var declaredMaps = chains
+            .SelectMany(static chain => chain.GetSubCollection("chain")?.GetArray("joints") ?? [])
+            .Select(static joint => joint.ContainsKey("vertex_map") ? joint.GetStringProperty("vertex_map") : null)
+            .OfType<string>()
+            .ToHashSet(StringComparer.Ordinal);
+
+        var mapNames = new Dictionary<uint, string>();
+
+        foreach (var map in cloth.FeModel.GetArray("m_VertexMaps") ?? [])
+        {
+            mapNames.TryAdd((uint)map.GetUnsignedIntegerProperty("nNameHash"), map.GetStringProperty("sName"));
+        }
+
+        foreach (var effect in cloth.FeModel.GetArray("m_Effects") ?? [])
+        {
+            if (effect.GetInt32Property("nType") != ClothEffectTypeStiffen || effect.GetSubCollection("m_Params") is not { } parameters)
+            {
+                continue;
+            }
+
+            var node = MakeNode("ClothEffectStiffen", ("name", effect.GetStringProperty("sName")));
+
+            if (parameters.ContainsKey("VertexMap")
+                && mapNames.TryGetValue(unchecked((uint)parameters.GetInt32Property("VertexMap")), out var mapName)
+                && declaredMaps.Contains(mapName))
+            {
+                node.Add("vertex_map", mapName);
+            }
+
+            if (parameters.ContainsKey("Version"))
+            {
+                node.Add("cloth_effect_version", parameters.GetInt32Property("Version"));
+            }
+
+            node.Add("Stiffness", parameters.GetFloatProperty("Stiffness"));
+
+            if (parameters.ContainsKey("BoneOverlay"))
+            {
+                node.Add("BoneOverlay", parameters.GetFloatProperty("BoneOverlay"));
+            }
+
+            effects.Add(node);
+        }
+
+        return effects;
     }
 
     /// <summary>

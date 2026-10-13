@@ -131,7 +131,7 @@ and a wide range of game data blocks (prop_data, particle attachments, and many 
 through verbatim.
 
 Cloth simulated only on bones is rebuilt as cloth chains, with the nodes that align bones between
-them. Cloth simulated on a mesh's vertices is rebuilt with its chains, sheets, springs, collision
+them and its stiffen effects. Cloth simulated on a mesh's vertices is rebuilt with its chains, sheets, springs, collision
 shapes and effects. Cloth decompiling is experimental, so please report models whose cloth comes
 back wrong. A model whose cloth on a mesh cannot be rebuilt keeps only its cloth on bones, with a
 warning.
