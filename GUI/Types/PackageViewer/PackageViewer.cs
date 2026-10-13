@@ -32,7 +32,8 @@ namespace GUI.Types.PackageViewer
             IsEditingPackage = true;
 
             var package = new Package();
-            package.AddFile("README.txt", []); // TODO: Otherwise package.Entries is null
+            // Adding a file is the only way to initialize package.Entries, so add a placeholder and remove it
+            package.RemoveFile(package.AddFile("placeholder", []));
 
             vrfGuiContext.CurrentPackage = package;
 
