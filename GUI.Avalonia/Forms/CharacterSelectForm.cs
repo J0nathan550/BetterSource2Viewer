@@ -178,6 +178,7 @@ namespace GUI.Forms
             Pedestal = IsChecked(pedestalCheckBox) && loadoutHasPedestal,
             ReplaceDefaults = IsChecked(replaceDefaultsCheckBox),
             ParticleRecolorOptions = new Dictionary<string, DrawingColor>(effectRecolors, StringComparer.OrdinalIgnoreCase),
+            GemColor = GetGemColor(),
             ReplaceSharedParticles = IsChecked(replaceSharedParticlesCheckBox),
 
             RenameModels = IsChecked(renameModelsCheckBox),
@@ -275,6 +276,7 @@ namespace GUI.Forms
             loadoutTabControl.Items.Add(new TabItem { Header = "Sounds", Content = ScrollPage(soundsTable) });
             loadoutTabControl.Items.Add(CreateParticlesTab());
             loadoutTabControl.Items.Add(CreateAnimationsTab());
+            loadoutTabControl.Items.Add(CreateGemColorTab());
             loadoutTabControl.Items.Add(new TabItem { Header = "Effects", Content = effectsPanel });
 
             // Export switches
@@ -802,7 +804,7 @@ namespace GUI.Forms
         private bool IsLoadoutPicked()
         {
             if (pickedEffects.Count > 0 || pickedModelEffects.Count > 0 || pickedAnimations.Count > 0 || pickedParticleSwaps.Count > 0 || pickedVoiceLayerLines.Count > 0 || pickedIcons.Count > 0 || pickedSounds.Count > 0 || pickedVoice || pickedUnusuals.Count > 0
-                || slotRecolors.Count > 0 || effectRecolors.Count > 0)
+                || slotRecolors.Count > 0 || effectRecolors.Count > 0 || IsGemColorPicked)
             {
                 return true;
             }
@@ -878,6 +880,7 @@ namespace GUI.Forms
 
             SaveParticleSwaps(saved);
             SaveVoiceLayerLines(saved);
+            SaveGemColor(saved);
 
             return saved;
         }
@@ -945,6 +948,7 @@ namespace GUI.Forms
 
             RestoreParticleSwaps(saved);
             RestoreVoiceLayerLines(saved);
+            RestoreGemColor(saved);
 
             // Picking these by hand marks them picked, so the equipped items' choices do not replace them
             foreach (var (slot, comboBox, _) in iconRows)
@@ -1262,6 +1266,7 @@ namespace GUI.Forms
                 BuildVoiceLayerRows(hero);
                 BuildParticleRows(hero);
                 ResetAnimationChoices(hero);
+                ResetGemColor();
                 pickedEffects.Clear();
                 pickedModelEffects.Clear();
                 pickedUnusuals.Clear();
@@ -2114,6 +2119,7 @@ namespace GUI.Forms
             UpdateParticleChoices(loadout);
             BuildEffectRows(loadout);
             BuildAnimationRows(loadout);
+            UpdateGemColor(loadout);
         }
 
         /// <summary>

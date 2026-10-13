@@ -438,7 +438,7 @@ namespace GUI.Types.Exporter.CharacterAssets
             progress?.Report($"Reading {UnitsPath}...");
             var unitModels = LoadUnitModels(package);
 
-            return new ItemsGameCatalog(heroes, itemsByHero, setsByHero, localization, unitModels, unusualEffects);
+            return new ItemsGameCatalog(heroes, itemsByHero, setsByHero, localization, unitModels, unusualEffects) { GemColors = ReadGemColors(itemsGame) };
         }
 
         /// <summary>

@@ -308,7 +308,7 @@ namespace GUI.Types.Exporter.CharacterAssets
                 var failed = 0;
 
                 failed += ExportModels(plan.Models, vpkPath, contentRoot, fileLoader, progress, cancellationToken);
-                failed += ExportMaterials(plan.Materials, plan.MaterialCopies, plan.FrozenMaterialParams, contentRoot, fileLoader, loadout, options, progress, writtenFiles, cancellationToken);
+                failed += ExportMaterials(plan, contentRoot, fileLoader, loadout, options, progress, writtenFiles, cancellationToken);
                 failed += ExportResources(plan.Resources, contentRoot, fileLoader, progress, writtenFiles, cancellationToken);
                 failed += ExportRawFiles(plan.RawFiles, contentRoot, fileLoader, progress, writtenFiles, cancellationToken);
                 failed += ApplyParticleRedirects(plan.ParticleRedirects, contentRoot, fileLoader, progress);
@@ -1356,13 +1356,14 @@ namespace GUI.Types.Exporter.CharacterAssets
         /// Decompiles the materials with their textures, so the addon compiles its own copies rather than using the
         /// game's, which some item materials render semi-transparent with.
         /// </summary>
-        /// <param name="copies">Materials written elsewhere, see <see cref="CharacterExportPlan.MaterialCopies"/>.</param>
-        /// <param name="frozenParams">The dynamic params left out of copies, see <see cref="CharacterExportPlan.FrozenMaterialParams"/>.</param>
-        private static int ExportMaterials(List<string> materials, IReadOnlyDictionary<string, string> copies,
-            Dictionary<string, List<string>> frozenParams, string outputRoot, GameFileLoader fileLoader,
+        private static int ExportMaterials(CharacterExportPlan plan, string outputRoot, GameFileLoader fileLoader,
             CharacterLoadout loadout, CharacterExportOptions options,
             IProgress<string> progress, HashSet<string> writtenFiles, CancellationToken cancellationToken)
         {
+            var materials = plan.Materials;
+            var copies = plan.MaterialCopies;
+            var frozenParams = plan.FrozenMaterialParams;
+
             if (materials.Count == 0)
             {
                 return 0;
@@ -1393,7 +1394,7 @@ namespace GUI.Types.Exporter.CharacterAssets
 
                     // Copies only change settings, so they use the game's textures rather than shipping their own,
                     // unless their color texture is recolored
-                    if (copy != null && recolor == null)
+                    if ((copy != null || plan.GameTextureMaterials.Contains(material)) && recolor == null)
                     {
                         WriteMaterialOnGameTextures(resource, vmatPath, fileLoader);
                     }
@@ -1411,6 +1412,11 @@ namespace GUI.Types.Exporter.CharacterAssets
                     if (frozenParams.TryGetValue(CharacterLoadout.NormalizePath(cleanMatRelative), out var frozen))
                     {
                         RemoveDynamicParams(vmatPath, frozen);
+                    }
+
+                    if (plan.GemColor is { } gemColor && plan.GemColorMaterials.Contains(CharacterLoadout.NormalizePath(cleanMatRelative)))
+                    {
+                        File.WriteAllText(vmatPath, CharacterGemColor.BakeIntoMaterial(File.ReadAllText(vmatPath), gemColor));
                     }
 
                     // Применяем перекраску

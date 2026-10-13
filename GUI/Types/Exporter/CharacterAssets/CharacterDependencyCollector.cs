@@ -235,6 +235,14 @@ namespace GUI.Types.Exporter.CharacterAssets
         public Dictionary<string, Color> ParticleRecolorOptions { get; init; } = new(StringComparer.OrdinalIgnoreCase);
 
         /// <summary>
+        /// The prismatic gem color written into the particles and materials that take one, see <see cref="CharacterGemColor"/>,
+        /// e.g. Terrorblade's arcana red, or null to leave them as the game shows them without a gem. With
+        /// <see cref="ReplaceDefaults"/>, the hero's own game particles that take it are written with it too.
+        /// </summary>
+        [JsonIgnore]
+        public Color? GemColor { get; set; }
+
+        /// <summary>
         /// The options that make an addon of only what the loadout changes about the hero: its look written over the
         /// default assets, the effects the game shows with the items, the sounds and icons picked, and nothing the game
         /// already has as it is, materials included.
@@ -465,6 +473,18 @@ namespace GUI.Types.Exporter.CharacterAssets
         /// </summary>
         public Dictionary<string, List<string>> FrozenMaterialParams { get; } = new(StringComparer.OrdinalIgnoreCase);
 
+        /// <summary>The color written into <see cref="GemColorMaterials"/>, see <see cref="CharacterExportOptions.GemColor"/>.</summary>
+        public Color? GemColor { get; set; }
+
+        /// <summary>The materials that read the gem color, by package source path, which get <see cref="GemColor"/> written in.</summary>
+        public HashSet<string> GemColorMaterials { get; } = new(StringComparer.OrdinalIgnoreCase);
+
+        /// <summary>
+        /// Materials exported only to change their settings, which point at the game's compiled textures rather than
+        /// shipping their own, as package paths.
+        /// </summary>
+        public HashSet<string> GameTextureMaterials { get; } = new(StringComparer.OrdinalIgnoreCase);
+
         /// <summary>Everything else that is compiled, decompiled with the built-in decompiler.</summary>
         public List<string> Resources { get; } = [];
 
@@ -543,7 +563,7 @@ namespace GUI.Types.Exporter.CharacterAssets
     /// Works out which files make up a hero with a set of items: the models, particles and sound events the items name
     /// in items_game.txt. Nothing they reference is exported on top, the addon loads it from the game like the game does.
     /// </summary>
-    sealed class CharacterDependencyCollector
+    sealed partial class CharacterDependencyCollector
     {
         private static readonly HashSet<string> AssetExtensions = new(StringComparer.OrdinalIgnoreCase)
         {
@@ -667,6 +687,7 @@ namespace GUI.Types.Exporter.CharacterAssets
                 plan.Notes.Add($"{skippedModels} model{(skippedModels == 1 ? " the loadout does not change was" : "s the loadout does not change were")} left out, the game already has {(skippedModels == 1 ? "it" : "them")}");
             }
 
+            AddGemColorParticles(loadout, options, equippedAssets, plan, cancellationToken);
             AddParticleFixes(plan, cancellationToken);
 
             foreach (var (particle, controlPoints) in loadout.ParticleControlPoints)
@@ -676,6 +697,8 @@ namespace GUI.Types.Exporter.CharacterAssets
                     plan.ParticleControlPoints[particle] = controlPoints;
                 }
             }
+
+            SetGemColorControlPoints(options, plan, cancellationToken);
 
             if (options.Materials || options.RecolorOptions.Count > 0)
             {
@@ -704,6 +727,7 @@ namespace GUI.Types.Exporter.CharacterAssets
                 });
             }
 
+            AddGemColorMaterials(loadout, options, equippedAssets, plan, cancellationToken);
             AddFrozenMaterialParams(plan, cancellationToken);
 
             if (options.Portraits && options.ReplaceDefaults)

@@ -133,6 +133,12 @@ namespace GUI.Types.Exporter.CharacterAssets
         /// <summary>The criteria of the voice picked by hand, null for the hero's own.</summary>
         public string? Voice { get; set; }
 
+        /// <summary>The prismatic gem color picked by hand as ARGB, null for the equipped items' own, see <see cref="CharacterGemColor"/>.</summary>
+        public int? GemColor { get; set; }
+
+        /// <summary>Whether the gem color was turned on or off by hand, null when it follows the equipped items.</summary>
+        public bool? GemColorEnabled { get; set; }
+
         public static string GetIconKey(IconSlot slot) => $"{slot.ModifierType}:{slot.Asset}";
     }
 

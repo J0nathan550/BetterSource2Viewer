@@ -129,6 +129,7 @@ namespace GUI.Forms
             Pedestal = pedestalCheckBox.Checked && loadoutHasPedestal,
             ReplaceDefaults = replaceDefaultsCheckBox.Checked,
             ParticleRecolorOptions = new Dictionary<string, Color>(effectRecolors, StringComparer.OrdinalIgnoreCase),
+            GemColor = GetGemColor(),
             ReplaceSharedParticles = replaceSharedParticlesCheckBox.Checked,
 
             RenameModels = renameModelsCheckBox.Checked,
@@ -151,6 +152,7 @@ namespace GUI.Forms
             itemSetComboBox.ItemImage = choice => GetChoiceImage(choice, itemSetComboBox.ScaledImageSize);
             CreateParticlesTab();
             CreateAnimationsTab();
+            CreateGemColorTab();
 
             skipUnchangedCheckBox = new CheckBox { AutoSize = true, Text = "Only models the loadout changes", Checked = true };
             includeTable.RowCount++;
@@ -471,7 +473,7 @@ namespace GUI.Forms
         private bool IsLoadoutPicked()
         {
             if (pickedEffects.Count > 0 || pickedModelEffects.Count > 0 || pickedAnimations.Count > 0 || pickedParticleSwaps.Count > 0 || pickedVoiceLayerLines.Count > 0 || pickedIcons.Count > 0 || pickedSounds.Count > 0 || pickedVoice || pickedUnusuals.Count > 0
-                || slotRecolors.Count > 0 || effectRecolors.Count > 0)
+                || slotRecolors.Count > 0 || effectRecolors.Count > 0 || IsGemColorPicked)
             {
                 return true;
             }
@@ -547,6 +549,7 @@ namespace GUI.Forms
 
             SaveParticleSwaps(saved);
             SaveVoiceLayerLines(saved);
+            SaveGemColor(saved);
 
             return saved;
         }
@@ -614,6 +617,7 @@ namespace GUI.Forms
 
             RestoreParticleSwaps(saved);
             RestoreVoiceLayerLines(saved);
+            RestoreGemColor(saved);
 
             // Picking these by hand marks them picked, so the equipped items' choices do not replace them
             foreach (var (slot, comboBox, _) in iconRows)
@@ -1008,6 +1012,7 @@ namespace GUI.Forms
                 BuildVoiceLayerRows(hero);
                 BuildParticleRows(hero);
                 ResetAnimationChoices(hero);
+                ResetGemColor();
                 pickedEffects.Clear();
                 pickedModelEffects.Clear();
                 pickedUnusuals.Clear();
@@ -1884,6 +1889,7 @@ namespace GUI.Forms
             UpdateParticleChoices(loadout);
             BuildEffectRows(loadout);
             BuildAnimationRows(loadout);
+            UpdateGemColor(loadout);
         }
 
         /// <summary>
