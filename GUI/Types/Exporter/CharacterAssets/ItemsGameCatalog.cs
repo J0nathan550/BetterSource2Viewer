@@ -850,7 +850,9 @@ namespace GUI.Types.Exporter.CharacterAssets
 
                         var previewMode = GetValue(slotData, "LoadoutPreviewMode");
                         var swapsHeroModel = previewMode == "hero_model_override";
-                        var wornByHero = units == null && (previewMode == null || swapsHeroModel);
+                        // A slot previewed on the hero is worn by it even when its items also dress units, e.g. Wraith
+                        // King's weapon, which swaps his skeletons too
+                        var wornByHero = (units == null && (previewMode == null || swapsHeroModel)) || previewMode == "hero";
 
                         hero.Slots.Add(new HeroSlot(slotIndex, slotName, Localize(localization, GetValue(slotData, "SlotText")) ?? slotName, wornByHero, units,
                             swapsHeroModel));

@@ -206,6 +206,11 @@ namespace GUI.Types.Exporter.CharacterAssets
             .DistinctBy(static swap => swap.DefaultModel, StringComparer.OrdinalIgnoreCase);
 
         /// <summary>
+        /// The own model of a unit the hero creates, or null when the entity name is not one of them.
+        /// </summary>
+        public string? GetUnitModel(string? entity) => entity != null ? unitModels.GetValueOrDefault(entity) : null;
+
+        /// <summary>
         /// Models the equipped items give the hero's other variants, e.g. Tiny's at each Grow level past the first, with
         /// the variant's own model they replace. The first variant is the hero's own model, see <see cref="HeroModel"/>.
         /// </summary>

@@ -413,6 +413,7 @@ namespace GUI.Types.Exporter.CharacterAssets
 
         /// <summary>How much to scale the model, see <see cref="CharacterLoadout.HeroScale"/>.</summary>
         public float Scale { get; init; } = 1f;
+
     }
 
     /// <summary>
@@ -1266,36 +1267,48 @@ namespace GUI.Types.Exporter.CharacterAssets
             foreach (var item in loadout.Items)
             {
                 var isDefault = loadout.IsAppliedByGame(item);
-                List<VariantParticle> createdEffects = options.ItemParticles && !isDefault
+                List<CreatedEffect> itemEffects = options.ItemParticles && !isDefault
                     ? [.. loadout.CreatedEffects
                         .Where(effect => effect.Item == item && IsEffectEnabled(loadout, options, effect))
-                        .Concat(loadout.LoadoutOnlyEffects.Where(effect => effect.Item == item && IsPickedLoadoutEffect(options, effect.Particle)))
-                        .Select(static effect => new VariantParticle(effect.Particle, effect.Modifier.RequiredModelVariant))]
+                        .Concat(loadout.LoadoutOnlyEffects.Where(effect => effect.Item == item && IsPickedLoadoutEffect(options, effect.Particle)))]
                     : [];
-                var createdParticles = GetVariantParticles(createdEffects, 0);
 
                 var model = options.ItemModels ? loadout.GetItemModel(item) : null;
                 var itemUnitSwaps = unitSwaps.Where(swap => swap.Item == item).ToList();
 
-                if (itemUnitSwaps.Count > 0)
+                // Items worn by the hero can dress its units too, e.g. Wraith King's sword that also swaps his skeletons,
+                // each unit then only gets the particles made for it and the rest stay with the item's own model
+                var wearsOwnModel = model != null && loadout.IsWornByHero(item.Item.Slot)
+                    && itemUnitSwaps.Count > 0 && !itemUnitSwaps.Intersect(loadout.VariantModelSwaps).Any();
+
+                foreach (var (_, unitModel, defaultModel) in itemUnitSwaps)
+                {
+                    var (skin, bodyGroups) = GetLook(unitModel, item.Skin);
+                    var unitParticles = GetVariantParticles(itemEffects
+                        .Where(effect => !wearsOwnModel || CharacterLoadout.IsSamePath(loadout.GetUnitModel(effect.Modifier.Asset) ?? string.Empty, defaultModel))
+                        .Select(static effect => new VariantParticle(effect.Particle, effect.Modifier.RequiredModelVariant)), 0);
+
+                    Enqueue(unitModel);
+
+                    // Default items name the unit's own model too
+                    if (!CharacterLoadout.IsSamePath(unitModel, defaultModel) || skin != 0 || unitParticles.Count > 0 || bodyGroups.Count > 0)
+                    {
+                        plan.ModelReplacements.Add(new ModelReplacement(NormalizePath(unitModel), NormalizePath(defaultModel), skin, unitParticles)
+                        {
+                            BodyGroups = bodyGroups,
+                            Rename = rename,
+                        });
+                    }
+                }
+
+                List<VariantParticle> createdEffects = [.. itemEffects
+                    .Where(effect => !wearsOwnModel || loadout.GetUnitModel(effect.Modifier.Asset) == null)
+                    .Select(static effect => new VariantParticle(effect.Particle, effect.Modifier.RequiredModelVariant))];
+                var createdParticles = GetVariantParticles(createdEffects, 0);
+
+                if (itemUnitSwaps.Count > 0 && !wearsOwnModel)
                 {
                     // Dresses a unit the hero creates, its own model is only what the loadout screen shows
-                    foreach (var (_, unitModel, defaultModel) in itemUnitSwaps)
-                    {
-                        var (skin, bodyGroups) = GetLook(unitModel, item.Skin);
-
-                        Enqueue(unitModel);
-
-                        // Default items name the unit's own model too
-                        if (!CharacterLoadout.IsSamePath(unitModel, defaultModel) || skin != 0 || createdParticles.Count > 0 || bodyGroups.Count > 0)
-                        {
-                            plan.ModelReplacements.Add(new ModelReplacement(NormalizePath(unitModel), NormalizePath(defaultModel), skin, createdParticles)
-                            {
-                                BodyGroups = bodyGroups,
-                                Rename = rename,
-                            });
-                        }
-                    }
                 }
                 else if (model == null)
                 {
@@ -1736,12 +1749,8 @@ namespace GUI.Types.Exporter.CharacterAssets
 
         private List<string> GetAnimatedBones(CharacterLoadout loadout, EquippedItem item, string model)
         {
-            // Weapons go over the default weapon even when they loop parts of their own, e.g. the chains of Wraith King's
-            // Crimson Unbroken Fealty, so they stay the hero's weapon like any other sword
-            var playsOwnCycle = item.Item.PlaysOwnCycle && !item.Item.Slot.Contains("weapon", StringComparison.OrdinalIgnoreCase);
-
             if (!item.Item.SkipModelCombine
-                || !(CharacterLoadout.IsPersonaSlot(item.Item.Slot) || playsOwnCycle)
+                || !(CharacterLoadout.IsPersonaSlot(item.Item.Slot) || item.Item.PlaysOwnCycle)
                 || !loadout.IsWornByHero(item.Item.Slot)
                 || (loadout.HeroModel ?? loadout.Hero.Model) is not { } heroModelPath)
             {
