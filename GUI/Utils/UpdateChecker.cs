@@ -86,8 +86,13 @@ static partial class UpdateChecker
     public const string Repository = "J0nathan550/BetterSource2Viewer";
     public const string RepositoryId = "1379849563";
 
+#if TEST_LOCAL_UPDATE
+    // Test builds update from a manifest served locally, e.g. by "python -m http.server 8765"
+    private static readonly string ManifestUrl = Environment.GetEnvironmentVariable("S2V_TEST_UPDATE_MANIFEST") ?? "http://localhost:8765/latest.json";
+#else
     // Every release carries the manifest for both channels, so the newest release always has the current one
     private const string ManifestUrl = $"https://github.com/{Repository}/releases/latest/download/latest.json";
+#endif
     private static readonly TimeSpan CheckInterval = TimeSpan.FromDays(1);
     private static readonly TimeSpan FailedCheckRetryDelay = TimeSpan.FromMinutes(30);
 
@@ -221,7 +226,7 @@ static partial class UpdateChecker
 
     private static bool IsLocalBuild()
     {
-#if TEST_NON_LOCAL_BUILD || CI_BUILD
+#if TEST_NON_LOCAL_BUILD || CI_BUILD || TEST_LOCAL_UPDATE
         return false;
 #else
         return true;
@@ -290,6 +295,10 @@ static partial class UpdateChecker
 
         // The file is verified after download, but the request itself should not go out in the clear either
         DownloadUrl = asset?.Url?.StartsWith("https://", StringComparison.Ordinal) == true ? asset.Url : null;
+
+#if TEST_LOCAL_UPDATE
+        DownloadUrl ??= asset?.Url?.StartsWith("http://localhost:", StringComparison.Ordinal) == true ? asset.Url : null;
+#endif
         DownloadSize = asset?.Size;
         DownloadSha256 = asset?.Sha256;
 

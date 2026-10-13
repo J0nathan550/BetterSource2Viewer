@@ -212,8 +212,10 @@ static class UpdateInstaller
                     dialog.SetProgress("Verifying…");
                     Verify(size, hash, expectedHash);
 
+#if !TEST_LOCAL_UPDATE // Locally published test builds have no provenance
                     dialog.SetProgress("Verifying build provenance…");
                     await VerifyProvenanceAsync(httpClient, hash, cancellationToken).ConfigureAwait(false);
+#endif
 
                     downloadedHash = hash;
                 }
@@ -409,15 +411,7 @@ static class UpdateInstaller
 
         if (int.TryParse(processIdText, NumberStyles.None, CultureInfo.InvariantCulture, out var processId))
         {
-            try
-            {
-                using var process = Process.GetProcessById(processId);
-                process.WaitForExit(TimeSpan.FromMinutes(2));
-            }
-            catch (ArgumentException)
-            {
-                // Already exited
-            }
+            WaitForViewerExit(processId, exePath);
         }
 
         // Every window that exits with the update pending starts one of these, they take turns
@@ -440,6 +434,40 @@ static class UpdateInstaller
         finally
         {
             mutex.ReleaseMutex();
+        }
+    }
+
+    // The viewer starts the update only once its main window has closed and saved the settings, so all that is left
+    // is tearing the process down. A native library that hangs in there would otherwise keep the update, and the
+    // restart, waiting on a process without any window.
+    private static void WaitForViewerExit(int processId, string exePath)
+    {
+        try
+        {
+            using var process = Process.GetProcessById(processId);
+
+            if (process.WaitForExit(TimeSpan.FromSeconds(15)))
+            {
+                return;
+            }
+
+            // The id may have been reused by now, only ever end the viewer itself
+            if (!string.Equals(process.MainModule?.FileName, exePath, StringComparison.OrdinalIgnoreCase))
+            {
+                return;
+            }
+
+            Log.Error(nameof(UpdateInstaller), $"The viewer (pid {processId}) did not exit after closing, ending it");
+            process.Kill();
+            process.WaitForExit(TimeSpan.FromSeconds(10));
+        }
+        catch (ArgumentException)
+        {
+            // Already exited
+        }
+        catch (Exception e) when (e is Win32Exception or InvalidOperationException)
+        {
+            // Exited meanwhile, or not ours to end
         }
     }
 
