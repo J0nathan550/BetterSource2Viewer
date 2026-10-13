@@ -1624,7 +1624,8 @@ namespace GUI.Types.Exporter.CharacterAssets
         /// Adds the cloth effect events of another model's sequences to this model's sequences of the same name. The
         /// game plays a wearable's sequence of the same name as the hero's, whose events switch on the wearable's cloth
         /// effects, e.g. the stiffening that holds the chain of Tidehunter's arcana anchor out while he swings it to
-        /// teleport. Merged into the hero, nothing would switch them on.
+        /// teleport. Merged into the hero, nothing would switch them on. Events that switch an effect on are timed to
+        /// the hero's sequence instead, otherwise it would stay on after it, e.g. leaving the chain stiff.
         /// </summary>
         /// <param name="vmdl">The .vmdl text of the model that gets the events, with the other model's cloth merged in.</param>
         /// <param name="otherVmdl">The .vmdl text of the model whose events are added.</param>
@@ -1683,8 +1684,16 @@ namespace GUI.Types.Exporter.CharacterAssets
                     continue;
                 }
 
+                // An effect switched on stays on for the hero, for whom no later sequence of the wearable switches it
+                // off. Timed to the sequence's length it ends with it, and a looping one starts it again every loop
+                var settings = own[..((animation.ChildrenIndex ?? animation.End) - animation.Start)];
+                var duration = FramerateRegex().Match(settings) is { Success: true } framerate && EndFrameRegex().Match(settings) is { Success: true } endFrame
+                    && float.Parse(framerate.Groups["value"].Value, CultureInfo.InvariantCulture) is > 0 and var rate
+                        ? (int.Parse(endFrame.Groups["value"].Value, CultureInfo.InvariantCulture) - animation.StartFrame) / rate
+                        : 0f;
+
                 var depth = GetIndentation(vmdl, animation.Start);
-                var text = string.Concat(added.Select(added => "\n" + MoveIndentation(added.Text, depth + 2) + ","));
+                var text = string.Concat(added.Select(added => "\n" + MoveIndentation(TimeClothEffect(added.Text, duration), depth + 2) + ","));
 
                 if (animation.ChildrenIndex is { } childrenIndex)
                 {
@@ -1710,6 +1719,25 @@ namespace GUI.Types.Exporter.CharacterAssets
             }
 
             return Validate(vmdl);
+        }
+
+        /// <summary>
+        /// Turns a cloth effect event that switches the effect on into one that holds it at full strength for
+        /// <paramref name="duration"/> seconds, the way the hero's own events time theirs.
+        /// </summary>
+        private static string TimeClothEffect(string clothEvent, float duration)
+        {
+            if (duration <= 0f || clothEvent.Contains("peaktailend", StringComparison.Ordinal)
+                || ClothEffectOperationRegex().Match(clothEvent) is not { Success: true } operation)
+            {
+                return clothEvent;
+            }
+
+            var seconds = duration.ToString("0.0#####", CultureInfo.InvariantCulture);
+            var indent = new string('\t', GetLineIndentation(clothEvent, operation.Index));
+
+            return string.Concat(clothEvent.AsSpan(0, operation.Index), $"Operation = 0\n{indent}peaktailend = [ 0.0, {seconds}, {seconds} ]",
+                clothEvent.AsSpan(operation.Index + operation.Length));
         }
 
         /// <summary>The number of tabs the line holding <paramref name="index"/> starts with.</summary>
@@ -2760,6 +2788,15 @@ namespace GUI.Types.Exporter.CharacterAssets
 
         [GeneratedRegex(@"event_class\s*=\s*""AE_CL_CLOTH_EFFECT""[^{}]*event_keys\s*=\s*\{[^{}]*?FeEffectName\s*=\s*""(?<effect>[^""]*)""", RegexOptions.CultureInvariant)]
         private static partial Regex ClothEffectEventRegex();
+
+        [GeneratedRegex(@"\bOperation\s*=\s*1\b", RegexOptions.CultureInvariant)]
+        private static partial Regex ClothEffectOperationRegex();
+
+        [GeneratedRegex(@"\bframerate\s*=\s*(?<value>[0-9.]+)", RegexOptions.CultureInvariant)]
+        private static partial Regex FramerateRegex();
+
+        [GeneratedRegex(@"\bend_frame\s*=\s*(?<value>-?[0-9]+)", RegexOptions.CultureInvariant)]
+        private static partial Regex EndFrameRegex();
 
         [GeneratedRegex(@"\bgame_class\s*=\s*""(?<class>[^""]*)""", RegexOptions.CultureInvariant)]
         private static partial Regex GameClassRegex();
