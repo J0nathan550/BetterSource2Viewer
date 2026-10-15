@@ -230,28 +230,38 @@ namespace GUI.Types.Exporter.CharacterAssets
             try
             {
                 using var modelResource = fileLoader.LoadFileCompiled(NormalizePath(model));
-                using var particleResource = fileLoader.LoadFileCompiled(particle);
 
-                if (modelResource?.DataBlock is not Model modelData || particleResource?.DataBlock is not ParticleSystem particleSystem)
-                {
-                    return false;
-                }
-
-                var config = ModelDocEditor.ResolveParticle(fileLoader, particle).Config;
-                var attachments = (particleSystem.GetUpgradedData().GetArray("m_controlPointConfigurations") ?? [])
-                    .Where(configuration => configuration.GetStringProperty("m_name", string.Empty).Equals(config, StringComparison.OrdinalIgnoreCase))
-                    .SelectMany(static configuration => configuration.GetArray("m_drivers") ?? [])
-                    .Select(static driver => driver.GetStringProperty("m_attachmentName", string.Empty))
-                    .Where(static attachment => attachment.Length > 0)
-                    .ToList();
-
-                return attachments.Count > 0 && attachments.All(modelData.Attachments.ContainsKey);
+                return modelResource?.DataBlock is Model modelData
+                    && GetFollowedAttachments(particle) is { Count: > 0 } attachments
+                    && attachments.All(modelData.Attachments.ContainsKey);
             }
             catch (Exception e)
             {
                 progress?.Report($"  ! failed to read the attachments of \"{particle}\" or \"{model}\": {e.Message}");
                 return false;
             }
+        }
+
+        /// <summary>
+        /// The attachments a particle follows in the configuration it plays under on a model, see
+        /// <see cref="ModelDocEditor.ResolveParticle"/>, or null when it can't be read.
+        /// </summary>
+        private List<string>? GetFollowedAttachments(string particle)
+        {
+            using var particleResource = fileLoader.LoadFileCompiled(particle);
+
+            if (particleResource?.DataBlock is not ParticleSystem particleSystem)
+            {
+                return null;
+            }
+
+            var config = ModelDocEditor.ResolveParticle(fileLoader, particle).Config;
+
+            return [.. (particleSystem.GetUpgradedData().GetArray("m_controlPointConfigurations") ?? [])
+                .Where(configuration => configuration.GetStringProperty("m_name", string.Empty).Equals(config, StringComparison.OrdinalIgnoreCase))
+                .SelectMany(static configuration => configuration.GetArray("m_drivers") ?? [])
+                .Select(static driver => driver.GetStringProperty("m_attachmentName", string.Empty))
+                .Where(static attachment => attachment.Length > 0)];
         }
 
         private bool IsTintable(string particle)

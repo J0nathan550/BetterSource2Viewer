@@ -1379,6 +1379,19 @@ namespace GUI.Types.Exporter.CharacterAssets
                         // hero's activity modifiers, which nothing sets on them in the addon either
                         var itemActivityModifiers = loadout.IsWornByHero(item.Item.Slot) ? loadout.ActivityModifiers : [];
 
+                        // Effects a model combined into the hero creates itself come loose from it in game, e.g. Rubick's
+                        // arcana cape left copies of its edges behind on stolen spells, so the hero carries them
+                        var ownEffects = createdEffects;
+
+                        if (createdParticles.Count > 0 && options.HeroModel && hero.Model != null && loadout.IsDefaultCombined(item.Item.Slot)
+                            && loadout.IsWornByHero(item.Item.Slot) && CanCarryEffects(loadout.HeroModel ?? hero.Model, model, createdParticles))
+                        {
+                            heroParticles.AddRange(createdEffects);
+                            ownEffects = [];
+                            createdParticles = [];
+                            plan.Notes.Add($"{NormalizePath(model)} is combined into the hero, the effects it creates were added to the hero's model");
+                        }
+
                         // Also covers default items that another item swaps for a refit, or whose parts an arcana hides
                         if (!CharacterLoadout.IsSamePath(model, defaultModel) || skin != 0 || createdParticles.Count > 0 || bodyGroups.Count > 0)
                         {
@@ -1400,7 +1413,7 @@ namespace GUI.Types.Exporter.CharacterAssets
 
                                 Enqueue(variantModel);
                                 plan.ModelReplacements.Add(new ModelReplacement(NormalizePath(variantModel), NormalizePath(defaultVariantModel), variantSkin,
-                                    GetVariantParticles(createdEffects, variant))
+                                    GetVariantParticles(ownEffects, variant))
                                 {
                                     BodyGroups = variantBodyGroups,
                                     ActivityModifiers = itemActivityModifiers,
@@ -1743,6 +1756,34 @@ namespace GUI.Types.Exporter.CharacterAssets
             catch (Exception e)
             {
                 progress?.Report($"  ! failed to read the cloth of \"{model}\": {e.Message}");
+                return false;
+            }
+        }
+
+        /// <summary>
+        /// Whether the hero's model has every bone of an item's model and every attachment its particles follow, so they
+        /// play on the hero as they would on the item, skinned snapshots included.
+        /// </summary>
+        private bool CanCarryEffects(string heroModelPath, string model, IEnumerable<string> particles)
+        {
+            try
+            {
+                using var heroResource = fileLoader.LoadFileCompiled(NormalizePath(heroModelPath));
+                using var resource = fileLoader.LoadFileCompiled(NormalizePath(model));
+
+                if (heroResource?.DataBlock is not Model heroModel || resource?.DataBlock is not Model itemModel)
+                {
+                    return false;
+                }
+
+                var heroBones = heroModel.Skeleton.Bones.Select(static bone => bone.Name).ToHashSet(StringComparer.OrdinalIgnoreCase);
+
+                return itemModel.Skeleton.Bones.All(bone => heroBones.Contains(bone.Name))
+                    && particles.All(particle => GetFollowedAttachments(particle) is { } attachments && attachments.All(heroModel.Attachments.ContainsKey));
+            }
+            catch (Exception e)
+            {
+                progress?.Report($"  ! failed to read the bones of \"{model}\" or \"{heroModelPath}\": {e.Message}");
                 return false;
             }
         }
