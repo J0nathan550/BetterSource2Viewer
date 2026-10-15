@@ -45,8 +45,11 @@ namespace ValveResourceFormat.Renderer.World
         // Always enabled, the physics group filter decides what actually draws.
         private const string PhysicsDebugLayerName = "Physics Visualization Layer";
 
+        /// <summary>Visibility layer of the entities a <c>point_template</c> spawns, and of the template itself.</summary>
+        public const string TemplateLayerName = "Template Entities";
+
         /// <summary>Layer names that should be visible by default, populated during loading.</summary>
-        public HashSet<string> DefaultEnabledLayers { get; } = ["No layer", "Entities", EditorEntityNode.LayerName, Scene.ParticlesLayerName, PhysicsDebugLayerName];
+        public HashSet<string> DefaultEnabledLayers { get; } = ["No layer", "Entities", Scene.ParticlesLayerName, PhysicsDebugLayerName];
 
         /// <summary>Names of info_camera_link entities found in the world.</summary>
         public List<string> CameraNames { get; } = [];
@@ -86,6 +89,12 @@ namespace ValveResourceFormat.Renderer.World
 
         /// <summary>The loaded navigation mesh, populated by <see cref="LoadNavigationMesh"/>.</summary>
         public NavMeshFile? NavMesh { get; set; }
+        /// <summary>The names of the navigation hulls in hull index order, populated by <see cref="LoadNavigationMesh"/>.</summary>
+        public string[] NavigationHullNames { get; set; } = [];
+        /// <summary>The loaded navigation space, null if it doesn't exist. Populated by <see cref="LoadNavigationSpace"/>.</summary>
+        public NavSpaceFile? NavSpace { get; set; }
+        /// <summary>The loaded navigation flow map, null if it doesn't exist. Populated by <see cref="LoadNavigationFlowMap"/>.</summary>
+        public NavFlowMapFile? NavFlowMap { get; set; }
         /// <summary>Baked bomb damage data for CS2, null if it doesn't exist. Populated by <see cref="LoadBombDamageData"/>.</summary>
         public BombDamage? BombDamage { get; set; }
 
@@ -111,6 +120,10 @@ namespace ValveResourceFormat.Renderer.World
         // What this spawn group puts in place of the markers in its entities' names
         private readonly EntityNameFixup nameFixup;
 
+        // Set when the entities spawn into a scene that already holds the geometry and collision of the map,
+        // as when they spawn again
+        private bool entitiesOnly;
+
         /// <summary>
         /// Loads a map by name, performing a full load of all world components.
         /// </summary>
@@ -121,7 +134,7 @@ namespace ValveResourceFormat.Renderer.World
         public static WorldLoader LoadMap(string mapResourceName, Scene scene, EntitySystem entitySystem, Matrix4x4? rootTransform = null)
             => LoadMap(mapResourceName, scene, entitySystem, rootTransform, LoadKind.Map, EntityNameFixup.None);
 
-        private static WorldLoader LoadMap(string mapResourceName, Scene scene, EntitySystem entitySystem, Matrix4x4? rootTransform, LoadKind loadKind, EntityNameFixup nameFixup)
+        private static WorldLoader LoadMap(string mapResourceName, Scene scene, EntitySystem entitySystem, Matrix4x4? rootTransform, LoadKind loadKind, EntityNameFixup nameFixup, bool entitiesOnly = false)
         {
             var renderContext = scene.RendererContext;
             Resource? mapResource = null;
@@ -143,7 +156,11 @@ namespace ValveResourceFormat.Renderer.World
             var worldPath = GetWorldNameFromMap(mapResourceName);
             var worldResource = renderContext.FileLoader.LoadFileCompiled(worldPath) ?? throw new FileNotFoundException($"Failed to load world file '{worldPath}'.");
 
-            var loader = new WorldLoader((WorldResource)worldResource.DataBlock!, scene, entitySystem, rootTransform, loadKind, nameFixup);
+            var loader = new WorldLoader((WorldResource)worldResource.DataBlock!, scene, entitySystem, rootTransform, loadKind, nameFixup)
+            {
+                entitiesOnly = entitiesOnly,
+            };
+
             loader.Load(mapResource.ExternalReferences);
             return loader;
         }
@@ -235,23 +252,19 @@ namespace ValveResourceFormat.Renderer.World
                         });
                     }
 
-                    if (resource is { ResourceType: ResourceType.EntityLump, DataBlock: EntityLump entityLump })
+                    if (resource is { ResourceType: ResourceType.EntityLump, DataBlock: EntityLump entityLump } && entitySystem.ToolVisuals is { } toolVisuals)
                     {
-                        HashSet<string> toolIcons = [];
+                        HashSet<string> toolResources = [];
                         foreach (var entity in entityLump.GetEntities())
                         {
                             var className = entity.GetStringProperty("classname");
                             if (className != null)
                             {
-                                var hammerEntity = HammerEntities.Get(className);
-                                if (hammerEntity?.Icons.Length > 0)
-                                {
-                                    toolIcons.UnionWith(hammerEntity.Icons);
-                                }
+                                toolResources.UnionWith(toolVisuals.GetResourcesToPreload(className));
                             }
                         }
 
-                        Parallel.ForEach(toolIcons, parallelOptions, file =>
+                        Parallel.ForEach(toolResources, parallelOptions, file =>
                         {
                             PreloadResource(file);
                         });
@@ -261,8 +274,8 @@ namespace ValveResourceFormat.Renderer.World
         }
 
         /// <summary>
-        /// Loads all world components: lighting, entities, world nodes, physics, visibility, bomb damage data, and navigation mesh.
-        /// Navigation mesh loading is parallelized with resource preloading when references are provided.
+        /// Loads all world components: lighting, entities, world nodes, physics, visibility, bomb damage data, navigation mesh, navigation space and navigation flow map.
+        /// Navigation file loading is parallelized with resource preloading when references are provided.
         /// </summary>
         /// <param name="mapResourceReferences">Optional external reference list from the map resource, used to preload assets in parallel.</param>
         public void Load(ResourceExtRefList? mapResourceReferences = null)
@@ -271,6 +284,8 @@ namespace ValveResourceFormat.Renderer.World
 
             // Non resource files not covered by ParallelPreloadResources
             var navMeshTask = ownsScene ? Task.Run(LoadNavigationMesh) : Task.CompletedTask;
+            var navSpaceTask = ownsScene ? Task.Run(LoadNavigationSpace) : Task.CompletedTask;
+            var navFlowMapTask = ownsScene ? Task.Run(LoadNavigationFlowMap) : Task.CompletedTask;
 
             ParallelPreloadResources(mapResourceReferences);
 
@@ -280,8 +295,12 @@ namespace ValveResourceFormat.Renderer.World
             }
 
             LoadEntities();
-            LoadWorldNodes();
-            LoadWorldPhysics();
+
+            if (!entitiesOnly)
+            {
+                LoadWorldNodes();
+                LoadWorldPhysics();
+            }
 
             if (ownsScene)
             {
@@ -290,6 +309,8 @@ namespace ValveResourceFormat.Renderer.World
             }
 
             navMeshTask.Wait();
+            navSpaceTask.Wait();
+            navFlowMapTask.Wait();
         }
 
         /// <summary>
@@ -344,6 +365,25 @@ namespace ValveResourceFormat.Renderer.World
                     scene.AllNodes.OfType<SceneLight>().ToList()
                 );
             }
+        }
+
+        /// <summary>
+        /// Spawns the world's entities again from its entity lumps, as they spawned when it loaded, once the
+        /// ones it spawned have been removed. The 3D sky and other spawn groups they place load again into
+        /// <see cref="SpawnGroups"/>.
+        /// </summary>
+        public void ReloadEntities()
+        {
+            Entities.Clear();
+            CameraNames.Clear();
+            CameraMatrices.Clear();
+            SkyCameras.Clear();
+            SpawnGroups.Clear();
+
+            // The geometry of the prefabs the entities place is in the scene already
+            entitiesOnly = true;
+
+            LoadEntities();
         }
 
         /// <summary>
@@ -594,7 +634,7 @@ namespace ValveResourceFormat.Renderer.World
                 try
                 {
                     // A point_template shares its layer with what it spawns
-                    var layerName = fromTemplate || classname == "point_template" ? EditorEntityNode.TemplateLayerName : originalLayerName;
+                    var layerName = fromTemplate || classname == "point_template" ? TemplateLayerName : originalLayerName;
 
                     var disabled = entity.GetBooleanProperty("startdisabled");
 
@@ -661,22 +701,27 @@ namespace ValveResourceFormat.Renderer.World
                 }
             }
 
-            // Once the whole lump has spawned, so a line can end at an entity authored after the one it starts at.
-            // Entities of a 3D sky or prefab loaded part way through draw their lines in that load.
+            if (entitySystem.ToolVisuals is not { } toolVisuals)
+            {
+                return;
+            }
+
+            // Once the whole lump has spawned, so a relation can reach an entity authored after the one it
+            // starts at. Entities of a 3D sky or prefab loaded part way through relate their own in that load.
             var lumpEntities = traversed.Select(static t => t.Entity).ToHashSet();
+            var spawnedHere = new List<BaseEntity>(lumpEntities.Count);
 
             for (var i = firstSpawned; i < entitySystem.Entities.Count; i++)
             {
                 var spawned = entitySystem.Entities[i];
 
-                if (spawned.Scene != scene || spawned.Data == null || !lumpEntities.Contains(spawned.Data))
+                if (spawned.Scene == scene && spawned.Data != null && lumpEntities.Contains(spawned.Data))
                 {
-                    continue;
+                    spawnedHere.Add(spawned);
                 }
-
-                CreateEntityConnectionLines(spawned);
-                CreateHelperLines(spawned);
             }
+
+            toolVisuals.AddEntityRelations(scene, spawnedHere);
         }
 
         /// <summary>
@@ -685,7 +730,6 @@ namespace ValveResourceFormat.Renderer.World
         /// </summary>
         private List<BaseEntity>? SpawnWorldLayer(InfoWorldLayer worldLayer)
         {
-            // The layer names the world it belongs to.
             // TODO: The engine finds any world loaded into the layer's world group by that name, such as a stage
             // loaded by info_spawngroup_load_unload. Supporting it needs a registry of loaded worlds that keeps
             // their loaders alive, and the layer's visibility toggled in the named world's scene too.
@@ -774,7 +818,7 @@ namespace ValveResourceFormat.Renderer.World
 
             LoadingProgress?.Report("Loading 3D sky…");
 
-            var skyLoader = LoadNestedMap(RendererContext, entitySystem, targetMapName, skyScene, reference, LoadKind.SpawnGroup, ChildNameFixup(skyboxReference), out var package);
+            var skyLoader = LoadNestedMap(RendererContext, entitySystem, targetMapName, skyScene, reference, LoadKind.SpawnGroup, ChildNameFixup(skyboxReference), entitiesOnly: false, out var package);
 
             if (currentLoadingPhase != null)
             {
@@ -825,7 +869,7 @@ namespace ValveResourceFormat.Renderer.World
                 return;
             }
 
-            var prefabLoader = LoadNestedMap(RendererContext, entitySystem, targetMapName, scene, prefab.RigidTransform, LoadKind.Prefab, ChildNameFixup(prefab), out var package);
+            var prefabLoader = LoadNestedMap(RendererContext, entitySystem, targetMapName, scene, prefab.RigidTransform, LoadKind.Prefab, ChildNameFixup(prefab), entitiesOnly, out var package);
 
             if (package != null)
             {
@@ -930,7 +974,7 @@ namespace ValveResourceFormat.Renderer.World
         }
 
         private static WorldLoader? LoadNestedMap(RendererContext rendererContext, EntitySystem entitySystem, string targetMapName,
-            Scene intoScene, Matrix4x4 transform, LoadKind loadKind, EntityNameFixup nameFixup, out Package? package)
+            Scene intoScene, Matrix4x4 transform, LoadKind loadKind, EntityNameFixup nameFixup, bool entitiesOnly, out Package? package)
         {
             var mapName = GetSpawnGroupMapName(targetMapName);
 
@@ -941,7 +985,7 @@ namespace ValveResourceFormat.Renderer.World
 
             try
             {
-                return LoadMap($"{mapName}.vmap", intoScene, entitySystem, transform, loadKind, nameFixup);
+                return LoadMap($"{mapName}.vmap", intoScene, entitySystem, transform, loadKind, nameFixup, entitiesOnly);
             }
             catch (FileNotFoundException e)
             {
@@ -1045,12 +1089,70 @@ namespace ValveResourceFormat.Renderer.World
                 {
                     NavMesh = new NavMeshFile();
                     NavMesh.Read(navFileStream);
+                    NavMesh.CustomData = null; // large object, drop it we don't use it
+                    NavigationHullNames = NavHullNames.Read(RendererContext.FileLoader, NavMesh.GenerationParams?.HullPresetName);
                     RendererContext.Logger.LogInformation("Navigation mesh loaded from '{NavFilePath}'", navFilePath);
                 }
             }
             catch (Exception e)
             {
                 RendererContext.Logger.LogError(e, "Couldn't load navigation mesh from '{NavFilePath}'", navFilePath);
+            }
+        }
+
+        /// <summary>
+        /// Loads the navigation space for this world. Populates <see cref="NavSpace"/>.
+        /// Skips loading if <see cref="NavSpace"/> is already set.
+        /// </summary>
+        public void LoadNavigationSpace()
+        {
+            if (NavSpace is not null)
+            {
+                return;
+            }
+
+            var navSpaceFilePath = Path.ChangeExtension(MapName, ".navspace");
+            try
+            {
+                using var navSpaceFileStream = RendererContext.FileLoader.GetFileStream(navSpaceFilePath);
+                if (navSpaceFileStream != null)
+                {
+                    NavSpace = new NavSpaceFile();
+                    NavSpace.Read(navSpaceFileStream);
+                    RendererContext.Logger.LogInformation("Navigation space loaded from '{NavSpaceFilePath}'", navSpaceFilePath);
+                }
+            }
+            catch (Exception e)
+            {
+                RendererContext.Logger.LogError(e, "Couldn't load navigation space from '{NavSpaceFilePath}'", navSpaceFilePath);
+            }
+        }
+
+        /// <summary>
+        /// Loads the navigation flow map for this world. Populates <see cref="NavFlowMap"/>.
+        /// Skips loading if <see cref="NavFlowMap"/> is already set.
+        /// </summary>
+        public void LoadNavigationFlowMap()
+        {
+            if (NavFlowMap is not null)
+            {
+                return;
+            }
+
+            var navFlowMapFilePath = Path.ChangeExtension(MapName, ".navflowmap");
+            try
+            {
+                using var navFlowMapFileStream = RendererContext.FileLoader.GetFileStream(navFlowMapFilePath);
+                if (navFlowMapFileStream != null)
+                {
+                    NavFlowMap = new NavFlowMapFile();
+                    NavFlowMap.Read(navFlowMapFileStream);
+                    RendererContext.Logger.LogInformation("Navigation flow map loaded from '{NavFlowMapFilePath}'", navFlowMapFilePath);
+                }
+            }
+            catch (Exception e)
+            {
+                RendererContext.Logger.LogError(e, "Couldn't load navigation flow map from '{NavFlowMapFilePath}'", navFlowMapFilePath);
             }
         }
 
@@ -1115,115 +1217,6 @@ namespace ValveResourceFormat.Renderer.World
             spawnCameraPriority = priority;
             SpawnCameraMatrix = spawnMatrix;
         }
-
-        /// <summary>
-        /// Draws the helper lines the entity's Hammer class declares, from the entity to the ones its
-        /// keyvalues name, as the editor shows them.
-        /// </summary>
-        private void CreateHelperLines(BaseEntity entity)
-        {
-            if (entity.SpawnData is not { } data || HammerEntities.Get(entity.Classname) is not { Lines.Length: > 0 } hammerEntity)
-            {
-                return;
-            }
-
-            var layerName = entity.LayerName == EditorEntityNode.TemplateLayerName ? EditorEntityNode.TemplateLayerName : EditorEntityNode.LayerName;
-
-            foreach (var line in hammerEntity.Lines)
-            {
-                if (data.GetStringProperty(line.StartValueKey) is not { } startValue
-                    || FindHelperLineEnd(line.StartKey, startValue) is not { } startEntity)
-                {
-                    continue;
-                }
-
-                var start = startEntity.Transform.Translation;
-                var end = entity.Transform.Translation;
-
-                if (line.EndKey != null && line.EndValueKey != null)
-                {
-                    if (data.GetStringProperty(line.EndValueKey) is not { } endValue
-                        || FindHelperLineEnd(line.EndKey, endValue) is not { } endEntity)
-                    {
-                        continue;
-                    }
-
-                    end = endEntity.Transform.Translation;
-                }
-
-                var origin = (start + end) / 2f;
-
-                var lineNode = new LineSceneNode(scene, start - origin, end - origin, line.Color, line.Color)
-                {
-                    LayerName = layerName,
-                    Transform = Matrix4x4.CreateTranslation(origin),
-                };
-
-                scene.Add(lineNode, true);
-            }
-        }
-
-        /// <summary>Draws a line from the entity to every entity its entity I/O connections reach.</summary>
-        private void CreateEntityConnectionLines(BaseEntity entity)
-        {
-            if (entity.Data?.Connections is not { } connections)
-            {
-                return;
-            }
-
-            var start = entity.Transform.Translation;
-            var alreadySeen = new HashSet<BaseEntity>(connections.Count);
-
-            foreach (var connection in connections)
-            {
-                var matched = false;
-
-                // The entity as the caller, so a connection aimed at !self reaches it
-                foreach (var target in entitySystem.FindTargets(EntitySystem.ConnectionTarget(connection, entity.NameFixup), caller: entity))
-                {
-                    // A 3D sky shares names with the map it is placed in
-                    if (target.Scene.WorldGroup != scene.WorldGroup)
-                    {
-                        continue;
-                    }
-
-                    matched = true;
-
-                    if (!alreadySeen.Add(target))
-                    {
-                        continue;
-                    }
-
-                    var end = target.Transform.Translation;
-                    var origin = (start + end) / 2f;
-
-                    var lineNode = new LineSceneNode(scene, start - origin, end - origin, new Color32(0, 255, 0), new Color32(255, 0, 0))
-                    {
-                        LayerName = "Entity Connections",
-                        Transform = Matrix4x4.CreateTranslation(origin),
-#if DEBUG
-                        Name = $"Line from {entity.Data.GetStringProperty("hammeruniqueid")} to {target.Data?.GetStringProperty("hammeruniqueid")}"
-#endif
-                    };
-
-                    scene.Add(lineNode, true);
-                }
-
-                if (!matched)
-                {
-                    RendererContext.Logger.LogDebug("Skipping entity i/o output {TargetName}: no entity matches it", connection.TargetName);
-                }
-            }
-        }
-
-        /// <summary>
-        /// Finds the entity a helper line ends at. Lines address entities by name; the few Hammer classes that
-        /// address AI nodes by <c>nodeid</c> instead do not appear in compiled maps.
-        /// </summary>
-        private BaseEntity? FindHelperLineEnd(string key, string name)
-            => key.Equals("targetname", StringComparison.OrdinalIgnoreCase)
-                ? entitySystem.FindAllByTargetNameInWorldGroup(name, scene).FirstOrDefault()
-                : null;
 
         /// <summary>
         /// Returns the path to the world resource (<c>.vwrld</c>) for a given map name.

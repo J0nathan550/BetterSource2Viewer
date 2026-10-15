@@ -17,6 +17,7 @@ namespace ValveResourceFormat.ResourceTypes
     /// <summary>
     /// Represents a model resource containing meshes, skeleton, and animations.
     /// </summary>
+    /// <seealso href="https://s2v.app/SchemaExplorer/cs2/modellib/PermModelData_t">PermModelData_t</seealso>
     public class Model : KeyValuesOrNTRO
     {
         /// <summary>
@@ -113,11 +114,12 @@ namespace ValveResourceFormat.ResourceTypes
             }
         }
 
-        private List<Animation>? CachedAnimations;
+        private List<AnimationBase>? CachedAnimations;
         private KVObject? cachedKeyValues;
         private Skeleton? cachedSkeleton;
         private FlexController[]? cachedFlexControllers;
         private EmbeddedSequenceGroup? cachedSequenceGroup;
+        private SequenceAnimation[]? cachedEmbeddedAnimations;
         private List<ModelMesh>? cachedEmbeddedMeshes;
         private ModelLodInfo? cachedLodInfo;
         private BoneConstraint[]? cachedBoneConstraints;
@@ -173,8 +175,7 @@ namespace ValveResourceFormat.ResourceTypes
         /// <param name="morph">The morph data whose flex controllers should be reused.</param>
         public void SetExternalMorphData(Morph? morph)
         {
-            // The model's own morph block wins; a model whose morph set sits in a separate vmorf takes
-            // the one its meshes carry.
+            // The model's own morph block wins; otherwise use the morph set its meshes carry (separate vmorf).
             if (FlexControllers.Length == 0)
             {
                 cachedFlexControllers = morph?.FlexControllers;
@@ -396,7 +397,8 @@ namespace ValveResourceFormat.ResourceTypes
         /// Gets embedded animations from the model.
         /// </summary>
         /// <returns>Enumerable of animations.</returns>
-        public IEnumerable<SequenceAnimation> GetEmbeddedAnimations() => GetEmbeddedAnimations(Skeleton, FlexControllers);
+        public IEnumerable<SequenceAnimation> GetEmbeddedAnimations()
+            => cachedEmbeddedAnimations ??= [.. GetEmbeddedAnimations(Skeleton, FlexControllers)];
 
         /// <summary>
         /// Gets embedded animations from the model, with remap tables built for the provided skeleton and flex controllers.
@@ -410,12 +412,13 @@ namespace ValveResourceFormat.ResourceTypes
                 return [];
             }
 
-            if (group.SequenceData is { } sequenceData)
-            {
-                return SequenceAnimation.FromSequenceData(sequenceData, animationData, decodeKey, skeleton, flexControllers);
-            }
+            var animations = group.SequenceData is { } sequenceData
+                ? SequenceAnimation.FromSequenceData(sequenceData, animationData, decodeKey, skeleton, flexControllers)
+                : SequenceAnimation.FromData(animationData, decodeKey, skeleton, flexControllers);
 
-            return SequenceAnimation.FromData(animationData, decodeKey, skeleton, flexControllers);
+            group.ReleaseDataBlocks();
+
+            return animations;
         }
 
         /// <summary>
@@ -423,7 +426,7 @@ namespace ValveResourceFormat.ResourceTypes
         /// </summary>
         /// <param name="fileLoader">The file loader to use.</param>
         /// <returns>Enumerable of animations.</returns>
-        public IEnumerable<Animation> GetReferencedAnimations(IFileLoader fileLoader)
+        public IEnumerable<AnimationBase> GetReferencedAnimations(IFileLoader fileLoader)
         {
             var refAnimModels = Data.GetArray<string>("m_refAnimIncludeModels");
             if (refAnimModels == null || refAnimModels.Length == 0)
@@ -431,7 +434,7 @@ namespace ValveResourceFormat.ResourceTypes
                 return [];
             }
 
-            var allAnims = new List<Animation>();
+            var allAnims = new List<AnimationBase>();
             foreach (var modelName in refAnimModels)
             {
                 if (string.IsNullOrEmpty(modelName))
@@ -498,23 +501,38 @@ namespace ValveResourceFormat.ResourceTypes
         /// </summary>
         /// <param name="fileLoader">The file loader to use.</param>
         /// <returns>Enumerable of all animations.</returns>
-        public IEnumerable<Animation> GetAllAnimations(IFileLoader fileLoader)
+        public IEnumerable<AnimationBase> GetAllAnimations(IFileLoader fileLoader)
+            => GetAllAnimations(fileLoader, includeAnimationGraphClips: true);
+
+        /// <summary>
+        /// Gets all animations from this model including embedded, referenced, and animation groups.
+        /// </summary>
+        /// <param name="fileLoader">The file loader to use.</param>
+        /// <param name="includeAnimationGraphClips">Whether to load the clips of the model's animation graphs too.</param>
+        /// <returns>Enumerable of all animations.</returns>
+        public IEnumerable<AnimationBase> GetAllAnimations(IFileLoader fileLoader, bool includeAnimationGraphClips)
         {
-            if (CachedAnimations != null)
+            if (CachedAnimations != null && includeAnimationGraphClips)
             {
                 return CachedAnimations;
             }
 
-            var animations = GetEmbeddedAnimations().ToList<Animation>();
+            var animations = GetEmbeddedAnimations().ToList<AnimationBase>();
 
             animations.AddRange(GetAnimationGroupAnimations(fileLoader));
 
-            // Animation graph (AG2) clips are part of the model's animation set.
-            foreach (var clipName in IO.AnimationGraphLoader.GetClipNames(this, fileLoader))
+            if (includeAnimationGraphClips)
             {
-                if (fileLoader.LoadFileCompiled(clipName)?.DataBlock is ModelAnimation2.AnimationClip clip)
+                // Animation graph (AG2) clips are part of the model's animation set.
+                var clipNames = IO.AnimationGraphLoader.GetClipNames(this, fileLoader);
+                var clips = IO.AnimationGraphLoader.LoadClips(clipNames, fileLoader);
+
+                foreach (var clipName in clipNames)
                 {
-                    animations.Add(new ClipAnimation(clip));
+                    if (clips.TryGetValue(clipName, out var clip))
+                    {
+                        animations.Add(clip);
+                    }
                 }
             }
 
@@ -544,9 +562,12 @@ namespace ValveResourceFormat.ResourceTypes
                 sequenceAnimation.IsAdditive |= additiveSequences.Contains(sequenceName);
             }
 
-            CachedAnimations = animations;
+            if (includeAnimationGraphClips)
+            {
+                CachedAnimations = animations;
+            }
 
-            return CachedAnimations;
+            return animations;
         }
 
         /// <summary>

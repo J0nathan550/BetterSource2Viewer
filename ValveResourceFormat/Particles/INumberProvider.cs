@@ -5,6 +5,7 @@ namespace ValveResourceFormat.Particles
     /// <summary>
     /// Provides a scalar float value that may vary per particle or per frame.
     /// </summary>
+    /// <seealso href="https://s2v.app/SchemaExplorer/cs2/particleslib/CParticleFloatInput">CParticleFloatInput</seealso>
     internal interface INumberProvider
     {
         /// <summary>
@@ -68,13 +69,12 @@ namespace ValveResourceFormat.Particles
 
         /// <param name="parse">The input block.</param>
         /// <param name="isBiased">Whether the draw goes through a bias curve.</param>
-        /// <param name="defaultMax">The upper end of the range when the block omits it.</param>
         /// <param name="defaultMode">The random mode when the block omits it.</param>
-        public RandomNumberProvider(ParticleDefinitionParser parse, bool isBiased = false, float defaultMax = 0f,
+        public RandomNumberProvider(ParticleDefinitionParser parse, bool isBiased = false,
             ParticleFloatRandomMode defaultMode = ParticleFloatRandomMode.PF_RANDOM_MODE_CONSTANT)
         {
             minRange = parse.Float("m_flRandomMin");
-            maxRange = parse.Float("m_flRandomMax", defaultMax);
+            maxRange = parse.Float("m_flRandomMax", 1f);
             hasRandomSignFlip = parse.Boolean("m_bHasRandomSignFlip", hasRandomSignFlip);
             randomMode = parse.Enum("m_nRandomMode", defaultMode);
 
@@ -271,14 +271,52 @@ namespace ValveResourceFormat.Particles
         public PerParticleCountNormalizedNumberProvider(ParticleDefinitionParser parse) { attributeMapping = new AttributeMapping(parse); }
         public float NextNumber(ref Particle particle, ParticleSystemState renderState)
         {
-            // Mapping input ranges for this provider type are authored in normalized 0-1 space.
-            // Index is the slot in the alive list; UniqueParticleId is a lifetime spawn counter and would exceed the count.
-            // From behavior version 12 the last live particle reads 1 instead of count/(count+1).
+            // Mapping input ranges are normalized 0-1. Index is the alive-list slot; UniqueParticleId is a lifetime counter
+            // that would exceed the count. From behavior version 12 the last live particle reads 1, not count/(count+1).
             var divisor = renderState.Data?.BehaviorVersion >= 12
                 ? Math.Max(renderState.ParticleCount - 1, 1)
                 : Math.Max(renderState.ParticleCount, 1);
             return attributeMapping.ApplyMapping(particle.Index / (float)divisor);
         }
+
+        public float NextNumber(ParticleSystemState renderState) => 0f;
+    }
+
+    /// <summary>
+    /// PF_TYPE_PARTICLE_ROPE_SEGMENT. The segment position held in X of <see cref="Particle.RopeSegmentData"/>,
+    /// or its distance to the segment count in Z when the order is reversed.
+    /// </summary>
+    class RopeSegmentNumberProvider : INumberProvider
+    {
+        private readonly AttributeMapping attributeMapping;
+        private readonly bool reverseOrder;
+
+        public RopeSegmentNumberProvider(ParticleDefinitionParser parse)
+        {
+            attributeMapping = new AttributeMapping(parse);
+            reverseOrder = parse.Boolean("m_bReverseOrder");
+        }
+
+        public float NextNumber(ref Particle particle, ParticleSystemState renderState)
+        {
+            var data = particle.RopeSegmentData;
+            return attributeMapping.ApplyMapping(reverseOrder ? data.Z - data.X : data.X);
+        }
+
+        public float NextNumber(ParticleSystemState renderState) => 0f;
+    }
+
+    /// <summary>PF_TYPE_PARTICLE_ROPE_SEGMENT_NORMALIZED. Y of <see cref="Particle.RopeSegmentData"/>.</summary>
+    class RopeSegmentNormalizedNumberProvider : INumberProvider
+    {
+        private readonly AttributeMapping attributeMapping;
+
+        public RopeSegmentNormalizedNumberProvider(ParticleDefinitionParser parse)
+        {
+            attributeMapping = new AttributeMapping(parse);
+        }
+
+        public float NextNumber(ref Particle particle, ParticleSystemState renderState) => attributeMapping.ApplyMapping(particle.RopeSegmentData.Y);
 
         public float NextNumber(ParticleSystemState renderState) => 0f;
     }
@@ -435,7 +473,6 @@ namespace ValveResourceFormat.Particles
             => attributeMapping.ApplyMapping(snapshot.Count(renderState));
     }
 
-    // Distance from the particle to a control point
     class ControlPointDistanceNumberProvider : INumberProvider
     {
         private readonly AttributeMapping attributeMapping;

@@ -12,9 +12,8 @@ namespace ValveResourceFormat.Renderer.Particles.Renderers
     /// positions, with configurable length, fade-in, texture scaling, and blend modes.
     /// </summary>
     /// <remarks>
-    /// Trails are sprites that stretch based on their speed over time. Traditional use cases
-    /// include bullet tracers and sparks; they are also useful when particles need to be oriented
-    /// in 3D space, which regular sprites handle poorly.
+    /// Trails are sprites stretched by speed over time. Typical uses are bullet tracers and sparks,
+    /// and particles that need 3D orientation, which regular sprites handle poorly.
     /// </remarks>
     /// <seealso href="https://s2v.app/SchemaExplorer/cs2/particles/C_OP_RenderTrails">C_OP_RenderTrails</seealso>
     internal class RenderTrails : ParticleFunctionRenderer
@@ -26,9 +25,7 @@ namespace ValveResourceFormat.Renderer.Particles.Renderers
         // The shared quad index buffer covers 65532 indices, six per quad
         private const int MaxQuads = 65532 / 6;
 
-        // Quad corners in ring order, matching the winding of the shared quad index buffer
         private readonly Shader shader;
-        private readonly RendererContext rendererContext;
         private readonly int vaoHandle;
         private readonly int vertexBufferHandle;
 
@@ -69,8 +66,6 @@ namespace ValveResourceFormat.Renderer.Particles.Renderers
 
         public RenderTrails(ParticleDefinitionParser parse, RendererContext rendererContext, Scene scene) : base(parse, scene)
         {
-            this.rendererContext = rendererContext;
-
             blendMode = parse.Enum<ParticleBlendMode>("m_nOutputBlendMode", blendMode);
 
             (layers, var textureName) = ParticleTextureLayer.Build(parse, rendererContext, DefaultTextureName, srgbRead: OutputIsColor);
@@ -156,8 +151,7 @@ namespace ValveResourceFormat.Renderer.Particles.Renderers
         /// </summary>
         private static VertexInputLayout BuildInstanceLayout(int layerCount)
         {
-            // In buffer order. Each axis carries one end's half width in w, the way Valve's own trail
-            // signature packs a radius alongside each of its control points.
+            // In buffer order. Each axis carries one end's half width in w.
             var elements = new List<VertexAttribute>
             {
                 new(VertexSlot.Position, DXGI_FORMAT.R32G32B32_FLOAT),
@@ -198,9 +192,9 @@ namespace ValveResourceFormat.Renderer.Particles.Renderers
             var headColor = headColorScale.NextVector(systemState);
             var tailColor = tailColorScale.NextVector(systemState);
 
-            // The moved distance is converted back to a velocity (distance / dt) before scaling by
-            // the trail-length attribute. The division only applies when the previous point comes
-            // from the Verlet pair, and the operator can opt out of it entirely.
+            // Converts the moved distance to a velocity (distance / dt) before scaling by the trail-length
+            // attribute. The division only applies when the previous point is the Verlet one, and the
+            // operator can opt out of it.
             var usesVerletDelta = prevPositionSource == ParticleField.PositionPrevious;
             var oneOverDt = ignoreDeltaTime || !usesVerletDelta || particleBag.CurrentFrameTime == 0f
                 ? 1f
@@ -223,16 +217,28 @@ namespace ValveResourceFormat.Renderer.Particles.Renderers
             // reused across renderers.
             var instanceFloats = instanceLayout.Stride / sizeof(float);
 
+            var sorted = SortsByDistance(blendMode) && particleBag.Count > 1;
+
             using (var vertexBuffer = new RentedBuffer<float>(particleBag.Count * instanceFloats))
+            using (var drawOrder = new RentedBuffer<ulong>(sorted ? particleBag.Count : 0))
             {
                 var instances = vertexBuffer.Span;
+                var current = particleBag.Current;
 
-                foreach (ref var particle in particleBag.Current)
+                var order = drawOrder.Span;
+
+                if (sorted)
                 {
+                    SortBackToFront(current, camera.Location, order);
+                }
+
+                for (var n = 0; n < current.Length; n++)
+                {
+                    ref var particle = ref current[sorted ? (int)(uint)order[n] : n];
                     var position = particle.Position;
                     var previousPosition = particle.GetVector(prevPositionSource);
-                    // A particle that has not moved has no direction to run in, and the engine collapses
-                    // its four control points onto the position rather than streaking along a fixed axis
+                    // A particle that has not moved has no direction to run in, and its four control points
+                    // collapse onto the position rather than streaking along a fixed axis
                     var difference = previousPosition - position;
 
                     if (difference == Vector3.Zero)
@@ -244,12 +250,9 @@ namespace ValveResourceFormat.Renderer.Particles.Renderers
 
                     var length = lengthScale * particle.TrailLength * difference.Length() * oneOverDt;
 
+                    // A particle drawn before its birth, with a negative age, gets the minimum length
                     length *= MathF.Min(1f, particle.Age / MathF.Max(lengthFadeInTime, 1e-9f));
-
-                    // The engine clamps the full extent of the trail, and it clamps unconditionally: an
-                    // effect that authors m_flLengthScale 0 alongside a minimum length is asking for a
-                    // fixed streak that does not track speed, so a zero raw length still draws.
-                    length = MathUtils.Clamp(length, minLength, maxLength);
+                    length = MathF.Max(minLength, MathF.Min(maxLength, length));
 
                     if (length == 0f)
                     {
@@ -320,7 +323,7 @@ namespace ValveResourceFormat.Renderer.Particles.Renderers
                     var halfWidth = radius;
                     var halfLength = length * 0.5f;
 
-                    // The engine slides the trail along the motion axis by m_flForwardShift lengths;
+                    // The trail slides along the motion axis by m_flForwardShift lengths;
                     // direction runs backwards along travel here, so the shift subtracts
                     var center = position + (direction * (length * (0.5f - forwardShift)));
 
@@ -349,7 +352,7 @@ namespace ValveResourceFormat.Renderer.Particles.Renderers
 
                         var spriteSheetData = layers[layer].Texture.SpriteSheetData;
                         var sequence = spriteSheetData != null && spriteSheetData.Sequences.Length > 0
-                            ? spriteSheetData.Sequences[particle.SequenceNumber % spriteSheetData.Sequences.Length]
+                            ? spriteSheetData.Sequences[(uint)particle.SequenceNumber < (uint)spriteSheetData.Sequences.Length ? particle.SequenceNumber : 0]
                             : null;
 
                         if (sequence is { Frames.Length: > 0 })
@@ -449,7 +452,7 @@ namespace ValveResourceFormat.Renderer.Particles.Renderers
                 return;
             }
 
-            using var _ = SpritecardStateScope(GraphicsContext.RenderState, blendMode);
+            using var _ = SpritecardStateScope(blendMode);
 
             shader.Use();
             VertexArray.Bind(vaoHandle, shader);

@@ -1,5 +1,3 @@
-using ValveResourceFormat.Utils;
-
 namespace ValveResourceFormat.Particles.Initializers
 {
     /// <summary>
@@ -8,6 +6,7 @@ namespace ValveResourceFormat.Particles.Initializers
     /// spherical distribution, and a local coordinate system speed adds a directional component to
     /// the velocity.
     /// </summary>
+    /// <seealso href="https://s2v.app/SchemaExplorer/cs2/particles/C_INIT_CreateWithinSphereTransform">C_INIT_CreateWithinSphereTransform</seealso>
     class CreateWithinSphere : ParticleFunctionInitializer
     {
         /// <summary>Transform the sphere is centred on, and whose rotation local coordinates use.</summary>
@@ -52,9 +51,6 @@ namespace ValveResourceFormat.Particles.Initializers
         /// <summary>Whether the spawn offset is rotated by the transform.</summary>
         protected readonly bool localCoords;
 
-        /// <summary>Control point supplying per-axis scales. Parsed, but not applied.</summary>
-        protected readonly int scaleCP = -1;
-
         /// <summary>Attribute the spawn position is written to.</summary>
         protected readonly ParticleField outputField = ParticleField.Position;
 
@@ -74,7 +70,6 @@ namespace ValveResourceFormat.Particles.Initializers
             distanceBias = parse.VectorProvider("m_vecDistanceBias", distanceBias);
             distanceBiasAbs = parse.Vector3("m_vecDistanceBiasAbs", distanceBiasAbs);
             localCoords = parse.Boolean("m_bLocalCoords", localCoords);
-            scaleCP = parse.Int32("m_nScaleCP", scaleCP);
             outputField = parse.ParticleField("m_nFieldOutput", outputField);
             velocityField = parse.ParticleField("m_nFieldVelocity", velocityField);
         }

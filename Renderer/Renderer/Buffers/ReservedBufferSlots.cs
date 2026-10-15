@@ -21,13 +21,11 @@ public enum ReservedBufferSlots
     FrustumPlanes = 4,
     /// <summary>Shared constants for the tile and depth bin cull passes.</summary>
     CullParams = 5,
-    /// <summary>Per scene cull mask layout read by the shading passes.</summary>
-    LightCull = 6,
     /// <summary>Packed material properties.</summary>
     Globals = 7,
 
-    // ssbo: fixed slots are for buffers that stay bound across draws. Everything else takes a BufferSlotN
-    // and binds it right before its dispatch or draw, so different passes can share a number.
+    // ssbo: fixed slots stay bound across draws. Others bind a BufferSlotN just before their dispatch
+    // or draw, so different passes can share a number.
 
     /// <summary>Per draw data read at the base instance SSBO slot.</summary>
     Instances = 0,
@@ -76,6 +74,10 @@ public enum ReservedBufferSlots
     CompactedCounts = BufferSlot9,
     /// <summary>Meshlet index of each aggregate indirect draw command SSBO slot.</summary>
     AggregateCommandMeshlets = BufferSlot14,
+    /// <summary>Projected decal instances SSBO slot.</summary>
+    ProjectedDecals = BufferSlot6,
+    /// <summary>Projected decal materials SSBO slot.</summary>
+    ProjectedDecalMaterials = BufferSlot7,
 
     /// <summary>Guaranteed minimum binding point count in OpenGL 4.6.</summary>
     Max = 8,

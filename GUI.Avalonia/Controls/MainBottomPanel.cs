@@ -78,7 +78,7 @@ sealed class MainBottomPanel : Border
         }
 
         updateButton.Content = "Update Available";
-        updateButton.IsVisible = Settings.Config.Update.CheckAutomatically && Settings.Config.Update.UpdateAvailable;
+        updateButton.IsVisible = Settings.Config.Update.CheckAutomatically && UpdateChecker.IsUpdateAvailable;
     }
 
     /// <summary>
@@ -88,7 +88,7 @@ sealed class MainBottomPanel : Border
     {
         RefreshUpdateState();
 
-        if (updateButton.IsVisible || UpdateChecker.NewerDevBuild == null)
+        if (updateButton.IsVisible || UpdateChecker.GetUpdateStatus() != UpdateChecker.UpdateStatus.NewerDev)
         {
             return;
         }

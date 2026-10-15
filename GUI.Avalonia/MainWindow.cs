@@ -942,7 +942,7 @@ namespace GUI
 
             try
             {
-                await ExportFile.ExtractFileFromStream(Path.GetFileName(exportData.VrfGuiContext.FileName), fileStream, exportData.VrfGuiContext, decompile).ConfigureAwait(true);
+                await ExportFile.ExtractFileFromStream(Path.GetFileName(exportData.VrfGuiContext.FileName), fileStream, exportData.VrfGuiContext, decompile, exportData.VrfGuiContext.DisplayPath).ConfigureAwait(true);
                 fileStream = null; // ExtractFileFromStream disposes the stream when done
             }
             finally

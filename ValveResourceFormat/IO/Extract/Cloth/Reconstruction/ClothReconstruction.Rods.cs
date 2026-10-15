@@ -104,6 +104,9 @@ namespace ValveResourceFormat.IO
             return generated;
         }
 
+        /// <summary>Gets the node pairs <paramref name="chains"/> regenerate at least one rod on.</summary>
+        internal IEnumerable<(int, int)> ChainGeneratedPairs(List<BoneChain> chains) => ChainGeneratedSpans(chains).Keys;
+
         /// <summary>
         /// Gets the two-corner source elements between chain joints or <c>$cc</c> ring nodes that the chains do not span,
         /// with how many rod copies each one has to declare.
@@ -282,7 +285,7 @@ namespace ValveResourceFormat.IO
         }
 
         /// <summary>
-        /// Gets whether a bounded rod spans a parent-child link of <paramref name="chain"/>.
+        /// Gets whether a bounded or animated rod spans a parent-child link of <paramref name="chain"/>.
         /// </summary>
         internal bool HasChainRods(BoneChain chain)
         {
@@ -293,17 +296,12 @@ namespace ValveResourceFormat.IO
                 .Select(static joint => (joint.ParentNode, joint.Node))
                 .ToHashSet();
 
-            foreach (var rod in Index.Rods)
-            {
-                if (rod.MaxDist < UnboundedRodDistance
-                    && groupOf.TryGetValue(rod.NodeA, out var a) && groupOf.TryGetValue(rod.NodeB, out var b)
-                    && (links.Contains((a, b)) || links.Contains((b, a))))
-                {
-                    return true;
-                }
-            }
+            bool SpansLink(int nodeA, int nodeB)
+                => groupOf.TryGetValue(nodeA, out var a) && groupOf.TryGetValue(nodeB, out var b)
+                    && (links.Contains((a, b)) || links.Contains((b, a)));
 
-            return false;
+            return Index.Rods.Any(rod => rod.MaxDist < UnboundedRodDistance && SpansLink(rod.NodeA, rod.NodeB))
+                || Index.AnimRods.Any(rod => SpansLink(rod.NodeA, rod.NodeB));
         }
 
         /// <summary>

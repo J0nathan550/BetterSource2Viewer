@@ -1,7 +1,5 @@
 using System.Linq;
-using System.Runtime.InteropServices;
 using ValveKeyValue;
-using ValveResourceFormat.ResourceTypes.ModelAnimation.SegmentDecoders;
 using ValveResourceFormat.ResourceTypes.ModelFlex;
 using ValveResourceFormat.Serialization.KeyValues;
 
@@ -10,7 +8,9 @@ namespace ValveResourceFormat.ResourceTypes.ModelAnimation
     /// <summary>
     /// Represents a sequence-based model animation with frame data, events, and movement information.
     /// </summary>
-    public sealed class SequenceAnimation : Animation
+    /// <seealso href="https://s2v.app/SchemaExplorer/cs2/animationsystem/CAnimDesc">CAnimDesc</seealso>
+    /// <seealso href="https://s2v.app/SchemaExplorer/cs2/animationsystem/CSeqS1SeqDesc">CSeqS1SeqDesc</seealso>
+    public sealed class SequenceAnimation : AnimationBase
     {
         /// <summary>
         /// Gets a value indicating whether the animation loops.
@@ -49,13 +49,13 @@ namespace ValveResourceFormat.ResourceTypes.ModelAnimation
         public bool Autoplay { get; init; }
 
         private AnimationFrameBlock[] FrameBlocks { get; } = [];
-        private AnimationSegmentDecoder?[] SegmentArray { get; } = [];
+        private readonly AnimationSegmentTable segments;
 
         private bool? hasFlexData;
 
         /// <inheritdoc/>
         public override bool HasFlexData => hasFlexData ??=
-            Array.Exists(SegmentArray, segment => segment?.ChannelAttribute == AnimationChannelAttribute.Data);
+            GetOwnSegments().Any(static segment => segment.ChannelAttribute == AnimationChannelAttribute.Data);
 
         /// <summary>
         /// Gets the movement data for this animation.
@@ -129,11 +129,21 @@ namespace ValveResourceFormat.ResourceTypes.ModelAnimation
         private static AnimationLocalHierarchy[] GetLocalHierarchy(KVObject? animDesc)
             => animDesc?.GetArray("m_hierarchyArray")?.Select(static x => new AnimationLocalHierarchy(x)).ToArray() ?? [];
 
-        private SequenceAnimation(KVObject animDesc, AnimationSegmentDecoder?[] segmentArray)
+        private static (int FrameCount, AnimationFrameBlock[] FrameBlocks) GetFrameData(KVObject animDesc)
+        {
+            // Older animations store the frame data directly on the description
+            var pData = animDesc.GetSubCollection("m_pData");
+            var frameCount = pData?.GetInt32Property("m_nFrames") ?? animDesc.GetInt32Property("numframes");
+            var frameBlocks = (pData ?? animDesc).GetArray("m_frameblockArray").Select(static x => new AnimationFrameBlock(x)).ToArray();
+
+            return (frameCount, frameBlocks);
+        }
+
+        private SequenceAnimation(KVObject animDesc, AnimationSegmentTable segments)
         {
             Name = animDesc.GetStringProperty("m_name");
             Fps = animDesc.GetFloatProperty("fps");
-            SegmentArray = segmentArray;
+            this.segments = segments;
 
             var flags = animDesc.GetSubCollection("m_flags");
             IsLooping = flags.GetBooleanProperty("m_bLooping");
@@ -143,15 +153,7 @@ namespace ValveResourceFormat.ResourceTypes.ModelAnimation
             Worldspace = flags.GetBooleanProperty("m_bLegacyWorldspace");
             IsAdditive = Delta || AnimGraphAdditive;
 
-            var pData = animDesc.GetSubCollection("m_pData");
-            FrameCount = pData.GetInt32Property("m_nFrames");
-
-            var frameBlockArray = pData.GetArray("m_frameblockArray");
-            FrameBlocks = new AnimationFrameBlock[frameBlockArray.Count];
-            for (var i = 0; i < frameBlockArray.Count; i++)
-            {
-                FrameBlocks[i] = new AnimationFrameBlock(frameBlockArray[i]);
-            }
+            (FrameCount, FrameBlocks) = GetFrameData(animDesc);
 
             var movementArray = animDesc.GetArray("m_movementArray");
             Movements = new AnimationMovement[movementArray.Count];
@@ -170,8 +172,10 @@ namespace ValveResourceFormat.ResourceTypes.ModelAnimation
 
             LocalHierarchy = GetLocalHierarchy(animDesc);
 
-            var sequenceParams = animDesc.GetSubCollection("m_sequenceParams");
-            SequenceParams = new AnimationSequenceParams(sequenceParams);
+            if (animDesc.GetSubCollection("m_sequenceParams") is { } sequenceParams)
+            {
+                SequenceParams = new AnimationSequenceParams(sequenceParams);
+            }
 
             FromSequence = false;
         }
@@ -179,7 +183,7 @@ namespace ValveResourceFormat.ResourceTypes.ModelAnimation
         /// <summary>
         /// Constructor for creating animation from sequence descriptor (ASEQ) and animation data (ANIM).
         /// </summary>
-        private SequenceAnimation(KVObject seqDesc, KVObject? animDesc, AnimationSegmentDecoder?[] segmentArray,
+        private SequenceAnimation(KVObject seqDesc, KVObject? animDesc, AnimationSegmentTable segments,
             string[] sequenceNameArray, string[] boneMaskNames, string[] poseParamNames)
         {
             // Name and metadata from sequence descriptor
@@ -210,7 +214,7 @@ namespace ValveResourceFormat.ResourceTypes.ModelAnimation
             var transition = seqDesc.GetSubCollection("m_transition");
             SequenceParams = new AnimationSequenceParams(transition);
 
-            SegmentArray = segmentArray;
+            this.segments = segments;
             Movements = [];
             Events = [];
 
@@ -218,15 +222,7 @@ namespace ValveResourceFormat.ResourceTypes.ModelAnimation
             {
                 Fps = animDesc.GetFloatProperty("fps");
 
-                var pData = animDesc.GetSubCollection("m_pData");
-                FrameCount = pData.GetInt32Property("m_nFrames");
-
-                var frameBlockArray = pData.GetArray("m_frameblockArray");
-                FrameBlocks = new AnimationFrameBlock[frameBlockArray.Count];
-                for (var i = 0; i < frameBlockArray.Count; i++)
-                {
-                    FrameBlocks[i] = new AnimationFrameBlock(frameBlockArray[i]);
-                }
+                (FrameCount, FrameBlocks) = GetFrameData(animDesc);
 
                 var movementArray = animDesc.GetArray("m_movementArray");
                 Movements = new AnimationMovement[movementArray.Count];
@@ -297,115 +293,6 @@ namespace ValveResourceFormat.ResourceTypes.ModelAnimation
         }
 
         /// <summary>
-        /// Builds animation segment decoders from animation data and decode key.
-        /// </summary>
-        private static AnimationSegmentDecoder?[] BuildSegmentArray(
-            KVObject animationData,
-            KVObject decodeKey,
-            Skeleton skeleton,
-            FlexController[] flexControllers)
-        {
-            var decoderArrayKV = animationData.GetArray("m_decoderArray");
-            var decoderArray = new string[decoderArrayKV.Count];
-            for (var i = 0; i < decoderArrayKV.Count; i++)
-            {
-                decoderArray[i] = decoderArrayKV[i].GetStringProperty("m_szName");
-            }
-
-            var userArrayKV = decodeKey.GetArray("m_userArray");
-            var userNames = new string[userArrayKV?.Count ?? 0];
-            for (var i = 0; i < userNames.Length; i++)
-            {
-                userNames[i] = userArrayKV![i].GetStringProperty("m_name");
-            }
-
-            var dataChannelArrayKV = decodeKey.GetArray("m_dataChannelArray");
-            var dataChannelArray = new AnimationDataChannel[dataChannelArrayKV.Count];
-            for (var i = 0; i < dataChannelArrayKV.Count; i++)
-            {
-                dataChannelArray[i] = new AnimationDataChannel(skeleton, flexControllers, userNames, dataChannelArrayKV[i]);
-            }
-
-            HashSet<string>? unhandledDecoders = null;
-
-            var segmentArrayKV = animationData.GetArray("m_segmentArray");
-            var segmentArray = new AnimationSegmentDecoder?[segmentArrayKV.Count];
-            for (var i = 0; i < segmentArrayKV.Count; i++)
-            {
-                var segmentKV = segmentArrayKV[i];
-                var container = segmentKV.GetArray<byte>("m_container");
-                var containerSpan = container.AsSpan();
-                var localChannel = dataChannelArray[segmentKV.GetInt32Property("m_nLocalChannel")];
-
-                // Read header
-                var decoder = decoderArray[BitConverter.ToInt16(containerSpan[0..2])];
-                //var cardinality = BitConverter.ToInt16(containerSpan[2..4]);
-                var numElements = BitConverter.ToInt16(containerSpan[4..6]);
-                //var totalLength = BitConverter.ToInt16(containerSpan[6..8]);
-
-                // Read bone list
-                var end = 8 + numElements * 2;
-                var elements = MemoryMarshal.Cast<byte, short>(containerSpan[8..end]);
-                var remapTable = new int[localChannel.RemapTable.Length];
-
-                for (var j = 0; j < remapTable.Length; j++)
-                {
-                    remapTable[j] = elements.IndexOf((short)localChannel.RemapTable[j]);
-                }
-
-                var wantedElements = remapTable.Where(boneID => boneID != -1).ToArray();
-                remapTable = remapTable
-                    .Select((boneID, i) => (boneID, i))
-                    .Where(t => t.boneID != -1)
-                    .Select(t => t.i)
-                    .ToArray();
-
-                if (localChannel.Attribute == AnimationChannelAttribute.Unknown)
-                {
-                    Console.Error.WriteLine($"Unknown channel attribute encountered with '{decoder}' decoder");
-                    continue;
-                }
-
-                var containerSegment = new ArraySegment<byte>(container, end, container.Length - end);
-
-                // Look at the decoder to see what to read
-                segmentArray[i] = decoder switch
-                {
-                    nameof(CCompressedStaticFullVector3) => new CCompressedStaticFullVector3(),
-                    nameof(CCompressedStaticVector3) => new CCompressedStaticVector3(),
-                    nameof(CCompressedStaticQuaternion) => new CCompressedStaticQuaternion(),
-                    nameof(CCompressedStaticFloat) => new CCompressedStaticFloat(),
-                    nameof(CCompressedStaticBool) => new CCompressedStaticBool(),
-
-                    nameof(CCompressedFullVector3) => new CCompressedFullVector3(),
-                    nameof(CCompressedDeltaVector3) => new CCompressedDeltaVector3(),
-                    nameof(CCompressedAnimVector3) => new CCompressedAnimVector3(),
-                    nameof(CCompressedAnimQuaternion) => new CCompressedAnimQuaternion(),
-                    nameof(CCompressedFullQuaternion) => new CCompressedFullQuaternion(),
-                    nameof(CCompressedFullFloat) => new CCompressedFullFloat(),
-                    nameof(CCompressedFullBool) => new CCompressedFullBool(),
-                    _ => null,
-                };
-
-                var segment = segmentArray[i];
-                if (segment != null)
-                {
-                    segment.Initialize(containerSegment, wantedElements, remapTable, localChannel.Attribute, numElements);
-                    continue;
-                }
-
-                unhandledDecoders ??= [];
-
-                if (unhandledDecoders.Add(decoder))
-                {
-                    Console.Error.WriteLine($"Unhandled animation bone decoder type '{decoder}' for attribute '{localChannel.Attribute}'");
-                }
-            }
-
-            return segmentArray;
-        }
-
-        /// <summary>
         /// Creates animation instances from the provided animation data and decode key.
         /// </summary>
         public static IEnumerable<SequenceAnimation> FromData(KVObject animationData, KVObject decodeKey,
@@ -418,10 +305,10 @@ namespace ValveResourceFormat.ResourceTypes.ModelAnimation
                 return [];
             }
 
-            var segmentArray = BuildSegmentArray(animationData, decodeKey, skeleton, flexControllers);
+            var segments = new AnimationSegmentTable(animationData, decodeKey, skeleton, flexControllers);
 
             return animArray
-                .Select(anim => new SequenceAnimation(anim, segmentArray) { TargetSkeletonName = skeleton.Name })
+                .Select(anim => new SequenceAnimation(anim, segments) { TargetSkeletonName = skeleton.Name })
                 .ToArray();
         }
 
@@ -444,7 +331,7 @@ namespace ValveResourceFormat.ResourceTypes.ModelAnimation
                 return [];
             }
 
-            var segmentArray = BuildSegmentArray(animationData, decodeKey, skeleton, flexControllers);
+            var segments = new AnimationSegmentTable(animationData, decodeKey, skeleton, flexControllers);
             var sequenceNameArray = sequenceData.GetArray<string>("m_localSequenceNameArray");
 
             var boneMaskArray = sequenceData.GetArray("m_localBoneMaskArray");
@@ -532,7 +419,7 @@ namespace ValveResourceFormat.ResourceTypes.ModelAnimation
                 var seqName = seqDesc.GetStringProperty("m_sName");
                 processedAnimNames.Add(seqName);
 
-                animations.Add(new SequenceAnimation(seqDesc, animDesc, segmentArray, sequenceNameArray, boneMaskNames, poseParamNames) { TargetSkeletonName = skeleton.Name });
+                animations.Add(new SequenceAnimation(seqDesc, animDesc, segments, sequenceNameArray, boneMaskNames, poseParamNames) { TargetSkeletonName = skeleton.Name });
             }
 
             // Add remaining animations not already output as sequences
@@ -545,7 +432,7 @@ namespace ValveResourceFormat.ResourceTypes.ModelAnimation
                     continue;
                 }
 
-                animations.Add(new SequenceAnimation(anim, segmentArray) { TargetSkeletonName = skeleton.Name });
+                animations.Add(new SequenceAnimation(anim, segments) { TargetSkeletonName = skeleton.Name });
             }
 
             return animations;
@@ -555,7 +442,16 @@ namespace ValveResourceFormat.ResourceTypes.ModelAnimation
         /// Creates animation instances from a resource file.
         /// </summary>
         public static IEnumerable<SequenceAnimation> FromResource(Resource resource, KVObject decodeKey, Skeleton skeleton, FlexController[] flexControllers)
-            => FromData(GetAnimationData(resource), decodeKey, skeleton, flexControllers);
+        {
+            var animations = FromData(GetAnimationData(resource), decodeKey, skeleton, flexControllers);
+
+            if (resource.DataBlock is KeyValuesOrNTRO dataBlock)
+            {
+                dataBlock.Data = null;
+            }
+
+            return animations;
+        }
 
         private static KVObject GetAnimationData(Resource resource)
             => (resource.DataBlock ?? throw new InvalidOperationException("Resource has no data block.")).AsKeyValueCollection();
@@ -686,9 +582,9 @@ namespace ValveResourceFormat.ResourceTypes.ModelAnimation
         {
             var scaled = new SortedSet<int>();
 
-            foreach (var segment in SegmentArray)
+            foreach (var segment in GetOwnSegments())
             {
-                if (segment is null || segment.ChannelAttribute != AnimationChannelAttribute.Scale)
+                if (segment.ChannelAttribute != AnimationChannelAttribute.Scale)
                 {
                     continue;
                 }
@@ -714,11 +610,12 @@ namespace ValveResourceFormat.ResourceTypes.ModelAnimation
         /// </summary>
         private AnimatedChannels[] BuildAnimatedChannels()
         {
+            var ownSegments = GetOwnSegments().ToList();
             var boneCount = 0;
 
-            foreach (var segment in SegmentArray)
+            foreach (var segment in ownSegments)
             {
-                foreach (var boneIndex in segment?.RemapTable ?? [])
+                foreach (var boneIndex in segment.RemapTable)
                 {
                     boneCount = Math.Max(boneCount, boneIndex + 1);
                 }
@@ -726,13 +623,8 @@ namespace ValveResourceFormat.ResourceTypes.ModelAnimation
 
             var animated = new AnimatedChannels[boneCount];
 
-            foreach (var segment in SegmentArray)
+            foreach (var segment in ownSegments)
             {
-                if (segment is null)
-                {
-                    continue;
-                }
-
                 var channel = segment.ChannelAttribute switch
                 {
                     AnimationChannelAttribute.Position => AnimatedChannels.Position,
@@ -757,6 +649,25 @@ namespace ValveResourceFormat.ResourceTypes.ModelAnimation
             return animated;
         }
 
+        /// <summary>
+        /// Gets the decoders of the segments this animation's frame blocks reference, skipping unsupported ones.
+        /// </summary>
+        private IEnumerable<AnimationSegmentDecoder> GetOwnSegments()
+        {
+            var seen = new HashSet<long>();
+
+            foreach (var frameBlock in FrameBlocks)
+            {
+                foreach (var segmentIndex in frameBlock.SegmentIndexArray)
+                {
+                    if (seen.Add(segmentIndex) && segments.Get(segmentIndex) is { } segment)
+                    {
+                        yield return segment;
+                    }
+                }
+            }
+        }
+
         /// <inheritdoc/>
         public override void DecodeFrame(Frame outFrame)
         {
@@ -767,7 +678,7 @@ namespace ValveResourceFormat.ResourceTypes.ModelAnimation
                 {
                     foreach (var segmentIndex in frameBlock.SegmentIndexArray)
                     {
-                        var segment = SegmentArray[segmentIndex];
+                        var segment = segments.Get(segmentIndex);
                         // Segment could be null for unknown decoders
                         segment?.Read(outFrame.FrameIndex - frameBlock.StartFrame, outFrame);
                     }

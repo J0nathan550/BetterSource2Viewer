@@ -157,6 +157,12 @@ public class ComboBox : Control
 
     public int FindStringExact(string? text) => Items.FindStringExact(text);
 
+    public event EventHandler? DropDownClosed
+    {
+        add => comboBox.DropDownClosed += value;
+        remove => comboBox.DropDownClosed -= value;
+    }
+
 #pragma warning disable CA1822 // Mirrors the WinForms API, Avalonia batches layout on its own
     public void BeginUpdate()
     {
@@ -231,6 +237,8 @@ public class CheckedListBox : Control
     public IEnumerable<int> CheckedIndices => Enumerable.Range(0, checkedStates.Count).Where(i => checkedStates[i]);
 
     public bool GetItemChecked(int index) => checkedStates[index];
+
+    public void SetItemCheckState(int index, CheckState value) => SetItemChecked(index, value != CheckState.Unchecked);
 
     public void SetItemChecked(int index, bool value)
     {

@@ -13,20 +13,11 @@ namespace ValveResourceFormat.Renderer.Particles.Renderers
         private readonly SceneLight light;
         private readonly IVectorProvider colorScale = new LiteralVectorProvider(Vector3.One);
         private readonly INumberProvider intensity = new LiteralNumberProvider(1f);
-        private INumberProvider radiusMultiplier = new LiteralNumberProvider(8f);
+        private readonly INumberProvider radiusMultiplier = new LiteralNumberProvider(8f);
         private readonly INumberProvider zeroPercentFalloff = new LiteralNumberProvider(1f);
         private readonly bool castShadows;
 
-        /// <summary>Light radius multiplier</summary>
-        internal INumberProvider RadiusMultiplier
-        {
-            get => radiusMultiplier;
-            set => radiusMultiplier = value;
-        }
-
-        internal SceneLight Light => light;
-
-        public RenderStandardLight(ParticleDefinitionParser parse, RendererContext rendererContext, Scene scene)
+        public RenderStandardLight(ParticleDefinitionParser parse, Scene scene)
             : base(parse)
         {
             this.scene = scene;

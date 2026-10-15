@@ -1,6 +1,5 @@
 using System.Globalization;
 using System.IO;
-using System.IO.Enumeration;
 using System.Linq;
 using System.Text;
 using ValveKeyValue;
@@ -11,6 +10,7 @@ namespace ValveResourceFormat.ResourceTypes
     /// <summary>
     /// Represents an entity lump resource containing entity definitions and their properties.
     /// </summary>
+    /// <seealso href="https://s2v.app/SchemaExplorer/cs2/worldrenderer/PermEntityLumpData_t">PermEntityLumpData_t</seealso>
     public class EntityLump : KeyValuesOrNTRO
     {
         /// <summary>
@@ -154,6 +154,7 @@ namespace ValveResourceFormat.ResourceTypes
         /// <summary>
         /// Represents a IO connection.
         /// </summary>
+        /// <seealso href="https://s2v.app/SchemaExplorer/cs2/worldrenderer/EntityIOConnectionData_t">EntityIOConnectionData_t</seealso>
         public class Connection
         {
             /// <summary>
@@ -284,7 +285,7 @@ namespace ValveResourceFormat.ResourceTypes
             return entity;
         }
 
-        // TODO: Keep the original casing once entity property lookups are case-insensitive, like the engine's hash compare
+        // TODO: Keep the original casing once entity property lookups are case-insensitive
         private static string ToPropertyKey(string name) => name.ToLowerInvariant();
 
         private static KVObject MakeColor32(byte[] bytes)
@@ -648,7 +649,7 @@ namespace ValveResourceFormat.ResourceTypes
             }
             else if (value is not null)
             {
-                valueStr = value.ToString() ?? string.Empty;
+                valueStr = Convert.ToString(value, CultureInfo.InvariantCulture) ?? string.Empty;
             }
 
             return valueStr.Trim();
@@ -668,7 +669,7 @@ namespace ValveResourceFormat.ResourceTypes
 
         /// <summary>
         /// Replaces the first <see cref="ParentNameFixupMarker"/> and the first <see cref="LocalNameFixupMarker"/>
-        /// in a compiled name, as the engine does to every name an entity is spawned with.
+        /// in a compiled name, applied to every name an entity is spawned with.
         /// </summary>
         /// <param name="name">A name as compiled, such as a targetname or a connection's target.</param>
         /// <param name="parentFixup">What replaces <see cref="ParentNameFixupMarker"/>.</param>
@@ -709,13 +710,63 @@ namespace ValveResourceFormat.ResourceTypes
 
         /// <summary>
         /// Compares an entity targetname against a target string that may contain wildcards.
+        /// Letters compare ignoring ASCII case only, and there is no escape character.
         /// </summary>
         /// <param name="pattern">Targetname to match against, may contain wildcards: `*` and `?` (e.g. <c>door_*</c>).</param>
         /// <param name="targetName">Entity targetname.</param>
         /// <returns>Whether the targetname matches.</returns>
         public static bool EntityNameMatches(string pattern, string targetName)
         {
-            return FileSystemName.MatchesSimpleExpression(pattern, targetName, true);
+            var patternIndex = 0;
+            var nameIndex = 0;
+            var starIndex = -1;
+            var starNameIndex = 0;
+
+            while (nameIndex < targetName.Length)
+            {
+                if (patternIndex < pattern.Length && pattern[patternIndex] == '*')
+                {
+                    while (patternIndex < pattern.Length && pattern[patternIndex] == '*')
+                    {
+                        patternIndex++;
+                    }
+
+                    if (patternIndex == pattern.Length)
+                    {
+                        return true;
+                    }
+
+                    starIndex = patternIndex;
+                    starNameIndex = nameIndex;
+                }
+                else if (patternIndex < pattern.Length
+                    && (pattern[patternIndex] == '?' || ToUpperAscii(pattern[patternIndex]) == ToUpperAscii(targetName[nameIndex])))
+                {
+                    patternIndex++;
+                    nameIndex++;
+                }
+                else if (starIndex >= 0)
+                {
+                    patternIndex = starIndex;
+                    nameIndex = ++starNameIndex;
+                }
+                else
+                {
+                    return false;
+                }
+            }
+
+            while (patternIndex < pattern.Length && pattern[patternIndex] == '*')
+            {
+                patternIndex++;
+            }
+
+            return patternIndex == pattern.Length;
         }
+
+        /// <summary>
+        /// Uppercases ASCII letters and leaves every other character unchanged.
+        /// </summary>
+        internal static char ToUpperAscii(char c) => char.IsAsciiLetterLower(c) ? (char)(c - ('a' - 'A')) : c;
     }
 }

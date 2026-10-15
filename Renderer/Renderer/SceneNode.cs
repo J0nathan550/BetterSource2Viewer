@@ -1,3 +1,4 @@
+using System.Globalization;
 using ValveResourceFormat.Blocks;
 using ValveResourceFormat.Renderer.SceneEnvironment;
 using ValveResourceFormat.ResourceTypes;
@@ -131,6 +132,12 @@ namespace ValveResourceFormat.Renderer
         public bool IsSelected { get; set; }
 
         /// <summary>
+        /// Gets whether this node is a fixed-size marker standing in for a point, so its bounds describe
+        /// the marker rather than anything in the world.
+        /// </summary>
+        public virtual bool IsPointMarker => false;
+
+        /// <summary>
         /// Gets or sets the object type flags.
         /// </summary>
         public ObjectTypeFlags Flags { get; set; }
@@ -155,7 +162,7 @@ namespace ValveResourceFormat.Renderer
         /// <summary>
         /// Gets a human-readable debug name including type, name, id, and position.
         /// </summary>
-        public string DebugName => $"{GetType().Name.Replace("SceneNode", "", StringComparison.Ordinal)}{(string.IsNullOrEmpty(Name) ? "" : " ")}{Name} ({Id}) at {BoundingBox.Center.X:F2} {BoundingBox.Center.Y:F2} {BoundingBox.Center.Z:F2}";
+        public string DebugName => string.Create(CultureInfo.InvariantCulture, $"{GetType().Name.Replace("SceneNode", "", StringComparison.Ordinal)}{(string.IsNullOrEmpty(Name) ? "" : " ")}{Name} ({Id}) at {BoundingBox.Center.X:F2} {BoundingBox.Center.Y:F2} {BoundingBox.Center.Z:F2}");
 #endif
 
         /// <summary>
@@ -164,13 +171,17 @@ namespace ValveResourceFormat.Renderer
         public Scene Scene { get; }
 
         /// <summary>
-        /// How large this node is drawn next to whatever places it. Only an editor marker differs, and
-        /// only where its scene is magnified; a line joining two markers keeps the magnification, since
-        /// it has to span the distance between them.
+        /// Gets or sets whether this node is a marker drawn at the same size in every scene, rather than
+        /// magnified with a scene such as a 3D sky. A line joining two markers is not one, since it has to
+        /// span the distance between them.
         /// </summary>
-        internal float PlacementScale => LayerName == World.EditorEntityNode.LayerName && this is not SceneNodes.LineSceneNode
-            ? Scene.MarkerScale
-            : 1f;
+        public bool KeepsMarkerSize { get; set; }
+
+        /// <summary>
+        /// How large this node is drawn next to whatever places it. Only a marker differs, and only where its
+        /// scene is magnified.
+        /// </summary>
+        internal float PlacementScale => KeepsMarkerSize ? Scene.MarkerScale : 1f;
 
         /// <summary>Shrinks a transform this node is placed at by <see cref="PlacementScale"/>.</summary>
         internal Matrix4x4 ApplyPlacementScale(in Matrix4x4 transform)
@@ -251,6 +262,11 @@ namespace ValveResourceFormat.Renderer
         /// <param name="context">The current update context.</param>
         public void UpdateHierarchy(Scene.UpdateContext context)
         {
+            if (Scene.IsPendingRemoval(this))
+            {
+                return;
+            }
+
             Update(context);
 
             foreach (var child in children)
@@ -273,9 +289,9 @@ namespace ValveResourceFormat.Renderer
         public List<SceneEnvMap> EnvMaps { get; private set; } = [];
 
         /// <summary>
-        /// Gets or sets the precomputed environment map visibility bitfield for shaders.
+        /// Gets or sets the environment map visibility bitfield for shaders.
         /// </summary>
-        public SceneEnvMap.EnvMapVisibility128 ShaderEnvMapVisibility { get; set; }
+        public SceneEnvMap.EnvMapVisibility128 ShaderEnvMapVisibility { get; set; } = SceneEnvMap.EnvMapVisibility128.Full;
 
         /// <summary>
         /// Gets or sets a custom lighting origin override for environment map and light probe sampling.

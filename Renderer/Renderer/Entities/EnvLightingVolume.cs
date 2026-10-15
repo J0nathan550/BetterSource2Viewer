@@ -7,15 +7,15 @@ using ValveResourceFormat.Serialization.KeyValues;
 namespace ValveResourceFormat.Renderer.Entities;
 
 /// <summary>
-/// The baked lighting volumes: cubemaps and light probe volumes. Each registers what it baked with its
-/// scene's <see cref="Scene.LightingInfo"/>, which binds them to the objects they light.
+/// The baked lighting volumes: cubemaps and light probe volumes. Each registers what it baked with
+/// <see cref="Scene.LightingInfo"/>, which binds them to the objects they light.
 /// </summary>
 /// <remarks>
-/// They have to spawn before anything with a model: whether a scene has cubemaps, and of which kind, is
+/// They have to spawn before anything with a model: whether a scene has cubemaps, and which kind, is
 /// compiled into every mesh's shaders as it is built.
 /// <para>
-/// The entity scale does not shrink a volume: its baked probe grid is the unscaled box over the voxel size,
-/// and the objects bound to it by their precomputed handshake only fall inside it while it keeps that size.
+/// Entity scale does not resize a volume: its baked probe grid is the unscaled box over the voxel size,
+/// and objects bound to it by their precomputed handshake only fall inside it at that size.
 /// </para>
 /// </remarks>
 public abstract class EnvLightingVolume : BaseEntity
@@ -26,6 +26,7 @@ public abstract class EnvLightingVolume : BaseEntity
     private int handShake;
     private int indoorOutdoorLevel;
     private AABB bounds;
+    private Vector3 edgeFadeDists;
 
     /// <summary>Initializes a lighting volume from its keyvalues.</summary>
     /// <param name="system">The entity system the volume belongs to.</param>
@@ -55,6 +56,8 @@ public abstract class EnvLightingVolume : BaseEntity
         {
             bounds = new AABB(KeyValues.GetVector3Property("box_mins"), KeyValues.GetVector3Property("box_maxs"));
         }
+
+        edgeFadeDists = KeyValues.GetVector3Property("edge_fade_dists"); // TODO: Not available on all entities
     }
 
     /// <summary>Registers the cubemap the volume baked, if it has one and it is not a custom texture.</summary>
@@ -78,7 +81,7 @@ public abstract class EnvLightingVolume : BaseEntity
             HandShake = handShake,
             ArrayIndex = arrayIndex,
             IndoorOutdoorLevel = indoorOutdoorLevel,
-            EdgeFadeDists = KeyValues.GetVector3Property("edge_fade_dists"), // TODO: Not available on all entities
+            EdgeFadeDists = edgeFadeDists,
             ProjectionMode = isSphere ? 0 : 1,
             EnvMapTexture = envMapTexture,
             NormalizationSH = SceneEnvMap.CalculateNormalizationSH(envMapTexture.RadianceCoefficients, arrayIndex),
@@ -104,6 +107,7 @@ public abstract class EnvLightingVolume : BaseEntity
             HandShake = handShake,
             Irradiance = lightProbeTextureName != null ? materialLoader.GetTexture(lightProbeTextureName, srgbRead: true) : null,
             IndoorOutdoorLevel = indoorOutdoorLevel,
+            EdgeFadeDists = edgeFadeDists,
             VoxelSize = KeyValues.GetFloatProperty("voxel_size"),
         };
 

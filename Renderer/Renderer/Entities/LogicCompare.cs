@@ -4,9 +4,10 @@ using ValveResourceFormat.Serialization.KeyValues;
 namespace ValveResourceFormat.Renderer.Entities;
 
 /// <summary>
-/// <c>logic_compare</c>. Holds a value and a value to compare it against, and on request reports how the
-/// two relate. Every output carries the held value.
+/// <c>logic_compare</c>. Compares a held value against another on request. Every output carries the
+/// held value.
 /// </summary>
+/// <seealso href="https://s2v.app/SchemaExplorer/cs2/server/CLogicCompare">CLogicCompare</seealso>
 public sealed class LogicCompare : BaseEntity
 {
     /// <summary>Gets the value that is compared, the <c>InitialValue</c> keyvalue until an input changes it.</summary>

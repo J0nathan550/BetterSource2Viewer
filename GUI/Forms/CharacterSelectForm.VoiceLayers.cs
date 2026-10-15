@@ -290,7 +290,7 @@ namespace GUI.Forms
 
                 // The panel disposes the stream, and a window opened with Show disposes itself once closed
 #pragma warning disable CA2000 // Disposed with the preview it is added to
-                preview.Controls.Add(new AudioPlaybackPanel(audio.Stream, autoPlay: true, (0, 0)));
+                preview.Controls.Add(new AudioPlaybackPanel(audio.Stream, line, autoPlay: true, (0, 0)));
 #pragma warning restore CA2000
                 Themer.ThemeControl(preview);
                 preview.Show(this);

@@ -19,7 +19,9 @@ using ValveResourceFormat.Renderer;
 using ValveResourceFormat.Renderer.World;
 using ValveResourceFormat.ResourceTypes;
 using ValveResourceFormat.ResourceTypes.GenericData.CS2;
+using ValveResourceFormat.ResourceTypes.ModelAnimation2;
 using ValveResourceFormat.Serialization.KeyValues;
+using Sound = ValveResourceFormat.ResourceTypes.Sound;
 
 namespace GUI.Types.Viewers
 {
@@ -87,7 +89,7 @@ namespace GUI.Types.Viewers
                 }
                 catch (Exception ex)
                 {
-                    GLViewerError = CodeTextBox.CreateFromException(ex, vrfGuiContext.FullPath);
+                    GLViewerError = CodeTextBox.CreateFromException(ex, vrfGuiContext.DisplayPath);
                 }
             }
         }
@@ -211,14 +213,6 @@ namespace GUI.Types.Viewers
                     }
                     break;
 
-                case ResourceType.EntityLump:
-                    if (resource.DataBlock is EntityLump entityLumpData)
-                    {
-                        GLViewer = new EntityIOGraphViewer(vrfGuiContext, rendererContext, entityLumpData);
-                        GLViewerTabName = "ENTITY I/O GRAPH";
-                    }
-                    break;
-
                 case ResourceType.Material:
                 {
                     if (resource.DataBlock is Material { ShaderName: "sky.vfx" })
@@ -304,7 +298,7 @@ namespace GUI.Types.Viewers
                     }
                     catch (Exception ex)
                     {
-                        GLViewerError = CodeTextBox.CreateFromException(ex, vrfGuiContext.FullPath);
+                        GLViewerError = CodeTextBox.CreateFromException(ex, vrfGuiContext.DisplayPath);
                     }
                 }
 
@@ -324,15 +318,6 @@ namespace GUI.Types.Viewers
                     var errorTab = new ThemedTabPage("Viewer Error");
                     errorTab.Controls.Add(GLViewerError);
                     resTabs.TabPages.Add(errorTab);
-                }
-
-                // Entity lumps get the same browsable grid a map's world viewer provides, with or
-                // without the graph tab the GL viewer adds.
-                if (!isPreview && resource.DataBlock is EntityLump standaloneLump)
-                {
-                    var entitiesTabPage = new ThemedTabPage("Entity List");
-                    entitiesTabPage.Controls.Add(new EntityViewer(vrfGuiContext, standaloneLump.GetEntities()));
-                    resTabs.TabPages.Add(entitiesTabPage);
                 }
             }
 
@@ -472,7 +457,7 @@ namespace GUI.Types.Viewers
             }
             catch (Exception ex)
             {
-                var control = CodeTextBox.CreateFromException(ex, vrfGuiContext.FullPath);
+                var control = CodeTextBox.CreateFromException(ex, vrfGuiContext.DisplayPath);
 
                 var tabEx = new ThemedTabPage("Decompile Error");
                 tabEx.Controls.Add(control);
@@ -579,7 +564,7 @@ namespace GUI.Types.Viewers
                 if (!tabPage.IsDisposed)
                 {
                     loadingFile.Dispose();
-                    tabPage.Controls.Add(CodeTextBox.CreateFromException(e, vrfGuiContext.FullPath));
+                    tabPage.Controls.Add(CodeTextBox.CreateFromException(e, vrfGuiContext.DisplayPath));
                 }
 
                 return null;
@@ -714,7 +699,7 @@ namespace GUI.Types.Viewers
             }
             else if (model.Data.ContainsKey("m_animGraph2Refs"))
             {
-                Log.Warn(nameof(Resource), "Model has a non-array m_animGraph2Refs value, skipping its animation graph tabs.");
+                Log.Warn(nameof(Resource), $"Model \"{vrfGuiContext.DisplayPath}\" has a non-array m_animGraph2Refs value, skipping its animation graph tabs.");
             }
 
             if (model.Data.ContainsKey("m_refAnimGraph"))
@@ -789,7 +774,7 @@ namespace GUI.Types.Viewers
 
                                 try
                                 {
-                                    var audio = new AudioPlaybackPanel(ownedStream, isPreview && autoPlay, loopMarkers);
+                                    var audio = new AudioPlaybackPanel(ownedStream, vrfGuiContext.DisplayPath, isPreview && autoPlay, loopMarkers);
                                     specialTabPage.Controls.Add(audio);
                                     ownedStream = null;
                                 }
@@ -801,18 +786,28 @@ namespace GUI.Types.Viewers
                         }
                         catch (Exception e)
                         {
-                            Log.Error(nameof(AudioPlayer), e.ToString());
-
-                            var msg = new Label
-                            {
-                                Text = $"NAudio Exception: {e}",
-                                Dock = DockStyle.Fill,
-                            };
-
-                            specialTabPage.Controls.Add(msg);
+                            var errorControl = CodeTextBox.CreateFromException(e, vrfGuiContext.DisplayPath);
+                            specialTabPage.Controls.Add(errorControl);
+                            errorControl.BringToFront(); // Fill below the docked info label instead of under it
                         }
 
                         resTabs.TabPages.Add(specialTabPage);
+                        return true;
+                    }
+                    break;
+
+                case ResourceType.EntityLump:
+                    if (resource.DataBlock is EntityLump entityLumpData)
+                    {
+                        var specialTabPage = new ThemedTabPage("Entity List");
+                        specialTabPage.Controls.Add(new EntityViewer(vrfGuiContext, entityLumpData.GetEntities()));
+                        resTabs.TabPages.Add(specialTabPage);
+
+                        if (!isPreview)
+                        {
+                            AddGraphViewerTab(() => new EntityIOGraphViewer(vrfGuiContext, vrfGuiContext.CreateRendererContext(), entityLumpData), EntityIOGraphTabName, resTabs);
+                        }
+
                         return true;
                     }
                     break;
@@ -1047,7 +1042,7 @@ namespace GUI.Types.Viewers
             }
             catch (Exception e)
             {
-                Log.Error(nameof(Resource), e.ToString());
+                Log.Error(nameof(Resource), $"Failed to show the {block.Type} block of \"{vrfGuiContext.DisplayPath}\" as text, showing bytes instead: {e}");
                 AddByteViewControl(resource, block, container);
             }
         }
@@ -1056,8 +1051,13 @@ namespace GUI.Types.Viewers
         {
             Debug.Assert(resource.Reader != null);
 
-            resource.Reader.BaseStream.Position = block.Offset;
-            var input = resource.Reader.ReadBytes((int)block.Size);
+            byte[] input;
+
+            lock (resource.ReaderLock)
+            {
+                resource.Reader.BaseStream.Position = block.Offset;
+                input = resource.Reader.ReadBytes((int)block.Size);
+            }
 
             var text = ByteViewer.GetTextFromBytes(input.AsSpan());
 
@@ -1140,11 +1140,11 @@ namespace GUI.Types.Viewers
                         KVSerializer.Create(KVSerializationFormat.KeyValues3Text).Serialize(stream, document);
                     }).ConfigureAwait(true);
 
-                    Log.Info(nameof(Resource), $"Saved {block.Type} block to \"{fileName}\"");
+                    Log.Info(nameof(Resource), $"Saved {block.Type} block to \"{Path.GetFileName(fileName)}\"");
                 }
                 catch (Exception ex)
                 {
-                    Log.Error(nameof(Resource), $"Failed to save {block.Type} block to \"{fileName}\": {ex}");
+                    Log.Error(nameof(Resource), $"Failed to save {block.Type} block to \"{Path.GetFileName(fileName)}\": {ex}");
                 }
                 finally
                 {
@@ -1160,11 +1160,11 @@ namespace GUI.Types.Viewers
         /// Runs <paramref name="populate"/> the first time <paramref name="page"/> is shown, so the
         /// contents of tabs that are never opened are not built.
         /// </summary>
-        private static void PopulateWhenShown(TabPage page, Action populate)
+        private void PopulateWhenShown(TabPage page, Action populate)
         {
             if (page.Visible)
             {
-                populate();
+                TryPopulate();
                 return;
             }
 
@@ -1176,7 +1176,20 @@ namespace GUI.Types.Viewers
                 }
 
                 page.VisibleChanged -= OnVisibleChanged;
-                populate();
+                TryPopulate();
+            }
+
+            // Usually runs from a UI event, where an escaping exception would not say which file failed
+            void TryPopulate()
+            {
+                try
+                {
+                    populate();
+                }
+                catch (Exception ex)
+                {
+                    page.Controls.Add(CodeTextBox.CreateFromException(ex, vrfGuiContext.DisplayPath));
+                }
             }
 
             page.VisibleChanged += OnVisibleChanged;
@@ -1317,8 +1330,7 @@ namespace GUI.Types.Viewers
 
         public void Dispose()
         {
-            // Order matters: nothing may dispose a resource until every thread that could still be
-            // reading it has stopped
+            // Order matters: a resource must not be disposed while any thread may still be reading it.
             GLViewer?.Dispose();
             rendererContext?.Dispose();
             resource?.Dispose();

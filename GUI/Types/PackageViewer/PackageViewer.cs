@@ -202,7 +202,7 @@ namespace GUI.Types.PackageViewer
 #if DEBUG
             ScanForResourceDependencies();
 
-            // Fire-and-forget on purpose: this is a dev-only prompt, and AddFiles has no reason to wait for it.
+            // Fire-and-forget: this dev-only prompt need not hold up AddFiles.
             async void ScanForResourceDependencies()
             {
                 if (resourceEntries.Count == 0 || !await AppMessageDialogs.ConfirmAsync(
@@ -226,7 +226,7 @@ namespace GUI.Types.PackageViewer
                     using var entryStream = new MemoryStream(output);
 
                     using var resource = new ValveResourceFormat.Resource();
-                    resource.Read(entryStream);
+                    resource.Read(entryStream, mode: ReadMode.Deferred);
 
                     if (resource.ExternalReferences is null)
                     {
@@ -259,7 +259,7 @@ namespace GUI.Types.PackageViewer
 
                         if (!File.Exists(file))
                         {
-                            Log.Warn(nameof(PackageViewer), $"Failed to find file: {file}");
+                            Log.Warn(nameof(PackageViewer), $"Failed to find file: {reference.Name}");
                             continue;
                         }
                     }
@@ -313,7 +313,15 @@ namespace GUI.Types.PackageViewer
                 return;
             }
 
-            vrfGuiContext.CurrentPackage.Write(fileName);
+            try
+            {
+                vrfGuiContext.CurrentPackage.Write(fileName);
+            }
+            catch (Exception e)
+            {
+                ErrorReport.ShowError(e, fileName);
+                return;
+            }
 
             var fileCount = 0;
             var fileSize = 0u;

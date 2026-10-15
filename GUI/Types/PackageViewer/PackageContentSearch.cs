@@ -63,7 +63,7 @@ namespace GUI.Types.PackageViewer
             {
                 var fileName = $"{package.FileName}{(package.IsDirVPK ? "_dir" : "")}.vpk";
 
-                progress?.Report($"Searching '{fileName}'");
+                progress?.Report($"Searching '{Path.GetFileName(fileName)}'");
                 results.AddRange(SearchFile(fileName, pattern, sortedEntriesInDirVpk, cancellationToken));
             }
 
@@ -78,8 +78,10 @@ namespace GUI.Types.PackageViewer
                     CancellationToken = cancellationToken,
                 }, archiveIndex =>
                 {
+                    // Archives that only hold empty entries are never read
                     if (!sortedEntriesPerArchive.TryGetValue(archiveIndex, out var archiveEntries))
                     {
+                        Interlocked.Increment(ref archivesScanned);
                         return;
                     }
 

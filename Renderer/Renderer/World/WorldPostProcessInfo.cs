@@ -55,6 +55,15 @@ namespace ValveResourceFormat.Renderer.World
             }
         }
 
+        /// <summary>Forgets every registered volume and tonemap controller, for the entities that register them to spawn again.</summary>
+        internal void Clear()
+        {
+            PostProcessVolumes.Clear();
+            masterVolumes.Clear();
+            MasterTonemapController = null;
+            isTonemapControllerMarkedMaster = false;
+        }
+
         /// <summary>Gets the post-processing state computed for the current frame.</summary>
         public PostProcessState CurrentState { get; private set; } = new();
 
@@ -82,11 +91,11 @@ namespace ValveResourceFormat.Renderer.World
 
         /// <summary>
         /// Recalculates <see cref="CurrentState"/>: the master volume is the base, and every non-master
-        /// volume containing the camera crossfades on top of it over its fade time.
+        /// volume containing the viewer crossfades on top of it over its fade time.
         /// </summary>
-        /// <param name="camera">The active camera, tested against each volume's collider.</param>
+        /// <param name="position">The viewer position tested against each volume's collider: the player's feet, or the camera when flying free.</param>
         /// <param name="deltaTime">Elapsed time in seconds since the last frame, driving the crossfades.</param>
-        public void UpdatePostProcessing(Camera camera, float deltaTime)
+        public void UpdatePostProcessing(Vector3 position, float deltaTime)
         {
             var newState = PostProcessState.Default;
             ActiveLuts.Clear();
@@ -98,10 +107,10 @@ namespace ValveResourceFormat.Renderer.World
 
             foreach (var volume in PostProcessVolumes)
             {
-                // A disabled volume fades out like one the camera left
+                // A disabled volume fades out like one the viewer left
                 var inside = volume.IsEnabled
                     && volume.Collider != null
-                    && volume.Collider.ContainsPoint(camera.Location);
+                    && volume.Collider.ContainsPoint(position);
 
                 var targetWeight = inside ? 1f : 0f;
                 var fadeStep = volume.FadeTime > 0f ? deltaTime / volume.FadeTime : 1f;

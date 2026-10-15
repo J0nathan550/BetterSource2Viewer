@@ -8,6 +8,7 @@ namespace ValveResourceFormat.Renderer.Entities;
 /// <c>math_counter</c>. Holds a number, clamped to an authored range, and reports when it reaches or leaves
 /// the ends of that range. <c>OutValue</c> and <c>OnGetValue</c> carry the held value.
 /// </summary>
+/// <seealso href="https://s2v.app/SchemaExplorer/cs2/server/CMathCounter">CMathCounter</seealso>
 public sealed class MathCounter : BaseEntity
 {
     private bool hitMin;
@@ -43,7 +44,7 @@ public sealed class MathCounter : BaseEntity
             (Min, Max) = (Max, Min);
         }
 
-        // The engine reads the starting value as an integer, dropping any fraction
+        // The starting value is read as an integer, dropping any fraction
         Value = ClampToRange((int)KeyValues.GetDoubleProperty("startvalue"));
         IsEnabled = !KeyValues.GetBooleanProperty("startdisabled");
     }

@@ -34,7 +34,7 @@ struct EnvMapData
 };
 
 // Maximum number of environment maps supported
-#define MAX_ENVMAPS 144
+#define MAX_ENVMAPS 320
 
 layout(std140, binding = 2) uniform EnvMapArray
 {
@@ -233,11 +233,17 @@ vec3 GetEnvironmentNoBRDF(MaterialProperties_t mat, float reflectionCorrectionAm
 
         vec3 coords = GetCorrectedSampleCoords(R, envMapWorldToLocal, envMapLocalPos, isBoxProjection, envMapBoxMin, envMapBoxMax);
         #if (S_LIGHTMAP_VERSION_MINOR == 0)
-            envMap = DecodeRGBM(textureLod(g_tEnvironmentMap, coords, lod));
+            envMap = DecodeBakedLightRGBM(textureLod(g_tEnvironmentMap, coords, lod));
         #else
             envMap = textureLod(g_tEnvironmentMap, coords, lod).rgb;
         #endif
         g_vEnvMapNormalizationSH = envData.NormalizationSH;
+
+        if (g_nEnvMapDebugColors != 0u)
+        {
+            envMap = envData.Color;
+            g_vEnvMapNormalizationSH = vec4(0.0);
+        }
     #elif (S_SCENE_CUBEMAP_TYPE == 2)
 
     float flTotalWeight = 0.01;
@@ -302,8 +308,16 @@ vec3 GetEnvironmentNoBRDF(MaterialProperties_t mat, float reflectionCorrectionAm
 
             vec3 coords = GetCorrectedSampleCoords(R, envMapWorldToLocal, envMapLocalPos, isBoxProjection, envMapBoxMin, envMapBoxMax);
 
-            envMap += textureLod(g_tEnvironmentMap, vec4(coords, envData.ArrayIndex), lod).rgb * weight;
-            normalizationSH += envData.NormalizationSH * weight;
+            if (g_nEnvMapDebugColors != 0u)
+            {
+                // A solid colour per env map, left unnormalized so it reads as that colour
+                envMap += envData.Color * weight;
+            }
+            else
+            {
+                envMap += textureLod(g_tEnvironmentMap, vec4(coords, envData.ArrayIndex), lod).rgb * weight;
+                normalizationSH += envData.NormalizationSH * weight;
+            }
 
             if (flTotalWeight > 0.99)
             {

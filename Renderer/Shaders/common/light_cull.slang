@@ -5,38 +5,6 @@
 
 #include "ViewConstants.slang"
 
-layout(binding = 6, std140) uniform LightCullConstants
-{
-    uint g_nLightTileBase;
-    uint g_nLightSliceBase;
-    uint g_nLightCullWords;
-    uint g_nLightTileShift;
-
-    uint g_nLightTileCols;
-    uint g_nLightTileRows;
-    uint g_nLightSliceCount;
-    uint g_nEnvMapTileBase;
-
-    uint g_nEnvMapBinBase;
-    uint g_nEnvMapCullWords;
-    uint g_nEnvMapCount;
-    uint _lightCullPadding0;
-
-    uint g_nLightProbeTileBase;
-    uint g_nLightProbeBinBase;
-    uint g_nLightProbeCullWords;
-    uint g_nLightProbeCount;
-
-    vec4 g_vLightDepthSliceParams;
-    vec4 g_vLightCullPixelRemap;
-
-    vec3 g_vLightCullCameraPositionWs;
-    float _lightCullPadding1;
-
-    vec3 g_vLightCullCameraDirWs;
-    float _lightCullPadding2;
-};
-
 layout(std430, binding = 4) readonly buffer LightCullBitsBuffer
 {
     uint g_CullBits[];
@@ -78,10 +46,11 @@ CullLookup_t GetCullLookup(vec3 positionWs)
         cullPixelVs = ((cullNdc * 0.5) + 0.5) * g_vViewportSize;
     }
 
-    // Carries the pixel into the view the masks were built for; identity for everything but the viewmodel.
+    // Carries the pixel into the view the masks were built for; identity except for the viewmodel and
+    // passes drawn below the scene resolution.
     vec2 cullPixel = (cullPixelVs * g_vLightCullPixelRemap.xy) + g_vLightCullPixelRemap.zw;
 
-    uvec2 tile = uvec2(clamp(cullPixel, vec2(0.0), g_vViewportSize - 1.0)) >> uvec2(g_nLightTileShift);
+    uvec2 tile = uvec2(max(cullPixel, vec2(0.0))) >> uvec2(g_nLightTileShift);
     tile = min(tile, uvec2(g_nLightTileCols, g_nLightTileRows) - 1u);
 
     CullLookup_t lookup;

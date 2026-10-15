@@ -16,7 +16,7 @@
 uniform int uBlendMode = 0; // PARTICLE_OUTPUT_BLEND_MODE_ALPHA
 
 // One sampler per texture layer. Layer 0 is the base texture and keeps the plain name.
-// One more colour layer than the combo's value, matching the engine's Base + Layer1..Layer4.
+// One more colour layer than the combo's value, matching Base + Layer1..Layer4.
 #define S_TEXTURE_LAYERS 0
 #define MAX_TEXTURE_LAYERS (S_TEXTURE_LAYERS + 1)
 uniform sampler2D uTexture;
@@ -38,14 +38,14 @@ uniform float uAddSelfAmount = 1.0; // 1 + m_flAddSelfAmount
 uniform float uDiffuseAmount = 1.0; // m_flDiffuseAmount, scales the scene light
 uniform float uSelfIllumAmount = 0.0; // m_flSelfIllumAmount, added unlit
 uniform float uDesaturation = 0.0; // m_flDesaturation
-// m_bSaturateColorPreAlphaBlend, which defaults on. A good deal of shipped content turns it off to let
-// the brightness run past 1 into the blend.
-uniform bool uSaturateColorPreAlphaBlend = true;
 
 // m_bBlendFramesSeq0 / m_bMaxLuminanceBlendingSequence0. Gated on a uniform rather than on vFrameBlendOut
 // so that the second fetch sits in draw-uniform control flow.
 uniform bool uBlendFrames = true;
 uniform bool uMaxLuminanceFrameBlend = false;
+
+#define PARTICLE_LIGHTING_PER_PIXEL (-1)
+uniform int uLightingMode = 0; // PARTICLE_LIGHTING_PER_PARTICLE
 
 uniform vec3 uHsvShift = vec3(0.0, 1.0, 1.0);
 uniform vec2 uAlphaRemapRange = vec2(1.0, 0.0);
@@ -64,8 +64,7 @@ uniform int uLayerChannels[MAX_TEXTURE_LAYERS];
 uniform int uLayerBlendMode[MAX_TEXTURE_LAYERS];
 uniform float uLayerBlend[MAX_TEXTURE_LAYERS];
 
-// SpriteCardTextureType_t, for the values that are effect modes. NORMALMAP never reaches the shader: the
-// renderer keeps it out of the chain entirely.
+// Texture effect modes. NORMALMAP never reaches the shader; the renderer keeps it out of the chain.
 #define SPRITECARD_TEXTURE_ZOOM             1
 #define SPRITECARD_TEXTURE_1D_COLOR_LOOKUP  2
 #define SPRITECARD_TEXTURE_UVDISTORTION      3
@@ -80,8 +79,8 @@ uniform float uLayerDistortion[MAX_TEXTURE_LAYERS];
 uniform float uLayerZoomScale[MAX_TEXTURE_LAYERS];
 
 
-// A constant table from the reference, indexed by mask mode: .x premultiplies the ramp's source colour by
-// its alpha, .y switches the lookup to read alpha as the luma.
+// Indexed by mask mode: .x premultiplies the ramp's source colour by its alpha, .y switches the lookup
+// to read alpha as the luma.
 const vec2 MASK_RAMP_FLAGS[15] = vec2[](
     vec2(1.0, 0.0), vec2(0.0, 0.0), vec2(0.0, 1.0), vec2(0.0, 0.0), vec2(1.0, 0.0),
     vec2(1.0, 0.0), vec2(0.0, 0.0), vec2(0.0, 1.0), vec2(0.0, 0.0), vec2(1.0, 0.0),
@@ -96,6 +95,7 @@ in float vFrameBlendOut;
 in vec2 vCardUvOut;
 in vec4 vColor;
 in vec3 vFragPosition;
+in vec3 vLightingPosition;
 
 out vec4 fragColor;
 
@@ -160,9 +160,7 @@ vec4 SampleGradientRamp(int layer, vec4 previous, int maskMode)
     return mix(vec4(ramp.rgb, previous.a), vec4(ramp.rgb, dot(ramp.rgb, LUMA_601)), flags.y);
 }
 
-// Combine the masked layer into the accumulator.
-// Shifts the hue and scales saturation and value, going through HSV and back. Ported from the spritecard
-// pixel shader, which rolls its own conversion rather than using a library one.
+// Shifts the hue and scales saturation and value, going through HSV and back.
 vec3 ApplyHsvShift(vec3 sourceColor)
 {
     // The conversion runs on a normalized copy and the magnitude is put back afterwards, so a colour
@@ -271,7 +269,7 @@ void main(void) {
         vec2 layerUv = uvs.xy;
         vec2 layerUvNext = uvs.zw;
 
-        // Only the first two colour layers warp; the reference carries no flow for the ones past them.
+        // Only the first two colour layers warp; later layers get no flow.
         if (colourLayers < 2)
         {
             layerUv -= flow;
@@ -317,8 +315,8 @@ void main(void) {
 
         if (effectMode == SPRITECARD_TEXTURE_1D_COLOR_LOOKUP)
         {
-            // The colour an effect reads is the layer's own sample on layer 0, but the accumulator
-            // afterwards -- a special case in the reference rather than something that folds away.
+            // Effects read the layer's own sample on layer 0 and the accumulator on later layers, which
+            // keeps this a special case rather than something that folds away.
             layer = SampleGradientRamp(i, i == 0 ? layer : accum, maskMode);
         }
 
@@ -401,22 +399,17 @@ void main(void) {
     {
         vec3 litColor = finalColor * uSelfIllumAmount;
 
-        // TODO: per-vertex m_nLightingMode
         if (uDiffuseAmount != 0.0)
         {
-            ParticleLight_t light = CalculateParticleLighting(vFragPosition, -g_vCameraDirWs, 0.0);
+            vec3 lightingPosition = uLightingMode == PARTICLE_LIGHTING_PER_PIXEL ? vFragPosition : vLightingPosition;
+            ParticleLight_t light = CalculateParticleLighting(lightingPosition, -g_vCameraDirWs, 0.0);
             litColor += finalColor * (light.Ambient + light.Direct) * uDiffuseAmount;
         }
 
         finalColor = uOverbrightFactor * litColor;
 
-        if (uSaturateColorPreAlphaBlend)
-        {
-            finalColor = saturate(finalColor);
-        }
-
         // m_flAddSelfAmount arrives as 1 + amount; over an alpha blend the extra term lays the
-        // particle's own colour additively on top. Placed after the saturate to keep the overshoot.
+        // particle's own colour additively on top.
         finalColor *= uAddSelfAmount;
 
         bool isAdditive = uBlendMode == PARTICLE_OUTPUT_BLEND_MODE_ADD;

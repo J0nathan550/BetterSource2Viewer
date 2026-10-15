@@ -108,7 +108,7 @@ namespace GUI.Types.PackageViewer
                             package.ReadEntry(newEntry, bytes, validateCrc: false);
                             using var stream = new MemoryStream(bytes, 0, (int)newEntry.TotalLength);
                             using var resource = new ValveResourceFormat.Resource();
-                            resource.Read(stream);
+                            resource.Read(stream, mode: ReadMode.Deferred);
 
                             var fileSize = resource.FullFileSize;
 
@@ -164,7 +164,7 @@ namespace GUI.Types.PackageViewer
                         }
                         catch (Exception ex)
                         {
-                            Log.Debug(nameof(PackageRecovery), $"File {hiddenIndex} - {ex.Message}");
+                            Log.Debug(nameof(PackageRecovery), $"Failed to parse \"{newEntry.FileName}\": {ex.Message}");
 
                             newEntry.FileName += $" ({length} bytes)";
 
@@ -214,14 +214,15 @@ namespace GUI.Types.PackageViewer
                 if (archiveIndex != short.MaxValue)
                 {
                     var archiveFileSize = nextOffset;
+                    var archiveFileName = $"{package.FileName}_{archiveIndex:D3}.vpk";
 
                     try
                     {
-                        archiveFileSize = (uint)new FileInfo($"{package.FileName}_{archiveIndex:D3}.vpk").Length;
+                        archiveFileSize = (uint)new FileInfo(archiveFileName).Length;
                     }
                     catch (Exception e)
                     {
-                        Log.Debug(nameof(PackageRecovery), e.Message);
+                        Log.Debug(nameof(PackageRecovery), $"Failed to get size of \"{Path.GetFileName(archiveFileName)}\": {e.Message}");
                     }
 
                     if (archiveFileSize != nextOffset)

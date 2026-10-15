@@ -114,8 +114,8 @@ namespace ValveResourceFormat.Renderer.Particles.Renderers
         public override Texture.SpritesheetData? SpriteSheet => ParticleTextureLayer.FindSpriteSheet(layers);
 
         /// <inheritdoc/>
-        // The override stands in for the card's base texture; the layers composited over it keep their
-        // own textures along with the channels and blend settings that fold them together.
+        // Replaces the card's base texture. Layers composited over it keep their own textures,
+        // channels and blend settings.
         public override void SetTextureOverride(RenderTexture texture)
         {
             layers[0].Texture = texture;
@@ -219,7 +219,14 @@ namespace ValveResourceFormat.Renderer.Particles.Renderers
             return (image.UncroppedMin + (window.Min * size), image.UncroppedMin + (window.Max * size));
         }
 
-        /// <summary>The frames a layer's own sheet is showing, or null when it carries no sequence.</summary>
+        /// <summary>
+        /// The frames a layer's own sheet is showing, or null when it carries no sequence.
+        /// </summary>
+        /// <remarks>
+        /// Layer 0 plays the particle's sequence, later layers the second sequence (0 unless set).
+        /// Sequence numbers outside the sheet play sequence 0. Layer N of a multi-image frame uses
+        /// image N, and the last image covers any layers beyond that.
+        /// </remarks>
         private LayerFrames? GetLayerFrames(int layer, ref Particle particle)
         {
             var spriteSheetData = layers[layer].Texture.SpriteSheetData;
@@ -229,7 +236,8 @@ namespace ValveResourceFormat.Renderer.Particles.Renderers
                 return null;
             }
 
-            var sequence = spriteSheetData.Sequences[particle.SequenceNumber % spriteSheetData.Sequences.Length];
+            var sequenceNumber = layer > 0 ? particle.SecondSequenceNumber : particle.SequenceNumber;
+            var sequence = spriteSheetData.Sequences[(uint)sequenceNumber < (uint)spriteSheetData.Sequences.Length ? sequenceNumber : 0];
 
             if (sequence.Frames.Length == 0)
             {
@@ -238,9 +246,11 @@ namespace ValveResourceFormat.Renderer.Particles.Renderers
 
             var (frame, nextFrame, blend) = GetSheetFrame(ref particle, sequence, animationRate, animationType, animateInFps);
 
-            // TODO: Support more than one image per frame?
-            return new LayerFrames(sequence.Frames[frame].Images[0], sequence.Frames[nextFrame].Images[0], blend);
+            return new LayerFrames(LayerImage(sequence.Frames[frame], layer), LayerImage(sequence.Frames[nextFrame], layer), blend);
         }
+
+        private static Texture.SpritesheetData.Sequence.Frame.Image LayerImage(Texture.SpritesheetData.Sequence.Frame frame, int layer)
+            => frame.Images[Math.Min(layer, frame.Images.Length - 1)];
 
         /// <summary>
         /// The window the card shrinks to, covering the art of both frames it is blending so neither is
@@ -275,18 +285,6 @@ namespace ValveResourceFormat.Renderer.Particles.Renderers
 
             return (uvMin, uvMax, nextMin, nextMax);
         }
-
-        // One corner of a uv rectangle, in the quad's winding order (top-left, bottom-left,
-        // bottom-right, top-right) with v increasing downward.
-        /// <summary>The card-space coordinate of one quad corner, before any layer transform.</summary>
-        internal static Vector2 CardUv(int corner) => corner switch
-        {
-            0 => new Vector2(0f, 1f),
-            1 => new Vector2(0f, 0f),
-            2 => new Vector2(1f, 0f),
-            3 => new Vector2(1f, 1f),
-            _ => throw new ArgumentOutOfRangeException(nameof(corner)),
-        };
 
         // The quad's (right, up) axes from a base pair with the particle roll folded in, matching the
         // spritecard vertex shader. The axes are intentionally not re-normalized (some modes rely on that, e.g.
@@ -383,12 +381,25 @@ namespace ValveResourceFormat.Renderer.Particles.Renderers
             // reused across renderers.
             var instanceFloats = instanceLayout.Stride / sizeof(float);
 
+            var sorted = SortsByDistance(blendMode) && particles.Count > 1;
+
             using (var vertexBuffer = new RentedBuffer<float>(particles.Count * instanceFloats))
+            using (var drawOrder = new RentedBuffer<ulong>(sorted ? particles.Count : 0))
             {
                 var instances = vertexBuffer.Span;
+                var current = particles.Current;
                 var i = 0;
-                foreach (ref var particle in particles.Current)
+
+                var order = drawOrder.Span;
+
+                if (sorted)
                 {
+                    SortBackToFront(current, camera.Location, order);
+                }
+
+                for (var n = 0; n < current.Length; n++)
+                {
+                    ref var particle = ref current[sorted ? (int)(uint)order[n] : n];
                     var radiusScale = RadiusScale.NextNumber(ref particle, systemState);
 
                     // Scales rgb and alpha alike, matching the shader's fade of the whole vertex colour.
@@ -535,7 +546,7 @@ namespace ValveResourceFormat.Renderer.Particles.Renderers
                 return;
             }
 
-            using var _ = SpritecardStateScope(GraphicsContext.RenderState, blendMode);
+            using var _ = SpritecardStateScope(blendMode);
 
             shader.Use();
             VertexArray.Bind(vaoHandle, shader);

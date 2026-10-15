@@ -68,7 +68,7 @@ namespace ValveResourceFormat.IO
         public float ExtrudeRadius { get; set; }
         /// <summary>Gets the roll in degrees added to <see cref="ExtrudeTwist"/> to settle a node-base scan tie.</summary>
         public float ExtrudeTwistTieNudge { get; set; }
-        /// <summary>Gets the roll in degrees of the joint's proxy ring about the forward axis, from the rest frame's +Y.</summary>
+        /// <summary>Gets the roll in degrees of the joint's proxy ring about the forward axis, from the ring frame's +Z.</summary>
         public float ExtrudeTwist { get; set; }
         /// <summary>Gets the forward distance to the joint's second proxy ring (<c>end_effector</c>), or 0 for a single ring.</summary>
         public float EndEffector { get; set; }
@@ -78,6 +78,11 @@ namespace ValveResourceFormat.IO
         public bool Restated { get; set; }
         /// <summary>Gets whether the joint is a static, goal-locked sibling that a hub's <c>child_sibling_spring</c> gathers.</summary>
         public bool SpringsWithSiblings { get; set; }
+        /// <summary>
+        /// Gets whether the joint is a free-rotating, goal-locked static whose first ring simulates, declared simulating with
+        /// <c>lock_translation</c>.
+        /// </summary>
+        public bool PinnedOverSimulatedRing { get; set; }
         /// <summary>
         /// Gets the root bone of the second <c>ClothChain</c> that re-declares this joint, or null when only one declares it.
         /// </summary>
@@ -135,6 +140,7 @@ namespace ValveResourceFormat.IO
         private Dictionary<int, List<int>>? proxyRings;
         private (Dictionary<int, List<int>> ChildrenOf, Dictionary<int, int> OwnerOf)? proxyRingsByOwner;
         private ChainTopology? chainTopology;
+        private readonly HashSet<int> erasedChainParents = [];
         private float? chainRingCurvature;
         private List<BoneChain>? unversionedChains;
 
@@ -763,7 +769,7 @@ namespace ValveResourceFormat.IO
             var isReal = new bool[n];
             for (var i = 0; i < n; i++)
             {
-                isReal[i] = !IsGeneratedNodeName(Fe.CtrlName[i]) && !ImportedStripNodes.Contains(i);
+                isReal[i] = !IsGeneratedNodeName(Fe.CtrlName[i]) && !ImportedStripNodes.Contains(i) && !(HasCompiledSkelParents && IsSpringRopeNode(i));
             }
 
             var rodGraph = BuildRodGraph();
@@ -918,7 +924,7 @@ namespace ValveResourceFormat.IO
                     continue;
                 }
 
-                var rodLinked = rodPairs.Contains(UnorderedPair(p, i));
+                var rodLinked = rodPairs.Contains(UnorderedPair(p, i)) || AnimRodPairs.Contains(UnorderedPair(p, i));
                 var bothDrivenSim = i >= FirstPositionDrivenNode && p >= FirstPositionDrivenNode && Simulates(i) && Simulates(p);
                 var proxyRibbon = proxyChildrenOf.ContainsKey(i);
                 var hingedRoot = HasHingeAnchor(Fe.CtrlName[p]) || RigidHingeJoints.ContainsKey(p);
@@ -975,6 +981,12 @@ namespace ValveResourceFormat.IO
                 }
             }
 
+            foreach (var (i, p) in ErasedParentLinks(isReal, realParent))
+            {
+                realParent[i] = p;
+                erasedChainParents.Add(i);
+            }
+
             if (SkeletonBoneParents is not null)
             {
                 var sheetSkinned = SheetSkinnedNodes();
@@ -1007,7 +1019,7 @@ namespace ValveResourceFormat.IO
                             continue;
                         }
 
-                        if (Simulates(i) || Simulates(p))
+                        if (Simulates(i) || Simulates(p) || StatesOwnTwistRelax(i, p))
                         {
                             continue;
                         }
@@ -1164,6 +1176,54 @@ namespace ValveResourceFormat.IO
 
             return (realParent, children, roots);
         }
+
+        /// <summary>
+        /// Gets whether <paramref name="node"/> hangs under a rotation-locked static chain parent missing from
+        /// <c>m_SkelParents</c>, declared simulated with <c>lock_translation</c>.
+        /// </summary>
+        internal bool HasErasedChainParent(int node)
+        {
+            _ = Topology;
+            return erasedChainParents.Contains(node);
+        }
+
+        /// <summary>
+        /// Finds each parentless free-rotating static whose only twist entry toward a rotation-locked static has no entry back,
+        /// paired with that static as its erased chain parent.
+        /// </summary>
+        private List<(int Node, int Parent)> ErasedParentLinks(bool[] isReal, int[] realParent)
+        {
+            var candidates = new Dictionary<int, List<int>>();
+            foreach (var (orient, end) in TwistRelaxByLink.Keys)
+            {
+                if (orient >= isReal.Length || end >= isReal.Length || !isReal[orient] || !isReal[end]
+                    || realParent[orient] >= 0 || SkelParentOf(orient) >= 0
+                    || !Index.IsStatic(orient) || !Index.AllowsRotation(orient)
+                    || !Index.IsStatic(end) || Index.AllowsRotation(end)
+                    || TwistRelaxByLink.ContainsKey((end, orient)) || ReachesByParents(realParent, end, orient))
+                {
+                    continue;
+                }
+
+                if (SkeletonBoneParents is { } boneParents
+                    && !string.Equals(boneParents.GetValueOrDefault(Fe.CtrlName[orient]), Fe.CtrlName[end],
+                        StringComparison.OrdinalIgnoreCase))
+                {
+                    continue;
+                }
+
+                GetOrAdd(candidates, orient).Add(end);
+            }
+
+            return [.. candidates.Where(static entry => entry.Value.Count == 1).Select(static entry => (entry.Key, entry.Value[0]))];
+        }
+
+        /// <summary>
+        /// Gets whether static <paramref name="node"/> carries a relaxless twist only its own <c>twist_relax</c> writes, with no
+        /// twist linking it to <paramref name="parent"/>.
+        /// </summary>
+        private bool StatesOwnTwistRelax(int node, int parent)
+            => (OrientsRelaxlessTwist(node) || HasRelaxlessTwistLink(node)) && !TwistLinks.Contains(UnorderedPair(parent, node));
 
         /// <summary>
         /// Groups each root's children into the chain declarations they were authored as, one spec per declaration.
@@ -1528,7 +1588,40 @@ namespace ValveResourceFormat.IO
                     }
                 }
 
-                return found is { } reading ? MathUtils.Saturate(reading) : 1f;
+                return (found ?? SiblingContraction(joint)) is { } reading ? MathUtils.Saturate(reading) : 1f;
+            }
+
+            float? SiblingContraction(BoneChainJoint joint)
+            {
+                if (joint.ChildSiblingSpring <= 0f)
+                {
+                    return null;
+                }
+
+                var kids = KidsOf(joint);
+                var siblingPairs = kids.SelectMany((kid, i) => kids.Skip(i + 1)
+                    .SelectMany(other => Side(kid.Node).SelectMany(a => Side(other.Node).Select(b => UnorderedPair(a, b)))));
+                List<float>? common = null;
+                foreach (var pair in siblingPairs)
+                {
+                    if (!rodContractionsByPair.TryGetValue(pair, out var contractions))
+                    {
+                        continue;
+                    }
+
+                    if (common is null)
+                    {
+                        common = [.. contractions];
+                    }
+                    else
+                    {
+                        common.RemoveAll(seen => !contractions.Exists(contraction => MathF.Abs(seen - contraction) <= ChainReadingTolerance));
+                    }
+                }
+
+                return common is { Count: > 0 } && common.TrueForAll(value => MathF.Abs(value - common[0]) <= ChainReadingTolerance)
+                    ? common[0]
+                    : null;
             }
 
             int JointCopies(BoneChainJoint joint, bool floor = false)
@@ -1547,6 +1640,11 @@ namespace ValveResourceFormat.IO
                         foreach (var b in Side(other))
                         {
                             var count = SpanRodCopies(a, b);
+                            if (count == 0 && Index.IsStatic(a) && Index.IsStatic(b))
+                            {
+                                continue;
+                            }
+
                             if (count == 0 || (!floor && copies != 0 && count != copies))
                             {
                                 return false;
@@ -1652,9 +1750,11 @@ namespace ValveResourceFormat.IO
                     || (joint.TorsionSpring && rootNode == greatGrand);
 
             // upwardCopies is the joint's JointCopies when the root is an upward target, else 0.
-            float? RootSuspenderValue(BoneChainJoint joint, int parentNode, int grand, int greatGrand, out int upwardCopies)
+            float? RootSuspenderValue(BoneChainJoint joint, int parentNode, int grand, int greatGrand, out int upwardCopies,
+                out float? rootSpanSpring)
             {
                 upwardCopies = 0;
+                rootSpanSpring = null;
                 if (joint.Node == rootNode)
                 {
                     return null;
@@ -1666,7 +1766,7 @@ namespace ValveResourceFormat.IO
                     var totalCopies = upwardCopies = JointCopies(joint);
                     if (totalCopies <= 1 || totalCopies % 2 != 0)
                     {
-                        return null;
+                        return DoubledRootSpanSuspender(joint, parentNode, grand, greatGrand, out upwardCopies, out rootSpanSpring);
                     }
 
                     var baseCopies = totalCopies / 2;
@@ -1674,26 +1774,28 @@ namespace ValveResourceFormat.IO
                         && rodRelaxationsByPair.TryGetValue(UnorderedPair(joint.Node, ownRing[0]), out var ringRods)
                         ? ringRods.Count
                         : 0;
-                    float? suspender = null;
-                    foreach (var a in Side(joint.Node))
+                    if (RootSpans(joint, baseCopies * 2) is not { } spans)
                     {
-                        foreach (var b in Side(rootNode))
-                        {
-                            var pair = UnorderedPair(a, b);
-                            if (!rodRelaxationsByPair.TryGetValue(pair, out var relaxations)
-                                || relaxations.Count != baseCopies * 2
-                                || (SplitEvenly(relaxations, naturalRf, baseCopies)
-                                    ?? (ringCopies == baseCopies && relaxations.TrueForAll(rf => MathF.Abs(rf - naturalRf) < ChainReadingTolerance)
-                                        ? naturalRf
-                                        : null)) is not { } value
-                                || !AgreeInto(ref suspender, value))
-                            {
-                                return null;
-                            }
-                        }
+                        return null;
                     }
 
-                    return suspender;
+                    float? suspender = null;
+                    if (spans.TrueForAll(relaxations => (SplitEvenly(relaxations, naturalRf, baseCopies)
+                            ?? (ringCopies == baseCopies && relaxations.TrueForAll(rf => MathF.Abs(rf - naturalRf) < ChainReadingTolerance)
+                                ? naturalRf
+                                : null)) is { } value
+                        && AgreeInto(ref suspender, value)))
+                    {
+                        return suspender;
+                    }
+
+                    if (rootNode != parentNode || SplitRootSpans(spans, baseCopies) is not { } split || split.Spring == split.Suspender)
+                    {
+                        return null;
+                    }
+
+                    rootSpanSpring = split.Spring;
+                    return split.Suspender;
                 }
 
                 float? rigidSuspender = null;
@@ -1714,6 +1816,70 @@ namespace ValveResourceFormat.IO
                 }
 
                 return rigidSuspender;
+            }
+
+            List<List<float>>? RootSpans(BoneChainJoint joint, int copies)
+            {
+                var spans = new List<List<float>>();
+                foreach (var a in Side(joint.Node))
+                {
+                    foreach (var b in Side(rootNode))
+                    {
+                        if (!rodRelaxationsByPair.TryGetValue(UnorderedPair(a, b), out var relaxations) || relaxations.Count != copies)
+                        {
+                            return null;
+                        }
+
+                        spans.Add(relaxations);
+                    }
+                }
+
+                return spans;
+            }
+
+            static (float Spring, float Suspender)? SplitRootSpans(List<List<float>> spans, int baseCopies)
+            {
+                (float Spring, float Suspender)? split = null;
+                foreach (var relaxations in spans)
+                {
+                    var low = relaxations.Min();
+                    var high = relaxations.Max();
+                    if (high - low >= ChainReadingTolerance && relaxations.Count(rf => rf - low < ChainReadingTolerance) != baseCopies)
+                    {
+                        return null;
+                    }
+
+                    if (split is { } seen
+                        && (MathF.Abs(seen.Spring - high) >= ChainReadingTolerance || MathF.Abs(seen.Suspender - low) >= ChainReadingTolerance))
+                    {
+                        return null;
+                    }
+
+                    split = (high, low);
+                }
+
+                return split;
+            }
+
+            float? DoubledRootSpanSuspender(BoneChainJoint joint, int parentNode, int grand, int greatGrand, out int copies,
+                out float? rootSpanSpring)
+            {
+                copies = 0;
+                rootSpanSpring = null;
+                var baseCopies = SpanCopies(joint, parentNode);
+                if (rootNode == parentNode || baseCopies < 2
+                    || (joint.BendSpring && grand != rootNode && SpanCopies(joint, grand) != baseCopies)
+                    || (joint.TorsionSpring && greatGrand != rootNode && SpanCopies(joint, greatGrand) != baseCopies)
+                    || Side(joint.Node).Exists(a => Side(rootNode).Exists(b => IsSourceSpring(a, b)))
+                    || RootSpans(joint, 2 * baseCopies) is not { } spans
+                    || SplitRootSpans(spans, baseCopies) is not { } split)
+                {
+                    return null;
+                }
+
+                copies = 2 * baseCopies;
+                rootSpanSpring = split.Spring;
+                return split.Suspender;
             }
 
             float? RootCompanionValue(BoneChainJoint joint, int parentNode, int grand, int greatGrand, out float? spanRelaxation)
@@ -1907,6 +2073,19 @@ namespace ValveResourceFormat.IO
             List<int> Extrusion(int node)
                 => jointRingOf.TryGetValue(node, out var ring) ? [node, .. ring] : [node];
 
+            bool SpanOnlyAnimated(BoneChainJoint joint)
+            {
+                if (joint.IsRoot || joint.ParentNode < 0 || !Simulates(joint.Node)
+                    || (jointRingOf.TryGetValue(joint.Node, out var ring) && ring.Count > 0))
+                {
+                    return false;
+                }
+
+                var parentSide = Side(joint.ParentNode);
+                return parentSide.Exists(other => AnimRodPairs.Contains(UnorderedPair(joint.Node, other)))
+                    && !AnyRod(rodPairs, [joint.Node], parentSide);
+            }
+
             var ropeHinted = Index.NodeBases.Count == 0 ? RopeRunParents : new Dictionary<int, int>();
 
             // Read up front: JointCopies consults it, and nothing the loop below writes feeds it.
@@ -1967,10 +2146,25 @@ namespace ValveResourceFormat.IO
                 joint.TorsionStiffness = joint.TorsionSpring ? SpringStiffness(greatGrandParent, grandParent) : 0f;
                 joint.Antishrink = JointContraction(joint, parent, grandParent, greatGrandParent);
 
-                if (RootSuspenderValue(joint, parent, grandParent, greatGrandParent, out var upwardCopies) is { } suspender)
+                if (RootSuspenderValue(joint, parent, grandParent, greatGrandParent, out var upwardCopies, out var rootSpanSpring) is { } suspender)
                 {
                     joint.Suspender = Slider(suspender);
                     joint.ExtraIterations = upwardCopies > 0 ? upwardCopies / 2 - 1 : JointCopies(joint) - 1;
+                    if (rootSpanSpring is { } spring)
+                    {
+                        if (rootNode == parent)
+                        {
+                            joint.StretchStiffness = Slider(spring);
+                        }
+                        else if (joint.BendSpring && rootNode == grandParent)
+                        {
+                            joint.BendStiffness = Slider(spring);
+                        }
+                        else
+                        {
+                            joint.TorsionStiffness = Slider(spring);
+                        }
+                    }
                 }
                 else if (RootCompanionValue(joint, parent, grandParent, greatGrandParent, out var spanReading) is { } companion)
                 {
@@ -2003,10 +2197,17 @@ namespace ValveResourceFormat.IO
                 }
             }
 
+            var spanAnimated = new List<BoneChainJoint>();
             foreach (var joint in chain.Joints)
             {
                 if (!DeclaresNoStretch(joint))
                 {
+                    joint.AnimatedLength = SpanOnlyAnimated(joint);
+                    if (joint.AnimatedLength)
+                    {
+                        spanAnimated.Add(joint);
+                    }
+
                     continue;
                 }
 
@@ -2026,6 +2227,8 @@ namespace ValveResourceFormat.IO
                     joint.StretchStiffness = 1f;
                 }
             }
+
+            ReadAnimatedSpans(spanAnimated, jointByNode, rootNode, Side, Slider);
 
             float ChildSiblingValue(BoneChainJoint joint)
             {
@@ -2262,6 +2465,13 @@ namespace ValveResourceFormat.IO
                 {
                     joint.ValueNode = proxies[0];
                     joint.InvMass = proxies[0] < Fe.NodeInvMasses.Length ? Fe.NodeInvMasses[proxies[0]] : joint.InvMass;
+                }
+                else if (!joint.Simulated && HasCompiledSkelParents && Index.IsLockedToGoal(joint.Node) && Index.AllowsRotation(joint.Node)
+                    && proxies.FindIndex(p => p < Fe.NodeInvMasses.Length && Fe.NodeInvMasses[p] > 0f
+                        && RingSuffixIndex(Fe.CtrlName[p]) is 0 or 1) is var simulatedRing and >= 0)
+                {
+                    joint.ValueNode = proxies[simulatedRing];
+                    joint.PinnedOverSimulatedRing = true;
                 }
 
                 var ring = proxies;

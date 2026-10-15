@@ -20,6 +20,8 @@
   </ItemGroup>
 
   <ItemGroup>
+    <Using Include="ValveKeyValue" />
+    <Using Include="ValveResourceFormat.ResourceTypes.ModelAnimation.FrameBone" Alias="Transform" />
     <Using Include="ValveResourceFormat.Utils" />
     <Using Include="ValveResourceFormat.CompiledShader" />
     <Using Include="ValveResourceFormat.Renderer.Utils" />
@@ -38,13 +40,14 @@
   </ItemGroup>
 
   <ItemGroup>
-    <PackageReference Include="Microsoft.Extensions.Logging.Abstractions" Version="10.0.11" />
+    <PackageReference Include="Microsoft.Extensions.Logging.Abstractions" Version="10.0.12" />
     <PackageReference Include="NLayer" Version="3.0.0" />
     <PackageReference Include="OpenTK.Graphics" Version="4.9.4" />
   </ItemGroup>
 
   <ItemGroup>
     <ProjectReference Include="..\ValveResourceFormat\ValveResourceFormat.csproj" />
+    <ProjectReference Include="..\Misc\SourceGenerators\SourceGenerators.csproj" OutputItemType="Analyzer" ReferenceOutputAssembly="false" />
   </ItemGroup>
 
 </Project>

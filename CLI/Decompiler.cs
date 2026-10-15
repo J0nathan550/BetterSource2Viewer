@@ -16,6 +16,7 @@ using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
 using ValvePak;
 using ValveResourceFormat;
+using ValveResourceFormat.Blocks;
 using ValveResourceFormat.CompiledShader;
 using ValveResourceFormat.IO;
 using ValveResourceFormat.NavMesh;
@@ -883,8 +884,8 @@ namespace CLI
         }
 
         /// <summary>
-        /// Loaders for --test_loader, shared by the input files in each folder since mounting the game files is slow.
-        /// A loader is disposed once all of the files in its folder have been processed, to not keep every game in memory.
+        /// Loaders for --test_loader, shared by the files in each folder since mounting game files is slow.
+        /// Each is disposed after its folder's last file, to not keep every game in memory.
         /// </summary>
         private readonly Dictionary<string, TestFileLoader> TestFileLoaders = [];
 
@@ -1029,6 +1030,7 @@ namespace CLI
             {
                 case VfxProgramData.MAGIC: ParseVCS(path, stream, originalPath, package); return;
                 case NavMeshFile.MAGIC: ParseNAV(path, stream, originalPath); return;
+                case NavSpaceFile.MAGIC: ParseNavSpace(path, stream, originalPath); return;
                 case ToolsAssetInfo.MAGIC2:
                 case ToolsAssetInfo.MAGIC: ParseToolsAssetInfo(path, stream, originalPath); return;
             }
@@ -1060,7 +1062,7 @@ namespace CLI
 
             try
             {
-                resource.Read(stream);
+                resource.Read(stream, mode: OutputFile == null && !CollectStats ? ReadMode.Deferred : ReadMode.Runtime);
 
                 if (HasShaderOptions && resource.DataBlock is Material material)
                 {
@@ -1146,7 +1148,29 @@ namespace CLI
             Console.WriteLine("\tFile Size: {0} bytes", resource.FileSize);
             Console.WriteLine(Environment.NewLine);
 
-            var rerl = resource.ExternalReferences;
+            HashSet<Exception>? loggedExceptions = null;
+
+            void LogBlockException(Exception e)
+            {
+                loggedExceptions ??= [];
+
+                if (loggedExceptions.Add(e))
+                {
+                    LogException(e, path, originalPath);
+                }
+            }
+
+            ResourceExtRefList? rerl = null;
+
+            try
+            {
+                rerl = resource.ExternalReferences;
+            }
+            catch (Exception e)
+            {
+                LogBlockException(e);
+            }
+
             if (rerl != null)
             {
                 Console.WriteLine("--- Resource External Refs: ---");
@@ -1164,21 +1188,33 @@ namespace CLI
 
             Console.WriteLine(Environment.NewLine);
 
-            Console.WriteLine("--- Resource Blocks: Count {0} ---", resource.Blocks.Count);
+            Console.WriteLine("--- Resource Blocks: Count {0} ---", resource.UnparsedBlocks.Count);
 
-            foreach (var block in resource.Blocks)
+            foreach (var header in resource.UnparsedBlocks)
             {
-                Console.WriteLine("\t-- Block: {0,-4}  Size: {1,-6} bytes [Offset: {2,6}]", block.Type, block.Size, block.Offset);
+                Console.WriteLine("\t-- Block: {0,-4}  Size: {1,-6} bytes [Offset: {2,6}]", header.Type, header.Size, header.Offset);
             }
 
             if (ShouldPrintBlockContents)
             {
                 Console.WriteLine(Environment.NewLine);
 
-                foreach (var block in resource.Blocks)
+                for (var blockIndex = 0; blockIndex < resource.UnparsedBlocks.Count; blockIndex++)
                 {
-                    if (!PrintAllBlocks && !BlocksToPrint.Contains(block.Type.ToString()))
+                    if (!PrintAllBlocks && !BlocksToPrint.Contains(resource.UnparsedBlocks[blockIndex].Type.ToString()))
                     {
+                        continue;
+                    }
+
+                    Block block;
+
+                    try
+                    {
+                        block = resource.GetBlockByIndex(blockIndex);
+                    }
+                    catch (Exception e)
+                    {
+                        LogBlockException(e);
                         continue;
                     }
 
@@ -1287,6 +1323,34 @@ namespace CLI
 
                     AddNonResourceStat($"NavMesh version {navMeshFile.Version}, subversion {navMeshFile.SubVersion}", path, originalPath);
                 }
+            }
+            catch (Exception e)
+            {
+                LogException(e, path, originalPath);
+            }
+        }
+
+        private void ParseNavSpace(string path, Stream stream, string? originalPath)
+        {
+            try
+            {
+                var navSpaceFile = new NavSpaceFile();
+                navSpaceFile.Read(stream);
+
+                if (!CollectStats)
+                {
+                    Console.WriteLine(navSpaceFile.ToString());
+                    return;
+                }
+
+                var id = $"NavSpace version {navSpaceFile.Version}";
+
+                if (originalPath != null)
+                {
+                    path = $"{originalPath} -> {path}";
+                }
+
+                AddStat(id, id, path);
             }
             catch (Exception e)
             {
@@ -1422,6 +1486,7 @@ namespace CLI
 
             using var package = new Package();
             package.SetFileName(path);
+            package.OptimizeEntriesForBinarySearch(StringComparison.OrdinalIgnoreCase);
 
             try
             {
@@ -2286,13 +2351,6 @@ namespace CLI
                         }
                     }
                     break;
-                case ResourceType.Shader:
-                {
-                    var stream = resource.Reader!.BaseStream;
-                    stream.Seek(0, SeekOrigin.Begin);
-                    ParseVCS(path, stream, originalPath, package);
-                    break;
-                }
             }
 
             AddStatLocal(info);
@@ -2329,6 +2387,14 @@ namespace CLI
                     ExportExtras = GltfExportExtras,
                 };
                 gltfModelExporter.Export(resource, null); // Filename passed as null which tells exporter to write gltf to a null stream
+            }
+
+            // Last, because the shader disposes the resource stream it reads
+            if (resource.ResourceType == ResourceType.Shader)
+            {
+                var stream = resource.Reader!.BaseStream;
+                stream.Seek(0, SeekOrigin.Begin);
+                ParseVCS(path, stream, originalPath, package);
             }
         }
 
@@ -2397,7 +2463,7 @@ namespace CLI
         }
 
         [GeneratedRegex(
-            @"(?:_c|\.vcs|\.nav|\.gnv|\.vfe|\.vfont|\.uifont)$|" +
+            @"(?:_c|\.vcs|\.nav|\.navspace|\.gnv|\.vfe|\.vfont|\.uifont)$|" +
             @"^(?:readonly_)?tools_asset_info\.bin$|" +
             @"^(?:subtitles|closecaption)_.*\.dat$"
         )]

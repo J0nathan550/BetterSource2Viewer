@@ -44,7 +44,6 @@ public sealed class LightBinner(SceneViewState view) : IDisposable
     private StorageBuffer? CullPlanesGpu;
     private StorageBuffer? VisibleBitsGpu;
     private UniformBuffer<CullParams>? CullParamsGpu;
-    private UniformBuffer<LightCullConstants>? ConstantsGpu;
 
     private ReadbackRing? VisibilityReadback;
 
@@ -52,7 +51,7 @@ public sealed class LightBinner(SceneViewState view) : IDisposable
     private readonly BarnLightFaceSlot[][] VisibilitySnapshots = new BarnLightFaceSlot[ReadbackRing.Depth][];
     private readonly int[] VisibilitySnapshotCounts = new int[ReadbackRing.Depth];
 
-    private readonly LightCullConstants Constants = new();
+    private LightCullConstants Constants;
 
     private int TileCols;
     private int TileRows;
@@ -69,13 +68,26 @@ public sealed class LightBinner(SceneViewState view) : IDisposable
     /// <summary>Gets the buffer holding this scene's per tile and per depth bin masks.</summary>
     public StorageBuffer? CullBits { get; private set; }
 
+    /// <summary>Gets the first word of the projected decal batch's tile region. Valid after <see cref="Update"/>.</summary>
+    public uint DecalTileBase => Feeder.TileBase(TiledCullFeeder.BatchDecals);
+
+    /// <summary>Gets the first word of the projected decal batch's depth bin region.</summary>
+    public uint DecalBinBase => Feeder.BinBase(TiledCullFeeder.BatchDecals);
+
+    /// <summary>Gets the mask words per tile and per depth bin of the projected decal batch.</summary>
+    public uint DecalCullWords => Feeder.Stride(TiledCullFeeder.BatchDecals);
+
+    /// <summary>Gets the projected decal slots the decal pass iterates.</summary>
+    public int DecalSlotCount => Feeder.SlotCount(TiledCullFeeder.BatchDecals);
+
     private bool CanCull => (view.Scene.LightingInfo.LightingData.NumBarnLights > 0
             || view.Scene.LightingInfo.EnvMaps.Count > 0
-            || view.Scene.ProbeAtlasVolumes.Count > 0)
+            || view.Scene.ProbeAtlasVolumes.Count > 0
+            || view.Scene.ProjectedDecals.Count > 0)
         && TileCullBitsShader != null
         && DepthBinCullBitsShader != null;
 
-    /// <summary>Loads the two compute shaders. Call once the GL context exists.</summary>
+    /// <summary>Loads the three compute shaders. Call once the GL context exists.</summary>
     public void LoadShaders()
     {
         TileCullBitsShader = view.Scene.RendererContext.ShaderLoader.LoadShader("compute_tile_cullbits");
@@ -83,20 +95,8 @@ public sealed class LightBinner(SceneViewState view) : IDisposable
         ReduceCullBitsShader = view.Scene.RendererContext.ShaderLoader.LoadShader("reduce_cullbits");
     }
 
-    /// <summary>
-    /// Points this pass's pixels at the ones the masks were built for. The viewmodel draws into the same
-    /// target through a different projection, so it cannot take its tile from gl_FragCoord directly.
-    /// </summary>
-    /// <param name="remap">Pixel remap: xy scale, zw bias.</param>
-    public void SetPixelRemap(Vector4 remap)
-    {
-        Constants.LightCullPixelRemap = remap;
-
-        if (ConstantsGpu != null)
-        {
-            ConstantsGpu.Data = Constants;
-        }
-    }
+    /// <summary>Gets the layout of this scene's masks and the view they were built for. Valid after <see cref="Update"/>.</summary>
+    public LightCullConstants CullConstants => Constants;
 
     /// <summary>What this scene's binner produced for the frame, for the render stats display.</summary>
     /// <param name="Active">Whether items were binned, as opposed to every mask being filled with ones.</param>
@@ -128,21 +128,12 @@ public sealed class LightBinner(SceneViewState view) : IDisposable
         ? (Constants.EnvMapTileBase, Constants.EnvMapCullWords)
         : (Constants.LightTileBase, Constants.LightCullWords);
 
-    /// <summary>Binds this scene's masks and their layout for the shading pass.</summary>
-    public void Bind()
-    {
-        CullBits?.BindBufferBase();
-
-        if (ConstantsGpu != null)
-        {
-            ConstantsGpu.BindBufferBase();
-            ConstantsGpu.Update();
-        }
-    }
+    /// <summary>Binds this scene's masks for the shading pass.</summary>
+    public void Bind() => CullBits?.BindBufferBase();
 
     /// <summary>
-    /// Projects every cull item for this frame and publishes the resulting layout. Must run before the
-    /// view buffer upload preceding <see cref="Dispatch"/>, since the shading pass reads the layout.
+    /// Projects every cull item for this frame and works out the resulting layout. Must run before the
+    /// view buffer upload preceding <see cref="Dispatch"/>, which carries the layout to the shading pass.
     /// </summary>
     /// <param name="viewConstants">View the items are projected against.</param>
     /// <param name="viewportWidth">Viewport width in pixels.</param>
@@ -173,6 +164,7 @@ public sealed class LightBinner(SceneViewState view) : IDisposable
             Feeder.AddBarnLights(view.Scene.LightingInfo.BinnedBarnLightVolumes);
             Feeder.AddEnvMaps(view.Scene.LightingInfo.EnvMaps);
             Feeder.AddLightProbes(view.Scene.ProbeAtlasVolumes);
+            Feeder.AddDecals(view.Scene.ProjectedDecals.BoxTransforms);
         }
         else
         {
@@ -183,7 +175,8 @@ public sealed class LightBinner(SceneViewState view) : IDisposable
             Feeder.AddCounts(
                 view.Scene.LightingInfo.BinnedBarnLightVolumes.Length,
                 Math.Min(view.Scene.LightingInfo.EnvMaps.Count, EnvMapArray.MAX_ENVMAPS),
-                view.Scene.ProbeAtlasVolumes.Count);
+                view.Scene.ProbeAtlasVolumes.Count,
+                view.Scene.ProjectedDecals.Count);
         }
 
         Feeder.End();
@@ -218,9 +211,6 @@ public sealed class LightBinner(SceneViewState view) : IDisposable
         Constants.LightCullCameraDir = viewConstants.CameraDirWs;
 
         Constants.LightCullPixelRemap = ViewConstants.PixelRemapIdentity;
-
-        Debug.Assert(ConstantsGpu is not null);
-        ConstantsGpu.Data = Constants;
     }
 
     /// <summary>
@@ -372,7 +362,6 @@ public sealed class LightBinner(SceneViewState view) : IDisposable
     private void EnsureBuffers()
     {
         CullParamsGpu ??= new UniformBuffer<CullParams>(ReservedBufferSlots.CullParams);
-        ConstantsGpu ??= new UniformBuffer<LightCullConstants>(ReservedBufferSlots.LightCull);
 
         CullItemsGpu ??= StorageBuffer.Allocate<CullItem>(ReservedBufferSlots.BufferSlot15, "CullItems", Feeder.ItemArray.Length, BufferUsage.Dynamic);
 
@@ -420,7 +409,6 @@ public sealed class LightBinner(SceneViewState view) : IDisposable
         CullPlanesGpu?.Delete();
         VisibleBitsGpu?.Delete();
         CullParamsGpu?.Dispose();
-        ConstantsGpu?.Dispose();
         VisibilityReadback?.Dispose();
 
         CullBits = null;
@@ -428,7 +416,6 @@ public sealed class LightBinner(SceneViewState view) : IDisposable
         CullPlanesGpu = null;
         VisibleBitsGpu = null;
         CullParamsGpu = null;
-        ConstantsGpu = null;
         VisibilityReadback = null;
     }
 }

@@ -7,6 +7,8 @@ namespace ValveResourceFormat.Renderer.SceneEnvironment;
 /// <summary>
 ///     Scene node representing a light source with type, color, and attenuation.
 /// </summary>
+/// <seealso href="https://s2v.app/SchemaExplorer/cs2/server/CLightComponent">CLightComponent</seealso>
+/// <seealso href="https://s2v.app/SchemaExplorer/cs2/server/CBarnLight">CBarnLight</seealso>
 public class SceneLight(Scene scene) : SceneNode(scene)
 {
     /// <summary>
@@ -132,6 +134,15 @@ public class SceneLight(Scene scene) : SceneNode(scene)
     /// <summary>Gets or sets the color temperature in Kelvin that <see cref="Color"/> comes from, or <see langword="null"/>
     /// when the light uses its color as is.</summary>
     public float? ColorTemperature { get; set; }
+
+    /// <summary>Gets or sets the sRGB color of the sky an environment light fills shadows with.</summary>
+    public Vector3 SkyColor { get; set; } = Vector3.One;
+
+    /// <summary>Gets or sets the intensity of <see cref="SkyColor"/>.</summary>
+    public float SkyIntensity { get; set; } = 1.0f;
+
+    /// <summary>Gets or sets the sRGB color the ground bounces an environment light's sun and sky back up with.</summary>
+    public Vector3 SkyAmbientBounce { get; set; } = Vector3.One;
 
     /// <summary>Gets or sets the additional brightness scale multiplier.</summary>
     public float BrightnessScale { get; set; } = 1.0f;
@@ -325,6 +336,9 @@ public class SceneLight(Scene scene) : SceneNode(scene)
             },
 
             BrightnessScale = entity.GetFloatProperty("brightnessscale", 1.0f),
+            SkyColor = entity.GetColor32Property("skycolor"),
+            SkyIntensity = entity.GetFloatProperty("skyintensity", 1.0f),
+            SkyAmbientBounce = entity.GetColor32Property("skyambientbounce"),
             Range = entity.GetFloatProperty("range", 512.0f),
             FallOff = entity.GetFloatProperty("skirt", 0.1f),
 
@@ -499,8 +513,7 @@ public class SceneLight(Scene scene) : SceneNode(scene)
 
     /// <summary>
     /// Editor model tint for a light entity, keyed on how expensive it is: teal for static, amber for
-    /// stationary, red for dynamic. These are the colors the Source 2 light entities pass to the
-    /// <c>lightModeTint2</c> editor model helper in their fgd.
+    /// stationary, red for dynamic.
     /// </summary>
     /// <param name="entity">Light entity to read the direct lighting key values from.</param>
     public static Vector3 GetEditorTint(Entity entity) => GetCost(entity) switch
@@ -859,7 +872,7 @@ public class SceneLight(Scene scene) : SceneNode(scene)
     }
 
     /// <summary>
-    /// Calculates the effective solid angle of a spotlight cone, clamped to a maximum of 4π steradians (full sphere).
+    /// Calculates the effective solid angle of a spotlight cone, clamped to a maximum of 4pi steradians (full sphere).
     /// </summary>
     public float ComputeConeSolidAngle()
     {

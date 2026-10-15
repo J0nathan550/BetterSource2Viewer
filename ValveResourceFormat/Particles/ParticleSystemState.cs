@@ -1,3 +1,4 @@
+using ValveResourceFormat.Particles.Constraints;
 using ValveResourceFormat.Particles.Utils;
 using ValveResourceFormat.ResourceTypes;
 
@@ -61,6 +62,9 @@ namespace ValveResourceFormat.Particles
         /// <summary>How long the system has been running, in seconds.</summary>
         public float Age { get; set; }
 
+        /// <summary>The system's <see cref="Age"/> when it last restarted, or 0 if it never has.</summary>
+        internal float RestartAge { get; set; }
+
         /// <summary>The system's <see cref="Age"/> when the frame being simulated began.</summary>
         internal float FrameStartAge { get; private set; }
 
@@ -77,6 +81,9 @@ namespace ValveResourceFormat.Particles
         /// <summary>World-space position of the render camera, updated once per simulation step.</summary>
         public Vector3 CameraPosition { get; set; }
 
+        /// <summary>The local player, or null where there is none to find.</summary>
+        public IParticlePlayer? Player { get; set; }
+
         /// <summary>
         /// How long each sequence of the sheet the drawing layer animates this system's particles with
         /// runs, in frames, or null when nothing it draws with carries a sheet. Set by whatever draws
@@ -87,22 +94,23 @@ namespace ValveResourceFormat.Particles
         /// <summary>The scene lighting</summary>
         public IParticleLighting Lighting { get; set; } = IParticleLighting.Unlit;
 
-        /// <summary>Whether the system stops at <see cref="EndTime"/> rather than running until it empties.</summary>
-        public bool EndEarly { get; set; }
+        /// <summary>The world geometry the system's collision and ground placement trace against.</summary>
+        public IParticleCollision Collision { get; set; } = IParticleCollision.None;
 
-        /// <summary>Whether ending the system drops the particles still alive instead of letting them finish.</summary>
-        public bool DestroyInstantlyOnEnd { get; private set; }
+        private CollisionPlaneSet?[]? collisionPlaneSets;
 
         /// <summary>
-        /// Whether reaching <see cref="EndTime"/> replays the system rather than ending it.
+        /// The world collision plane sets of the whole system hierarchy, indexed by collision mode, held
+        /// by the root system.
         /// </summary>
-        public bool RestartOnEnd { get; private set; }
+        internal CollisionPlaneSet?[] CollisionPlaneSets
+            => ParentSystem?.CollisionPlaneSets ?? (collisionPlaneSets ??= new CollisionPlaneSet?[(int)ParticleCollisionMode.COLLISION_MODE_PER_PARTICLE_TRACE]);
 
-        /// <summary>System age at which the scheduled stop or restart fires.</summary>
+        /// <summary>Whether the system restarts at <see cref="EndTime"/>.</summary>
+        public bool EndEarly { get; set; }
+
+        /// <summary>System age at which the scheduled restart fires.</summary>
         public float EndTime { get; private set; }
-
-        /// <summary>Whether reaching <see cref="EndTime"/> also starts the endcap.</summary>
-        public bool PlayEndCapOnEnd { get; private set; }
 
         /// <summary>
         /// Whether the system is playing its endcap, the phase an effect runs once it has been told to
@@ -144,30 +152,12 @@ namespace ValveResourceFormat.Particles
         }
 
         /// <summary>
-        /// Ends the system after <paramref name="duration"/>: emission stops, and with
-        /// <paramref name="destroyInstantly"/> the particles still alive are dropped instead of being
-        /// left to finish their lifetimes. With <paramref name="playEndCap"/> the stop also starts the
-        /// endcap.
-        /// </summary>
-        public void SetStopTime(float duration, bool destroyInstantly, bool playEndCap)
-        {
-            EndEarly = true;
-            EndTime = Age + duration;
-            DestroyInstantlyOnEnd = destroyInstantly;
-            RestartOnEnd = false;
-            PlayEndCapOnEnd = playEndCap;
-        }
-
-        /// <summary>
         /// Replays the system from the beginning after <paramref name="duration"/>.
         /// </summary>
         public void SetRestartTime(float duration)
         {
             EndEarly = true;
             EndTime = Age + duration;
-            DestroyInstantlyOnEnd = false;
-            RestartOnEnd = true;
-            PlayEndCapOnEnd = false;
         }
 
         // Control Points
@@ -178,7 +168,7 @@ namespace ValveResourceFormat.Particles
         // C_OP_SetParentControlPointsToChildCP creates them, so it stays null for almost every system.
         private Dictionary<int, ControlPoint>? controlPointOverrides;
 
-        /// <summary>Gets a control point, creating it and every index below it on first use.</summary>
+        /// <summary>Gets a control point, creating it on first use.</summary>
         /// <param name="cp">The control point index.</param>
         public ControlPoint GetControlPoint(int cp)
         {
@@ -304,7 +294,7 @@ namespace ValveResourceFormat.Particles
 
         /// <summary>
         /// Gives this system its own control point at <paramref name="cp"/>, shadowing the one it would
-        /// otherwise read from its parent, and returns it.
+        /// otherwise read from its parent, and returns it. A new override starts as a copy of that point.
         /// </summary>
         /// <param name="cp">Control point index.</param>
         internal ControlPoint OverrideControlPoint(int cp)
@@ -313,7 +303,7 @@ namespace ValveResourceFormat.Particles
 
             if (!controlPointOverrides.TryGetValue(cp, out var point))
             {
-                point = new ControlPoint { Clock = this };
+                point = GetControlPoint(cp).CopyOnClock(this);
                 controlPointOverrides.Add(cp, point);
             }
 
@@ -328,7 +318,7 @@ namespace ValveResourceFormat.Particles
         {
             foreach (var point in controlPoints.Values)
             {
-                point.RewindChange();
+                Rewind(point);
             }
 
             if (controlPointOverrides == null)
@@ -338,7 +328,13 @@ namespace ValveResourceFormat.Particles
 
             foreach (var point in controlPointOverrides.Values)
             {
+                Rewind(point);
+            }
+
+            static void Rewind(ControlPoint point)
+            {
                 point.RewindChange();
+                RecordStep(point, 0f);
             }
         }
 
@@ -408,6 +404,23 @@ namespace ValveResourceFormat.Particles
         /// How long ago the control point last changed. One more than the clock's age when it never has.
         /// </summary>
         public float ChangeAge => (Clock?.Age ?? 0f) - ChangeTime;
+
+        /// <summary>
+        /// Copies this control point onto <paramref name="clock"/>, keeping how long ago it last changed.
+        /// </summary>
+        internal ControlPoint CopyOnClock(ParticleSystemState clock) => new()
+        {
+            position = position,
+            Orientation = Orientation,
+            Rotation = Rotation,
+            PositionPrevious = PositionPrevious,
+            OrientationPrevious = OrientationPrevious,
+            RotationPrevious = RotationPrevious,
+            PreviousStepTime = PreviousStepTime,
+            AttachType = AttachType,
+            Clock = clock,
+            ChangeTime = ChangeTime == -1f ? -1f : clock.Age - ChangeAge,
+        };
 
         internal void RewindChange()
         {

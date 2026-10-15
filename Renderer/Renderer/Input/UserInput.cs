@@ -1,4 +1,5 @@
 using ValveResourceFormat.Renderer.Entities;
+using ValveResourceFormat.Renderer.Gameplay;
 using ValveResourceFormat.Renderer.SceneNodes;
 
 namespace ValveResourceFormat.Renderer.Input;
@@ -98,9 +99,8 @@ public class UserInput
     public bool MouseLook { get; private set; }
 
     /// <summary>
-    /// Gets a value indicating whether the walk mode crosshair should be drawn. The viewmodel already
-    /// hides itself outside walk mode and while the camera is detached, so it decides; without one
-    /// there is nothing to aim, so no crosshair.
+    /// Gets whether to draw the walk mode crosshair. The viewmodel hides itself outside walk mode and while
+    /// the camera is detached, so it decides. With no viewmodel there is nothing to aim at.
     /// </summary>
     public bool ShowCrosshair => Viewmodel is { ShowCrosshair: true };
 
@@ -262,18 +262,15 @@ public class UserInput
             EscapeFreedMouse = false;
         }
 
-        var wasWalking = WalkMode;
         if (Pressed(TrackedKeys.X))
         {
-            WalkMode = !WalkMode;
-            PlayerMovement.Initialize = WalkMode;
+            SetWalkMode(!WalkMode);
         }
         else if (WalkMode && Pressed(TrackedKeys.Escape))
         {
             if (EscapeFreedMouse)
             {
-                WalkMode = false;
-                PlayerMovement.Initialize = WalkMode;
+                SetWalkMode(false);
             }
             else
             {
@@ -289,18 +286,6 @@ public class UserInput
         else if (Pressed(TrackedKeys.Escape))
         {
             MouseLook = false;
-        }
-
-        if (wasWalking && !WalkMode)
-        {
-            MoveCamera(new Vector3(0, 0, 32), transition: true);
-            CurrentSpeedModifier = 7;
-        }
-        else if (!wasWalking && WalkMode)
-        {
-            // Only reachable on the frame X hands control back, since otherwise the two agree. The body
-            // is about to be seeded from the camera, so the view has to stop trailing it first.
-            SettleCamera();
         }
 
         Camera.Roll = 0f;
@@ -343,10 +328,18 @@ public class UserInput
     {
         var finalCamera = GetInterpolatedCamera();
 
-        // The landing punch tilts the rendered view down without touching the stored aim.
-        var viewPunchPitch = float.DegreesToRadians(PlayerMovement.ViewPunchPitchDegrees);
+        // Landing and firing punch the rendered view without touching the stored aim.
+        var punch = PlayerMovement.ViewPunchDegrees;
 
-        renderCamera.SetLocationPitchYaw(finalCamera.Location, finalCamera.Pitch + viewPunchPitch, finalCamera.Yaw);
+        if (Viewmodel != null)
+        {
+            punch += Viewmodel.AimPunchServices.Punch * AimPunchServices.ViewScale;
+        }
+
+        renderCamera.SetLocationPitchYaw(
+            finalCamera.Location,
+            finalCamera.Pitch + float.DegreesToRadians(punch.X),
+            finalCamera.Yaw + float.DegreesToRadians(punch.Y));
         renderCamera.ClampRotation();
 
         renderCamera.Roll = Camera.Roll;
@@ -386,6 +379,33 @@ public class UserInput
         => new(Camera.Location, Camera.Pitch, Camera.Yaw);
 
     private ViewmodelSceneNode? Viewmodel { get; set; }
+
+    /// <summary>
+    /// Switches between walking as the player and flying the camera. Entering seeds the player from the
+    /// camera on the next tick; leaving lifts the camera a little and restores a flying speed.
+    /// </summary>
+    /// <param name="walk">Whether to walk as the player.</param>
+    public void SetWalkMode(bool walk)
+    {
+        if (WalkMode == walk)
+        {
+            return;
+        }
+
+        WalkMode = walk;
+        PlayerMovement.Initialize = walk;
+
+        if (walk)
+        {
+            // The body is about to be seeded from the camera, so the view has to stop trailing it first
+            SettleCamera();
+        }
+        else
+        {
+            MoveCamera(new Vector3(0, 0, 32), transition: true);
+            CurrentSpeedModifier = 7;
+        }
+    }
 
     /// <summary>
     /// Switches to noclip mode and begins a smooth camera transition from the current position.
@@ -726,7 +746,6 @@ public class UserInput
     public bool TryLoadViewmodel(Scene scene, EntitySystem entitySystem)
     {
         Viewmodel = ViewmodelSceneNode.TryLoadCs2Viewmodel(scene, entitySystem);
-        OrbitFollowProvider = Viewmodel is null ? null : Viewmodel.GetOrbitFollow;
         return Viewmodel != null;
     }
 }

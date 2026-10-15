@@ -2,6 +2,7 @@ using System.Linq;
 using System.Threading.Tasks;
 using TUnit.Assertions.Enums;
 using ValveResourceFormat;
+using ValveResourceFormat.Animation;
 using ValveResourceFormat.ResourceTypes;
 using ValveResourceFormat.ResourceTypes.ModelAnimation;
 using ValveResourceFormat.ResourceTypes.ModelAnimation2;
@@ -18,6 +19,24 @@ namespace Tests.Resources
             return clip.SkeletonName.EndsWith("ak47.vnmskel", StringComparison.Ordinal)
                 ? clip
                 : clip.SecondaryAnimations.First(c => c.SkeletonName.EndsWith("ak47.vnmskel", StringComparison.Ordinal));
+        }
+
+        [Test]
+        public async Task ReleasedClipDataIsReadFromTheResourceAgain()
+        {
+            using var resource = new Resource();
+            resource.Read(TestFixtures.Path("idle_ak.vnmclip_c"));
+            var clip = (AnimationClip)resource.DataBlock!;
+
+            GC.Collect();
+            GC.WaitForPendingFinalizers();
+            GC.Collect();
+
+            using (Assert.Multiple())
+            {
+                await Assert.That(clip.Data.Root.ContainsKey("m_trackCompressionSettings")).IsTrue();
+                await Assert.That(clip.Data).IsSameReferenceAs(clip.Data).Because("the data is only read again once");
+            }
         }
 
         [Test]
@@ -45,7 +64,7 @@ namespace Tests.Resources
 
             using var skeletonResource = new Resource();
             skeletonResource.Read(TestFixtures.Path("ak47.vnmskel_c"));
-            var skeleton = Skeleton.FromSkeletonData(((BinaryKV3)skeletonResource.DataBlock!).Data);
+            var skeleton = ValveResourceFormat.ResourceTypes.ModelAnimation.Skeleton.FromSkeletonData(((BinaryKV3)skeletonResource.DataBlock!).Data);
 
             var animation = new ClipAnimation(clip);
             var frameCache = new AnimationFrameCache(skeleton, []);
@@ -57,6 +76,24 @@ namespace Tests.Resources
                 await Assert.That(frame.Bones).Count().IsEqualTo(skeleton.Bones.Length);
                 await Assert.That(frame.Bones.Select(b => b.Angle.Length())).All(length => MathF.Abs(length - 1f) <= 0.001f).Because("decoded rotations are unit quaternions");
                 await Assert.That(frame.Movement).IsEqualTo(default(AnimationMovement.MovementData));
+            }
+        }
+
+        [Test]
+        public async Task BoneTransformsMultiplyAsTheirMatricesDo()
+        {
+            var first = new FrameBone(new Vector3(1f, 2f, 3f), 1.5f, Quaternion.CreateFromAxisAngle(Vector3.UnitZ, 0.6f));
+            var second = new FrameBone(new Vector3(-4f, 0.5f, 2f), 0.5f, Quaternion.CreateFromAxisAngle(Vector3.Normalize(new Vector3(1f, 1f, 0f)), -1.1f));
+
+            var combined = (first * second).ToMatrix();
+            var expected = first.ToMatrix() * second.ToMatrix();
+
+            for (var row = 0; row < 4; row++)
+            {
+                for (var column = 0; column < 4; column++)
+                {
+                    await Assert.That(combined[row, column]).IsEqualTo(expected[row, column]).Within(1e-5f);
+                }
             }
         }
 
@@ -75,8 +112,8 @@ namespace Tests.Resources
             using var resource = new Resource();
             var animation = LoadNovaShootAnimation(resource);
 
-            var soundEvent = animation.Events.OfType<NmSoundEvent>().Single();
-            var idEvent = animation.Events.OfType<NmIDEvent>().Single();
+            var soundEvent = animation.Events.OfType<SoundEvent>().Single();
+            var idEvent = animation.Events.OfType<IDEvent>().Single();
 
             using (Assert.Multiple())
             {
@@ -85,13 +122,13 @@ namespace Tests.Resources
 
                 // Times are stored normalized in the resource, they are exposed in seconds
                 await Assert.That(soundEvent.Name).IsEqualTo("Weapon_Nova.Pump_Q");
-                await Assert.That(soundEvent.StartTime).IsEqualTo(0.233333f).Within(0.0001f);
+                await Assert.That(soundEvent.StartSeconds).IsEqualTo(0.233333f).Within(0.0001f);
                 await Assert.That(soundEvent.DurationInterruptionThreshold).IsEqualTo(0.9f).Because("unset properties fall back to their engine default");
 
-                await Assert.That(idEvent.ID).IsEqualTo("WPN_BLOCK_INSPECT");
-                await Assert.That(idEvent.Duration).IsEqualTo(0.7f).Within(0.0001f);
+                await Assert.That(idEvent.ID.Name).IsEqualTo("WPN_BLOCK_INSPECT");
+                await Assert.That(idEvent.DurationSeconds).IsEqualTo(0.7f).Within(0.0001f);
 
-                await Assert.That(animation.Events.OfType<NmParticleEvent>().Last().ParticleSystemName).IsEqualTo("particles/weapons/cs_weapon_fx/weapon_shell_casing_shotgun_nova.vpcf");
+                await Assert.That(animation.Events.OfType<ParticleEvent>().Last().ParticleSystem).IsEqualTo("particles/weapons/cs_weapon_fx/weapon_shell_casing_shotgun_nova.vpcf");
             }
         }
 

@@ -1,5 +1,6 @@
 //#define DEBUG_FILE_LOAD
 
+using System.Collections.Immutable;
 using System.Diagnostics;
 using System.Globalization;
 using System.IO;
@@ -21,10 +22,8 @@ namespace ValveResourceFormat.IO
     /// </summary>
     /// <remarks>
     /// <para>
-    /// This class is intended for loading compiled resources (such as models, textures, materials)
-    /// that need to be parsed as <see cref="Resource"/> objects. It handles resource lookup
-    /// across VPK packages and loose files on disk, automatically discovering game search paths
-    /// from gameinfo.gi files.
+    /// Loads compiled resources (models, textures, materials) as <see cref="Resource"/> objects. Lookup spans
+    /// VPK packages and loose files on disk, with game search paths discovered from gameinfo.gi files.
     /// </para>
     /// <para>
     /// To read raw file bytes from a VPK package, use <c>Package.ReadEntry</c> instead.
@@ -53,7 +52,7 @@ namespace ValveResourceFormat.IO
         private readonly HashSet<string> CurrentGameSearchPaths = [];
         private readonly HashSet<string> CurrentGameOfficialAddonsPaths = [];
         private readonly HashSet<string> CurrentGameAddonsPaths = [];
-        private readonly List<Package> CurrentGamePackages = [];
+        private ImmutableArray<Package> CurrentGamePackages = [];
 
         // Addons are mounted in front of the game's own files, so they override them
         private readonly List<Package> CurrentAddonPackages = [];
@@ -128,7 +127,7 @@ namespace ValveResourceFormat.IO
                 }
 
                 CurrentAddonPackages.Clear();
-                CurrentGamePackages.Clear();
+                CurrentGamePackages = [];
 
                 lock (CachedShadersLock)
                 {
@@ -552,7 +551,12 @@ namespace ValveResourceFormat.IO
         /// </summary>
         public void AddPackageToSearch(Package package)
         {
-            CurrentGamePackages.Add(package);
+            // Replaced rather than mutated, because files are looked up in parallel while shader and spawn group packages
+            // get mounted. Shader packages are mounted while this lock is already held by the shader load.
+            lock (CachedShadersLock)
+            {
+                CurrentGamePackages = CurrentGamePackages.Add(package);
+            }
         }
 
         /// <summary>
@@ -560,7 +564,17 @@ namespace ValveResourceFormat.IO
         /// </summary>
         public bool RemovePackageFromSearch(Package package)
         {
-            return CurrentAddonPackages.Remove(package) || CurrentGamePackages.Remove(package);
+            if (CurrentAddonPackages.Remove(package))
+            {
+                return true;
+            }
+
+            lock (CachedShadersLock)
+            {
+                var packages = CurrentGamePackages;
+                CurrentGamePackages = packages.Remove(package);
+                return CurrentGamePackages.Length != packages.Length;
+            }
         }
 
         private Package ReadPackage(string searchPath)
@@ -972,7 +986,7 @@ namespace ValveResourceFormat.IO
                     yield break;
                 }
 
-                if (CurrentFileName == vpk)
+                if (IsOpenedPackage(vpk))
                 {
 #if DEBUG_FILE_LOAD
                     Logger.LogDebug("VPK \"{Vpk}\" is the same we just opened, skipping", vpk);
@@ -982,6 +996,21 @@ namespace ValveResourceFormat.IO
 
                 yield return vpk;
             }
+        }
+
+        /// <summary>
+        /// Whether <paramref name="vpk"/> is the file that was opened, given either by its own path or as
+        /// <see cref="CurrentPackage"/>, whose name has the <c>_dir.vpk</c> suffix stripped.
+        /// </summary>
+        private bool IsOpenedPackage(string vpk)
+        {
+            if (CurrentFileName == vpk)
+            {
+                return true;
+            }
+
+            return CurrentPackage?.FileName is { } packageName
+                && string.Equals(Path.GetFullPath(string.Concat(packageName, "_dir.vpk")), Path.GetFullPath(vpk), StringComparison.Ordinal);
         }
 
         private HashSet<string> FindGameFoldersForWorkshopFile()

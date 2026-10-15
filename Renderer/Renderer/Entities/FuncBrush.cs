@@ -3,20 +3,21 @@ using ValveResourceFormat.Serialization.KeyValues;
 namespace ValveResourceFormat.Renderer.Entities;
 
 /// <summary>
-/// <c>func_brush</c>. A piece of world geometry a map can show, hide, and make solid or not.
-/// <c>Enable</c> and <c>Disable</c> switch drawing and solidity together, as in the engine;
-/// <c>SetSolid</c> and <c>SetNonsolid</c> leave what is drawn alone. The authored <c>solidity</c>
-/// decides what "solid" means for a given brush.
+/// <c>func_brush</c>. World geometry a map can show, hide and make solid.
+/// <c>Enable</c> and <c>Disable</c> switch drawing and solidity together; <c>SetSolid</c> and
+/// <c>SetNonsolid</c> leave drawing alone. The authored <c>solidity</c> decides what "solid" means.
 /// </summary>
+/// <seealso href="https://s2v.app/SchemaExplorer/cs2/server/CFuncBrush">CFuncBrush</seealso>
 public class FuncBrush : BaseModelEntity
 {
     /// <summary>What a <c>func_brush</c>'s <c>solidity</c> keyvalue means.</summary>
+    /// <seealso href="https://s2v.app/SchemaExplorer/cs2/client/BrushSolidities_e">BrushSolidities_e</seealso>
     public enum SolidityMode
     {
         /// <summary>Solid whenever it is drawn.</summary>
         ToggleSolid = 0,
 
-        /// <summary>Never solid, whatever else happens to it.</summary>
+        /// <summary>Never solid.</summary>
         NeverSolid = 1,
 
         /// <summary>Always solid, even while hidden.</summary>

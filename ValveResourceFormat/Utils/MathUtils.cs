@@ -58,7 +58,7 @@ namespace ValveResourceFormat.Utils
 
         /// <summary>
         /// Remaps a value from one range to another, holding the output at the range ends
-        /// for inputs outside the input range. Mirrors Source's RemapValClamped.
+        /// for inputs outside the input range.
         /// </summary>
         /// <param name="x">Value to remap.</param>
         /// <param name="inputMin">Input range minimum.</param>
@@ -69,7 +69,7 @@ namespace ValveResourceFormat.Utils
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
         public static float RemapValClamped(float x, float inputMin, float inputMax, float outputMin, float outputMax)
         {
-            // Source treats a degenerate input range as a threshold
+            // A degenerate input range is treated as a threshold
             if (inputMin == inputMax)
             {
                 return x >= inputMax ? outputMax : outputMin;
@@ -189,6 +189,15 @@ namespace ValveResourceFormat.Utils
         public static float AngleBetween(Vector3 a, Vector3 b)
         {
             return SafeAcos(Vector3.Dot(a, b));
+        }
+
+        /// <summary>
+        /// The angle in radians between two rotations, the shorter way round.
+        /// </summary>
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        public static float AngleBetween(Quaternion a, Quaternion b)
+        {
+            return 2f * SafeAcos(MathF.Abs(Quaternion.Dot(a, b)));
         }
 
         /// <summary>

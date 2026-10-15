@@ -320,7 +320,7 @@ namespace GUI.Types.Viewers
                     GLViewer = null;
                     DisposeExtraGraphViewers();
                     resTabs.Items.Clear();
-                    resTabs.Items.Add(new TabItem { Header = "Viewer Error", Content = CodeTextBox.CreateFromException(GLViewerError, vrfGuiContext.FullPath) });
+                    resTabs.Items.Add(new TabItem { Header = "Viewer Error", Content = CodeTextBox.CreateFromException(GLViewerError, vrfGuiContext.DisplayPath) });
                 }
 
                 // Entity lumps get the same browsable grid a map's world viewer provides, with or
@@ -413,7 +413,7 @@ namespace GUI.Types.Viewers
             }
             catch (Exception ex)
             {
-                resTabs.Items.Add(new TabItem { Header = "Decompile Error", Content = CodeTextBox.CreateFromException(ex, vrfGuiContext.FullPath) });
+                resTabs.Items.Add(new TabItem { Header = "Decompile Error", Content = CodeTextBox.CreateFromException(ex, vrfGuiContext.DisplayPath) });
             }
 
             if (resTabs.SelectedIndex < 0 && resTabs.ItemCount > 0)
@@ -506,7 +506,7 @@ namespace GUI.Types.Viewers
 
                 if (!disposed)
                 {
-                    tabItem.Content = CodeTextBox.CreateFromException(e, vrfGuiContext.FullPath);
+                    tabItem.Content = CodeTextBox.CreateFromException(e, vrfGuiContext.DisplayPath);
                 }
 
                 return null;
@@ -937,8 +937,13 @@ namespace GUI.Types.Viewers
         {
             Debug.Assert(resource.Reader != null);
 
-            resource.Reader.BaseStream.Position = block.Offset;
-            var input = resource.Reader.ReadBytes((int)block.Size);
+            byte[] input;
+
+            lock (resource.ReaderLock)
+            {
+                resource.Reader.BaseStream.Position = block.Offset;
+                input = resource.Reader.ReadBytes((int)block.Size);
+            }
 
             var text = ByteViewer.GetTextFromBytes(input.AsSpan());
 

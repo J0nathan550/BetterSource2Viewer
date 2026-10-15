@@ -29,6 +29,9 @@ public sealed class SceneViewState : IDisposable
     /// <summary>Gets whether anything is queued to draw into the water effects map this frame.</summary>
     public bool HasWaterEffects => waterEffectsRenderList.Count > 0;
 
+    /// <summary>Gets whether anything is queued to draw into the effects bloom map this frame.</summary>
+    public bool HasEffectsBloom => effectsBloomRenderList.Count > 0;
+
     /// <summary>Gets whether any water surface is queued to draw this frame.</summary>
     public bool HasWater => renderLists[RenderPass.Water].Count > 0;
 
@@ -73,6 +76,7 @@ public sealed class SceneViewState : IDisposable
 
     /// <summary>Translucent draws that go to the water effects map instead of the scene.</summary>
     private readonly List<MeshBatchRenderer.Request> waterEffectsRenderList = [];
+    private readonly List<MeshBatchRenderer.Request> effectsBloomRenderList = [];
 
     /// <summary>Visible nodes that draw themselves, listed once each however many passes they draw in.</summary>
     private readonly List<SceneNode> customBufferNodes = [];
@@ -88,6 +92,16 @@ public sealed class SceneViewState : IDisposable
 
     /// <inheritdoc cref="alphaTestAggregateDraws"/>
     private readonly List<MeshBatchRenderer.Request> alphaTestOpaqueDraws = [];
+
+    /// <summary>Surfaces drawn over the resolved opaque scene, for <see cref="RenderTranslucentDepthLayer"/>.</summary>
+    private readonly List<MeshBatchRenderer.Request> translucentDepthDraws = [];
+
+    /// <summary>Gets whether any surface is queued for <see cref="RenderTranslucentDepthLayer"/> this frame.</summary>
+    public bool HasTranslucentDepthDraws => translucentDepthDraws.Count > 0;
+
+    // Mesh surfaces only: particles draw themselves and never reach this list, and additive glows hide nothing behind them
+    private static bool WritesTranslucentDepth(RenderMaterial material)
+        => material is { IsCs2Water: false, CanPrimeDepth: true, IsAdditive: false };
 
     /// <summary>Initializes a view of an already initialized <paramref name="scene"/>.</summary>
     public SceneViewState(Scene scene)
@@ -239,6 +253,11 @@ public sealed class SceneViewState : IDisposable
             queueList = alphaTestOpaqueDraws;
         }
 
+        if (isLatePass && !isViewmodelLayer && WritesTranslucentDepth(request.Call.Material))
+        {
+            translucentDepthDraws.Add(request);
+        }
+
         // Only draws that happen after the grab can make use of the resolved copies.
         if (isLatePass)
         {
@@ -269,9 +288,11 @@ public sealed class SceneViewState : IDisposable
         }
 
         waterEffectsRenderList.Clear();
+        effectsBloomRenderList.Clear();
         customBufferNodes.Clear();
         alphaTestAggregateDraws.Clear();
         alphaTestOpaqueDraws.Clear();
+        translucentDepthDraws.Clear();
 
         foreach (var bucket in depthOnlyDraws.Values)
         {
@@ -279,7 +300,7 @@ public sealed class SceneViewState : IDisposable
         }
 
         WantsSceneColor = false;
-        WantsSceneDepth = false;
+        WantsSceneDepth = Scene.ProjectedDecals.Count > 0;
 
         ResetPvsHiddenBits();
 
@@ -318,6 +339,11 @@ public sealed class SceneViewState : IDisposable
 
             if (node is MeshCollectionNode meshCollection)
             {
+                if ((node.RenderPasses & CustomRenderPasses.Default) == 0)
+                {
+                    continue;
+                }
+
                 foreach (var mesh in meshCollection.RenderableMeshes)
                 {
                     foreach (var call in mesh.DrawCallsOpaque)
@@ -372,12 +398,15 @@ public sealed class SceneViewState : IDisposable
             {
                 if (aggregate.InstanceTransforms.Count > 0)
                 {
-                    Add(new MeshBatchRenderer.Request
+                    foreach (var call in aggregate.RenderMesh.DrawCallsOpaque)
                     {
-                        Mesh = aggregate.RenderMesh,
-                        Call = aggregate.RenderMesh.DrawCallsOpaque[0],
-                        Node = node,
-                    }, RenderPass.Opaque);
+                        Add(new MeshBatchRenderer.Request
+                        {
+                            Mesh = aggregate.RenderMesh,
+                            Call = call,
+                            Node = node,
+                        }, RenderPass.Opaque);
+                    }
                 }
                 else if (Scene.DrawMeshletsIndirect && aggregate.CanDrawIndirect)
                 {
@@ -430,6 +459,11 @@ public sealed class SceneViewState : IDisposable
                 if ((customPasses & CustomRenderPasses.WaterEffects) != 0)
                 {
                     waterEffectsRenderList.Add(customRender);
+                }
+
+                if ((customPasses & CustomRenderPasses.EffectsBloom) != 0)
+                {
+                    effectsBloomRenderList.Add(customRender);
                 }
 
                 if (node.IsSelected)
@@ -773,6 +807,28 @@ public sealed class SceneViewState : IDisposable
     }
 
     /// <summary>
+    /// Lays down the depth of the surfaces the refract, water and translucent layers draw over the opaque scene,
+    /// collected during <see cref="CollectSceneDrawCalls"/>, each through its material's own depth mode where it has one.
+    /// </summary>
+    /// <param name="renderContext">The render context for this pass, bound to a depth buffer that already holds the opaque depth.</param>
+    /// <param name="depthOnlyShader">The shader for materials without a depth mode of their own.</param>
+    public void RenderTranslucentDepthLayer(Scene.RenderContext renderContext, Shader depthOnlyShader)
+    {
+        using var _ = new GLDebugGroup("Translucent Depth");
+
+        PerfStats.Active.SuspendTriangleCounter();
+
+        translucentDepthDraws.Sort(MeshBatchRenderer.CompareCustomPipeline);
+
+        renderContext.RenderPass = RenderPass.DepthOnly;
+        renderContext.DepthOnlyShader = depthOnlyShader;
+        MeshBatchRenderer.Render(translucentDepthDraws, renderContext);
+        renderContext.DepthOnlyShader = null;
+
+        PerfStats.Active.ResumeTriangleCounter();
+    }
+
+    /// <summary>
     /// Renders the opaque first-person viewmodel layer collected during <see cref="CollectSceneDrawCalls"/>.
     /// Rendered before the main scene so its reserved near depth range can never be overtaken by world geometry.
     /// </summary>
@@ -827,6 +883,15 @@ public sealed class SceneViewState : IDisposable
         renderContext.RenderPass = RenderPass.Translucent;
         renderContext.Layer = RenderLayer.WaterEffects;
         MeshBatchRenderer.Render(waterEffectsRenderList, renderContext);
+    }
+
+    /// <summary>Renders the draw calls that fill the effects bloom map; the caller owns the render target.</summary>
+    /// <param name="renderContext">The render context for this pass.</param>
+    public void RenderEffectsBloomLayer(Scene.RenderContext renderContext)
+    {
+        renderContext.RenderPass = RenderPass.Translucent;
+        renderContext.Layer = RenderLayer.Bloom;
+        MeshBatchRenderer.Render(effectsBloomRenderList, renderContext);
     }
 
     /// <summary>Renders water draw calls collected during <see cref="CollectSceneDrawCalls"/>.</summary>

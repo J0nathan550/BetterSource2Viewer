@@ -102,8 +102,7 @@ public class Timings
 
         if (cpuOnly)
         {
-            // No GPU query objects at all: this region issues no draw work, so the GPU column would
-            // only ever report the gap between whatever surrounds it.
+            // No GPU queries: the region issues no draw work, so a GPU time would only measure the gap around it.
             activeQueries[currentIndex] = new TimingQuery(Stopwatch.GetTimestamp(), false, name, depth, currentIndex, CpuOnly: true);
             return currentIndex;
         }
@@ -305,7 +304,7 @@ public class Timings
                 Y = yOffset,
                 Scale = scale,
                 Color = color,
-                Text = $"  {displayName,-NameColumnWidth} {gpuText,6} {result.TimeMs,6:0.00} {maxTime,6:0.00}"
+                Text = string.Create(CultureInfo.InvariantCulture, $"  {displayName,-NameColumnWidth} {gpuText,6} {result.TimeMs,6:0.00} {maxTime,6:0.00}")
             }, camera);
 
             yOffset += lineHeight;
@@ -317,7 +316,7 @@ public class Timings
             Y = yOffset,
             Scale = scale,
             Color = ColorForPeak(swapMaxPrevious),
-            Text = $"  {"Swapchain",-NameColumnWidth} {"-",6} {swapMs,6:0.00} {swapMaxPrevious,6:0.00}"
+            Text = string.Create(CultureInfo.InvariantCulture, $"  {"Swapchain",-NameColumnWidth} {"-",6} {swapMs,6:0.00} {swapMaxPrevious,6:0.00}")
         }, camera);
 
         yOffset += lineHeight;
@@ -331,7 +330,7 @@ public class Timings
             Y = yOffset,
             Scale = scale,
             Color = Color32.White,
-            Text = $"  {"Total",-NameColumnWidth} {totalGpu,6:0.00} {totalCpu,6:0.00} {total,6:0.00}"
+            Text = string.Create(CultureInfo.InvariantCulture, $"  {"Total",-NameColumnWidth} {totalGpu,6:0.00} {totalCpu,6:0.00} {total,6:0.00}")
         }, camera);
 
         yOffset += lineHeight;
@@ -342,7 +341,7 @@ public class Timings
             Y = yOffset,
             Scale = scale,
             Color = Color32.White,
-            Text = $"  {"Unaccounted",-NameColumnWidth} {"-",6} {unaccountedMs,6:0.00} {unaccountedMaxPrevious,6:0.00}"
+            Text = string.Create(CultureInfo.InvariantCulture, $"  {"Unaccounted",-NameColumnWidth} {"-",6} {unaccountedMs,6:0.00} {unaccountedMaxPrevious,6:0.00}")
         }, camera);
 
         if (asyncRows.Count == 0)
@@ -350,8 +349,7 @@ public class Timings
             return;
         }
 
-        // Off-frame work, listed apart from the totals above: it runs on other threads, so counting it
-        // into the frame would overstate what the frame actually costs.
+        // Off-frame work runs on other threads, so counting it in the totals would overstate the frame cost.
         yOffset += lineHeight;
 
         textRenderer.AddTextRelative(new TextRenderer.TextRenderRequest

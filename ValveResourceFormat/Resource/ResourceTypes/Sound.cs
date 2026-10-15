@@ -229,6 +229,7 @@ namespace ValveResourceFormat.ResourceTypes
                 var bitpackedSoundInfo = reader.ReadUInt32();
                 var type = ExtractSub(bitpackedSoundInfo, 0, 2);
                 var bits = ExtractSub(bitpackedSoundInfo, 2, 5);
+                // Bits 9-11 are the bytes per sample frame, channels times bytes per sample
                 var waveFormat = (WaveAudioFormat)ExtractSub(bitpackedSoundInfo, 12, 2);
 
                 var soundFormat = (AudioFileType)type switch
@@ -558,20 +559,22 @@ namespace ValveResourceFormat.ResourceTypes
         }
 
         /// <summary>
-        /// Reads the raw streaming sound data - the samples exactly as stored, without the container
-        /// header <see cref="GetSoundStream"/> synthesizes - into <paramref name="buffer"/>, which must be
-        /// exactly <see cref="StreamingDataSize"/> bytes. The stored format is described by
-        /// <see cref="SoundType"/>, <see cref="AudioFormat"/>, <see cref="Bits"/>, <see cref="Channels"/>,
-        /// <see cref="SampleRate"/> and (for ADPCM) <see cref="Header"/>, so decoders can consume the data
-        /// directly instead of round-tripping through a synthesized RIFF header.
+        /// Reads the raw streaming data as stored, without the container header <see cref="GetSoundStream"/> synthesizes,
+        /// into <paramref name="buffer"/>, which must be exactly <see cref="StreamingDataSize"/> bytes.
+        /// The format is given by <see cref="SoundType"/>, <see cref="AudioFormat"/>, <see cref="Bits"/>,
+        /// <see cref="Channels"/>, <see cref="SampleRate"/> and (for ADPCM) <see cref="Header"/>, so decoders
+        /// can use the data directly without a round-trip through a synthesized RIFF header.
         /// </summary>
         public void ReadStreamingData(Span<byte> buffer)
         {
             Debug.Assert(buffer.Length == StreamingDataSize);
             Debug.Assert(Reader != null);
 
-            Reader.BaseStream.Position = Resource.FileSize;
-            Reader.BaseStream.ReadExactly(buffer);
+            lock (Resource.ReaderLock)
+            {
+                Reader.BaseStream.Position = Resource.FileSize;
+                Reader.BaseStream.ReadExactly(buffer);
+            }
         }
 
         /// <summary>
@@ -628,8 +631,11 @@ namespace ValveResourceFormat.ResourceTypes
             }
 
             Debug.Assert(Reader != null);
-            Reader.BaseStream.Position = Resource.FileSize;
-            Reader.BaseStream.CopyTo(stream);
+            lock (Resource.ReaderLock)
+            {
+                Reader.BaseStream.Position = Resource.FileSize;
+                Reader.BaseStream.CopyTo(stream);
+            }
             Debug.Assert(stream.Length == totalSize);
 
             // Flush and reset position so that consumers can read it
@@ -663,19 +669,19 @@ namespace ValveResourceFormat.ResourceTypes
             if (SampleRate > 0)
             {
                 var loopStart = TimeSpan.FromSeconds((double)LoopStart / SampleRate);
-                writer.WriteLine($"LoopStart: {LoopStart} ({loopStart})");
+                writer.WriteLine(string.Create(CultureInfo.InvariantCulture, $"LoopStart: {LoopStart} ({loopStart})"));
 
                 var loopEnd = TimeSpan.FromSeconds((double)LoopEnd / SampleRate);
-                writer.WriteLine($"LoopEnd: {LoopEnd} ({loopEnd})");
+                writer.WriteLine(string.Create(CultureInfo.InvariantCulture, $"LoopEnd: {LoopEnd} ({loopEnd})"));
             }
             else
             {
-                writer.WriteLine($"LoopStart: {LoopStart}");
-                writer.WriteLine($"LoopEnd: {LoopEnd}");
+                writer.WriteLine(string.Create(CultureInfo.InvariantCulture, $"LoopStart: {LoopStart}"));
+                writer.WriteLine(string.Create(CultureInfo.InvariantCulture, $"LoopEnd: {LoopEnd}"));
             }
 
             var duration = TimeSpan.FromSeconds(Duration);
-            writer.WriteLine($"Duration: {duration} ({Duration})");
+            writer.WriteLine(string.Create(CultureInfo.InvariantCulture, $"Duration: {duration} ({Duration})"));
 
             writer.WriteLine($"StreamingDataSize: {StreamingDataSize}");
 
@@ -685,11 +691,11 @@ namespace ValveResourceFormat.ResourceTypes
                 writer.Indent++;
                 foreach (var phoneme in Sentence.RunTimePhonemes)
                 {
-                    writer.WriteLine($"PhonemeTag(StartTime={phoneme.StartTime}, EndTime={phoneme.EndTime}, PhonemeCode={phoneme.PhonemeCode})");
+                    writer.WriteLine(string.Create(CultureInfo.InvariantCulture, $"PhonemeTag(StartTime={phoneme.StartTime}, EndTime={phoneme.EndTime}, PhonemeCode={phoneme.PhonemeCode})"));
                 }
                 foreach (var sample in Sentence.EmphasisSamples)
                 {
-                    writer.WriteLine($"EmphasisSample(Time={sample.Time}, Value={sample.Value})");
+                    writer.WriteLine(string.Create(CultureInfo.InvariantCulture, $"EmphasisSample(Time={sample.Time}, Value={sample.Value})"));
                 }
                 writer.Indent--;
             }

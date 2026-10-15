@@ -6,10 +6,10 @@ using ValveResourceFormat.Serialization.KeyValues;
 namespace ValveResourceFormat.Renderer.Entities;
 
 /// <summary>
-/// <c>func_movelinear</c>, Source's <c>CFuncMoveLinear</c>. A brush that travels an authored
-/// <c>movedistance</c> along its <c>movedir</c>, and only when told to: to either end, or any fraction of the
-/// way between them. Not simulated: the damage it does to whatever blocks it.
+/// <c>func_movelinear</c>. A brush that moves <c>movedistance</c> along <c>movedir</c> on command, to either
+/// end or any fraction between. Damage to whatever blocks it is not simulated.
 /// </summary>
+/// <seealso href="https://s2v.app/SchemaExplorer/cs2/server/CFuncMoveLinear">CFuncMoveLinear</seealso>
 public class FuncMoveLinear : BaseToggle
 {
     /// <summary>What a <c>func_movelinear</c>'s <c>spawnflags</c> mean.</summary>
@@ -21,6 +21,7 @@ public class FuncMoveLinear : BaseToggle
     }
 
     /// <summary>Which point of the travel the map placed the brush at, the <c>authoredposition</c> keyvalue.</summary>
+    /// <seealso href="https://s2v.app/SchemaExplorer/cs2/server/MoveLinearAuthoredPos_t">MoveLinearAuthoredPos_t</seealso>
     public enum AuthoredPosition
     {
         /// <summary>At <c>startposition</c> of the way along, where it also spawns.</summary>
@@ -112,8 +113,8 @@ public class FuncMoveLinear : BaseToggle
     }
 
     /// <summary>
-    /// Arrives, reporting it when that is at either end. The move sound stops a moment later rather than
-    /// now, since another move may follow straight on.
+    /// Fires <c>OnFullyOpen</c> or <c>OnFullyClosed</c> when arriving at an end. The move sound stops 0.1s
+    /// later, since another move may follow straight on.
     /// </summary>
     public override void MoveDone()
     {
@@ -189,10 +190,7 @@ public class FuncMoveLinear : BaseToggle
         }
     }
 
-    /// <summary>
-    /// Changes the speed, carrying on to the same destination at the new one. A speed of zero stops the brush
-    /// where it is.
-    /// </summary>
+    /// <summary>Changes the speed, keeping the destination. Zero stops the brush where it is.</summary>
     [EntityInput("SetSpeed")]
     protected void InputSetSpeed(EntityInputData data)
     {
@@ -214,8 +212,8 @@ public class FuncMoveLinear : BaseToggle
     }
 
     /// <summary>
-    /// Jumps to the named entity's origin, which becomes its closed end. A travel under way is not stopped: it
-    /// carries on until its time is up and then lands back here.
+    /// Jumps to the named entity's origin, which becomes the closed end. A travel under way is not stopped:
+    /// it lands back here when its time is up.
     /// </summary>
     [EntityInput("TeleportToTarget")]
     protected void InputTeleportToTarget(EntityInputData data)
@@ -236,8 +234,8 @@ public class FuncMoveLinear : BaseToggle
     }
 
     /// <summary>
-    /// Makes the brush's current place the given fraction of the way along, moving both ends to suit. Like a
-    /// teleport, a travel under way lands back here.
+    /// Makes the current position the given fraction along the travel, moving both ends. Like a teleport,
+    /// a travel under way lands back here.
     /// </summary>
     [EntityInput("ResetPosition")]
     protected void InputResetPosition(EntityInputData data) => SetEndsFromStart(data.Float());

@@ -1,11 +1,12 @@
 <Solution>
   <Project Path="VrfFgdParser/VrfFgdParser.csproj" />
   <Project Path="RenderTest/RenderTest.csproj" />
+  <Project Path="SchemaConverter/SchemaConverter.csproj" />
   <Project Path="ShaderValidator/ShaderValidator.csproj" />
+  <Project Path="SourceGenerators/SourceGenerators.csproj" />
   <Project Path="FontMsdfGen/FontMsdfGen.csproj" />
   <Project Path="MurmurHashMatcher/MurmurHashMatcher.csproj" />
   <Project Path="ShaderCatalog/ShaderCatalog.csproj" />
-  <Project Path="WorkshopDownloader/WorkshopDownloader.csproj" />
   <Project Path="../Renderer/Renderer.csproj" />
   <Project Path="../ValveResourceFormat/ValveResourceFormat.csproj" />
 </Solution>

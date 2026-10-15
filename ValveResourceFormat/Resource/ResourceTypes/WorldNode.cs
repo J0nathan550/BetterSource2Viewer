@@ -36,12 +36,113 @@ namespace ValveResourceFormat.ResourceTypes
                 : [];
 
         /// <summary>
+        /// Gets the decals placed with the map, each a box that projects a material onto what is inside it.
+        /// </summary>
+        public IReadOnlyList<KVObject> InfoOverlays
+            => Data.ContainsKey("m_infoOverlays")
+                ? Data.GetArray("m_infoOverlays")
+                : [];
+
+        /// <summary>
         /// Gets the clutter scene objects.
         /// </summary>
         public IReadOnlyList<KVObject> ClutterSceneObjects
             => Data.ContainsKey("m_clutterSceneObjects")
                 ? Data.GetArray("m_clutterSceneObjects")
                 : [];
+
+        /// <summary>
+        /// One entry of <see cref="ClutterSceneObjects"/>: a model drawn at many compiled instance
+        /// placements, such as detail props.
+        /// </summary>
+        /// <seealso href="https://s2v.app/SchemaExplorer/cs2/worldrenderer/ClutterSceneObject_t">ClutterSceneObject_t</seealso>
+        public class ClutterSceneObject
+        {
+            /// <summary>Gets the model every instance draws.</summary>
+            public string RenderableModel { get; }
+
+            /// <summary>Gets the material group (skin) of the model, empty for the default.</summary>
+            public string MaterialGroup { get; }
+
+            /// <summary>Gets the index into <see cref="LayerNames"/>.</summary>
+            public int Layer { get; }
+
+            /// <summary>Gets the object type flags shared by all instances.</summary>
+            public ObjectTypeFlags Flags { get; }
+
+            /// <summary>
+            /// Gets the screen size fraction below which instances start to fade out, reaching fully faded at
+            /// <see cref="EndCullSize"/>. Which instances are dropped depends on <see cref="EndCullSize"/> alone.
+            /// </summary>
+            public float BeginCullSize { get; }
+
+            /// <summary>Gets the screen size fraction below which instances are no longer drawn.</summary>
+            public float EndCullSize { get; }
+
+            /// <summary>Gets the world space position of each instance.</summary>
+            public Vector3[] InstancePositions { get; }
+
+            /// <summary>Gets the uniform scale of each instance.</summary>
+            public float[] InstanceScales { get; }
+
+            /// <summary>Gets the world space rotation of each instance.</summary>
+            public Quaternion[] InstanceOrientations { get; }
+
+            /// <summary>Gets the sRGB tint of each instance, in the 0-255 range.</summary>
+            public Vector3[] InstanceTints { get; }
+
+            /// <summary>Gets the tiles that split the instances into spatially grouped ranges.</summary>
+            public Tile[] Tiles { get; }
+
+            /// <summary>A contiguous range of spatially grouped instances.</summary>
+            /// <param name="FirstInstance">Index of the first instance in the tile.</param>
+            /// <param name="EndInstance">Index one past the last instance in the tile.</param>
+            /// <seealso href="https://s2v.app/SchemaExplorer/cs2/worldrenderer/ClutterTile_t">ClutterTile_t</seealso>
+            public readonly record struct Tile(int FirstInstance, int EndInstance);
+
+            /// <summary>
+            /// Reads a clutter scene object from its keyvalues.
+            /// </summary>
+            /// <param name="data">An entry of <see cref="ClutterSceneObjects"/>.</param>
+            public ClutterSceneObject(KVObject data)
+            {
+                ArgumentNullException.ThrowIfNull(data);
+
+                RenderableModel = data.GetStringProperty("m_renderableModel");
+                MaterialGroup = data.GetStringProperty("m_materialGroup");
+                Layer = data.GetInt32Property("m_nLayer");
+                Flags = data.GetEnumValue<ObjectTypeFlags>("m_flags", normalize: true);
+                BeginCullSize = data.GetFloatProperty("m_flBeginCullSize");
+                EndCullSize = data.GetFloatProperty("m_flEndCullSize");
+
+                InstancePositions = [.. data.GetArray("m_instancePositions").Select(static position => position.ToVector3())];
+                InstanceScales = data.GetFloatArray("m_instanceScales");
+                InstanceOrientations = [.. data.GetIntegerArray("m_InstanceOrientations32").Select(static packed => UnpackQuaternion32(unchecked((uint)packed)))];
+                InstanceTints = [.. data.GetArray("m_instanceTintSrgb").Select(static tint => tint.ToVector3())];
+                Tiles = [.. data.GetArray("m_tiles").Select(static tile => new Tile(tile.GetInt32Property("m_nFirstInstance"), tile.GetInt32Property("m_nLastInstance")))];
+            }
+
+            /// <summary>
+            /// Gets the world transform of one instance: its uniform scale, then rotation, then position.
+            /// </summary>
+            /// <param name="index">The instance index.</param>
+            public Matrix4x4 GetInstanceTransform(int index)
+                => Matrix4x4.CreateScale(InstanceScales[index])
+                    * Matrix4x4.CreateFromQuaternion(InstanceOrientations[index])
+                    * Matrix4x4.CreateTranslation(InstancePositions[index]);
+
+            // x in bits 0-10, y in bits 11-20 and z in bits 21-30, each mapped from [0, 1] to [-1, 1],
+            // with w rebuilt from unit length and negated when bit 31 is set. The result is not normalized.
+            private static Quaternion UnpackQuaternion32(uint packed)
+            {
+                var x = (packed & 0x7FF) * (2f / 2047f) - 1f;
+                var y = ((packed >> 11) & 0x3FF) * (2f / 1023f) - 1f;
+                var z = ((packed >> 21) & 0x3FF) * (2f / 1023f) - 1f;
+                var w = MathF.Sqrt(1f - MathF.Min(0.999999f, x * x + y * y + z * z));
+
+                return new Quaternion(x, y, z, (packed & 0x80000000) != 0 ? -w : w);
+            }
+        }
 
         /// <summary>
         /// A vertex buffer bound in addition to the geometry of one draw call of one of <see cref="SceneObjects"/>,
@@ -51,6 +152,7 @@ namespace ValveResourceFormat.ResourceTypes
         /// <param name="SubSceneObject">Index of the mesh within the scene object's model.</param>
         /// <param name="DrawCallIndex">Index of the draw call within the mesh.</param>
         /// <param name="BufferIndex">Index into <see cref="GetExtraVertexStreams"/>.</param>
+        /// <seealso href="https://s2v.app/SchemaExplorer/cs2/worldrenderer/ExtraVertexStreamOverride_t">ExtraVertexStreamOverride_t</seealso>
         public readonly record struct ExtraVertexStreamOverride(int SceneObjectIndex, int SubSceneObject, int DrawCallIndex, int BufferIndex);
 
         /// <summary>
@@ -81,6 +183,7 @@ namespace ValveResourceFormat.ResourceTypes
         /// <param name="SubSceneObject">Index of the mesh within the scene object's model.</param>
         /// <param name="DrawCallIndex">Index of the draw call within the mesh.</param>
         /// <param name="Material">Name of the replacement material.</param>
+        /// <seealso href="https://s2v.app/SchemaExplorer/cs2/worldrenderer/MaterialOverride_t">MaterialOverride_t</seealso>
         public readonly record struct MaterialOverride(int SceneObjectIndex, int SubSceneObject, int DrawCallIndex, string Material);
 
         /// <summary>

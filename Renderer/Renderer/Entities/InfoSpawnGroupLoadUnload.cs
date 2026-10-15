@@ -12,6 +12,7 @@ namespace ValveResourceFormat.Renderer.Entities;
 /// The loaded map is aligned by landmark origin only, with no rotation. The load finishes within the input
 /// instead of in the background.
 /// </remarks>
+/// <seealso href="https://s2v.app/SchemaExplorer/cs2/server/CInfoSpawnGroupLoadUnload">CInfoSpawnGroupLoadUnload</seealso>
 public sealed class InfoSpawnGroupLoadUnload : BaseEntity
 {
     /// <summary>Gets the map to load, such as <c>stages/lms_stage1</c>.</summary>
@@ -48,7 +49,7 @@ public sealed class InfoSpawnGroupLoadUnload : BaseEntity
             return;
         }
 
-        // The engine will not place a group without a landmark
+        // A group cannot be placed without a landmark
         if (Landmark.Length == 0)
         {
             EntitySystem.Logger.LogWarning("info_spawngroup_load_unload '{TargetName}' names no landmark, not loading '{MapName}'", TargetName, MapName);

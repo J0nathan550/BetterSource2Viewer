@@ -7,11 +7,13 @@ using ValveResourceFormat.Serialization.KeyValues;
 namespace ValveResourceFormat.Renderer.Entities;
 
 /// <summary>
-/// An entity with something to draw, Source's <c>CBaseModelEntity</c>.
+/// An entity with something to draw.
 /// </summary>
+/// <seealso href="https://s2v.app/SchemaExplorer/cs2/server/CBaseModelEntity">CBaseModelEntity</seealso>
 public abstract class BaseModelEntity : BaseEntity
 {
-    /// <summary>SolidType_t from CS2: https://s2v.app/SchemaExplorer/cs2/client/SolidType_t.</summary>
+    /// <summary>How an entity collides.</summary>
+    /// <seealso href="https://s2v.app/SchemaExplorer/cs2/client/SolidType_t">SolidType_t</seealso>
     public enum SolidType
     {
         /// <summary>Not solid.</summary>
@@ -38,30 +40,27 @@ public abstract class BaseModelEntity : BaseEntity
     public SolidType Solid { get; protected set; }
 
     /// <summary>
-    /// Gets the node this entity draws as, or <see langword="null"/> when its model has no meshes. A brush
-    /// compiled for collision alone is the usual reason.
+    /// Gets the node this entity draws as, or <see langword="null"/> when its model has no meshes,
+    /// as with a brush compiled for collision alone.
     /// </summary>
     public ModelSceneNode? ModelNode { get; private set; }
 
     /// <summary>Gets the model this entity loaded, or <see langword="null"/> when it names none or it failed to load.</summary>
     protected Model? LoadedModel { get; private set; }
 
-    /// <summary>
-    /// Initializes a model entity from its keyvalues.
-    /// </summary>
+    /// <summary>Initializes a model entity from its keyvalues.</summary>
     protected BaseModelEntity(EntitySystem system, EntitySpawnInfo spawnInfo) : base(system, spawnInfo)
     {
         Solid = KeyValues.ContainsKey("solid") ? KeyValues.GetEnumValue<SolidType>("solid") : SolidType.SOLID_NONE;
     }
 
     /// <summary>
-    /// Loads the model and makes it this entity's own node. Source's <c>SetModel</c>, done for the entity
-    /// rather than by it: deriving from this class is the statement that there is a model to set up. Brush
-    /// entities carry their geometry this way, in a model compiled next to the map.
+    /// Loads the model and makes it this entity's own node. Brush entities carry their geometry
+    /// this way, in a model compiled next to the map.
     /// </summary>
     /// <returns>
-    /// The model node, or the editor box from <see cref="BaseEntity.CreateRootNode"/> when there is nothing
-    /// to draw, so an entity compiled for collision alone can still be seen and picked.
+    /// The model node, or the editor box from <see cref="BaseEntity.CreateRootNode"/> when there is
+    /// nothing to draw, so a collision-only entity can still be seen and picked.
     /// </returns>
     protected override SceneNode? CreateRootNode()
     {
@@ -78,7 +77,7 @@ public abstract class BaseModelEntity : BaseEntity
         {
             EntitySystem.Logger.LogWarning("{Classname} '{TargetName}' failed to load model \"{Model}\"", Classname, TargetName, modelName);
 
-            // Shown in place of the missing model, the way the engine does, so the gap is visible
+            // Stands in for the missing model
             if (fileLoader.LoadFile("models/dev/error.vmdl_c")?.DataBlock is Model errorModel)
             {
                 return new ModelSceneNode(Scene, errorModel, Data?.GetStringProperty("skin"))
@@ -104,11 +103,13 @@ public abstract class BaseModelEntity : BaseEntity
         foreach (var particleNode in particleNodes)
         {
             particleNode.LayerName = Scene.ParticlesLayerName;
-            Scene.Add(particleNode, true);
+
+            // Owned, so they leave the scene with the entity
+            AddNode(particleNode, followsEntity: false);
         }
 
-        // Whether it draws anything is only knowable once it is built, so a collision-only model costs one
-        // node that is then dropped. A particle-only model keeps its node for the follow attachments.
+        // Meshes are only known once the node is built, so a collision-only model's node is dropped.
+        // A particle-only model keeps its node for the follow attachments.
         if (modelNode.HasMeshes || particleNodes.Count > 0)
         {
             // Not added here: the caller takes the returned node as the entity's own
@@ -117,9 +118,9 @@ public abstract class BaseModelEntity : BaseEntity
 
         if (modelNode.HasMeshes)
         {
-            // The compiler bakes physics in the model's posed frame, while the raw mesh can sit in
-            // modeldoc's working frame (de_nuke's doors are 90 degrees apart between the two). The game
-            // always poses a prop with a sequence, so the authored animation or the modeldoc ref is applied.
+            // Physics is baked in the model's posed frame, but the raw mesh can sit in modeldoc's
+            // working frame (de_nuke's doors differ by 90 degrees). Props are always posed by a
+            // sequence, so apply the authored animation or the modeldoc ref.
             var animation = Data?.GetStringProperty("startinganim")
                 ?? Data?.GetStringProperty("defaultanim")
                 ?? Data?.GetStringProperty("idleanim");
@@ -152,8 +153,8 @@ public abstract class BaseModelEntity : BaseEntity
                 UpdateColliderTransform();
             }
 
-            // Owned outright rather than hung off the model: a brush compiled for collision alone has no
-            // model node to hang them from, and its hulls are then the only thing there is to show.
+            // Owned by the entity, not the model node: a collision-only brush has no model node,
+            // and its hulls are all there is to show.
             foreach (var physicsNode in PhysSceneNode.CreatePhysSceneNodes(Scene, physics, modelName, Classname))
             {
                 AddNode(physicsNode);
@@ -167,8 +168,8 @@ public abstract class BaseModelEntity : BaseEntity
     }
 
     /// <summary>
-    /// Gets whether the model's physics becomes a <see cref="BaseEntity.Collider"/>. Its hulls are drawn
-    /// either way. Read while the entity is constructed, so an override must not depend on its own state.
+    /// Gets whether the model's physics becomes a <see cref="BaseEntity.Collider"/>; its hulls are drawn
+    /// either way. Read during construction, so overrides must not depend on instance state.
     /// </summary>
     protected virtual bool BuildsCollider => true;
 
@@ -208,5 +209,25 @@ public abstract class BaseModelEntity : BaseEntity
         }
 
         node.Alpha = MathUtils.Saturate(alpha / 255f);
+    }
+
+    /// <summary>
+    /// Lights the model as if it stood at the named entity. The position is sampled once and does not follow it.
+    /// </summary>
+    [EntityInput("LightingOrigin")]
+    protected void InputLightingOrigin(EntityInputData data)
+    {
+        if (ModelNode is not { } node || string.IsNullOrEmpty(data.Parameter))
+        {
+            return;
+        }
+
+        if (EntitySystem.FindByTargetName(data.Parameter) is not { } origin)
+        {
+            return;
+        }
+
+        node.LightingOrigin = origin.WorldOrigin;
+        Scene.UpdateNodeEnvironmentMaps(node);
     }
 }

@@ -252,7 +252,7 @@ namespace ValveResourceFormat.IO
                     {
                         var lumpFolder = MapExtract.GetLumpFolderFromVmapRERL(resource.ExternalReferences);
                         var worldFile = Path.Combine(lumpFolder, "world.vwrld");
-                        var mapResource = FileLoader.LoadFileCompiled(worldFile) ?? throw new FileNotFoundException($"Failed to load \"{worldFile}\"");
+                        using var mapResource = FileLoader.LoadFileCompiled(worldFile) ?? throw new FileNotFoundException($"Failed to load \"{worldFile}\"");
                         ExportToFile(resource.FileName, targetPath, (VWorld)mapResource.DataBlock!);
                         break;
                     }
@@ -351,7 +351,7 @@ namespace ValveResourceFormat.IO
 
             WriteModelFile(exportedModel, fileName);
 
-            var phys = model.GetEmbeddedPhys();
+            var phys = GetModelPhysics(model);
             if (phys != null)
             {
                 string? physFileName = null;
@@ -365,6 +365,25 @@ namespace ValveResourceFormat.IO
 
                 ExportToFile(resourceName, physFileName, phys);
             }
+        }
+
+        /// <summary>
+        /// Gets a model's physics, embedded or from the first physics file it references.
+        /// </summary>
+        private PhysAggregateData? GetModelPhysics(VModel model)
+        {
+            if (model.GetEmbeddedPhys() is { } phys)
+            {
+                return phys;
+            }
+
+            if (model.GetReferencedPhysNames()?.FirstOrDefault() is not { } physicsPath)
+            {
+                return null;
+            }
+
+            using var physicsResource = FileLoader.LoadFileCompiled(physicsPath);
+            return physicsResource?.DataBlock as PhysAggregateData;
         }
 
         /// <summary>
@@ -474,9 +493,8 @@ namespace ValveResourceFormat.IO
 
             var meshes = LoadModelMeshes(model, name).ToList();
 
-            // Animation frames are sized from the flex controllers, so they have to be known before the
-            // animations are written. Reading them here lets the model's own morph block win; only a
-            // model whose morph set sits in a separate vmorf falls back to the one its meshes carry.
+            // Animation frames are sized from flex controllers, so read them before writing animations.
+            // The model's morph block wins; a model with its morph set in a separate vmorf falls back to its meshes'.
             if (model.FlexControllers.Length == 0)
             {
                 foreach (var m in meshes)
@@ -486,11 +504,9 @@ namespace ValveResourceFormat.IO
                 }
             }
 
-            var (skeletonNode, joints) = ExportAnimations
-                ? CreateGltfSkeleton(scene, model.Skeleton, name)
-                : (null, null);
+            var (skeletonNode, joints) = CreateGltfSkeleton(scene, model.Skeleton, name);
 
-            if (skeletonNode != null)
+            if (skeletonNode != null && ExportAnimations)
             {
                 Debug.Assert(joints != null);
 
@@ -511,14 +527,10 @@ namespace ValveResourceFormat.IO
 
                 WriteAnimationGraphClips(exportedModel, scene, model, joints!, animationFilter);
             }
-            else
-            {
-                Debug.Assert(joints == null);
-            }
 
             var nodeTransform = GetPlacementTransform(transform);
 
-            var skinMaterialPath = skinName != null ? GetSkinPathFromModel(model, skinName) : null;
+            var skinMaterialTable = skinName != null ? GetSkinMaterialTable(model, skinName) : null;
 
             var morphedMeshNodes = new List<(Node Node, VMesh Mesh)>();
 
@@ -531,13 +543,13 @@ namespace ValveResourceFormat.IO
                     continue;
                 }
 
-                if (skinName != null)
+                if (skinMaterialTable != null)
                 {
                     meshName = string.Concat(meshName, ".", skinName);
                 }
 
                 var boneRemapTable = model.GetRemapTable(m.MeshIndex);
-                var node = AddMeshNode(exportedModel, scene, meshName, tintColor, m.Mesh, m.Mesh.VBIB, joints, out var meshNode, boneRemapTable, skinMaterialPath, entity);
+                var node = AddMeshNode(exportedModel, scene, meshName, tintColor, m.Mesh, m.Mesh.VBIB, joints, out var meshNode, boneRemapTable, skinMaterialTable, entity);
                 if (node != null)
                 {
                     node.WorldMatrix = nodeTransform;
@@ -546,7 +558,7 @@ namespace ValveResourceFormat.IO
                 }
 
                 // meshNode is set even for skinned meshes, where the returned node is null.
-                if (skeletonNode != null && meshNode != null && m.Mesh.MorphData?.FlexRules.Length > 0)
+                if (skeletonNode != null && ExportAnimations && meshNode != null && m.Mesh.MorphData?.FlexRules.Length > 0)
                 {
                     morphedMeshNodes.Add((meshNode, m.Mesh));
                 }
@@ -622,7 +634,7 @@ namespace ValveResourceFormat.IO
 
         private Node? AddMeshNode(ModelRoot exportedModel, Scene scene, string name, Vector4 tintColor,
             VMesh mesh, Blocks.VBIB vbib, Node[]? joints, out Node? meshNode, int[]? boneRemapTable = null,
-            string? skinMaterialPath = null, EntityLump.Entity? entity = null)
+            Dictionary<string, string>? skinMaterialTable = null, EntityLump.Entity? entity = null)
         {
             meshNode = null;
 
@@ -633,21 +645,19 @@ namespace ValveResourceFormat.IO
 
             var newNode = scene.CreateNode(name);
             meshNode = newNode;
-            if (ExportedMeshes.TryGetValue(name, out var exportedMesh))
-            {
-                // Make a new node that uses the existing mesh
-                newNode.Mesh = exportedMesh;
-                return newNode;
-            }
+            mesh.LoadExternalMorphData(FileLoader);
 
-            exportedMesh = CreateGltfMesh(name, mesh, vbib, exportedModel, boneRemapTable, skinMaterialPath, tintColor);
-            ExportedMeshes.Add(name, exportedMesh);
-
-            if (entity != null && ExportExtras)
+            if (!ExportedMeshes.TryGetValue(name, out var exportedMesh))
             {
-                foreach (var (key, value) in entity.Children)
+                exportedMesh = CreateGltfMesh(name, mesh, vbib, exportedModel, boneRemapTable, skinMaterialTable, tintColor);
+                ExportedMeshes.Add(name, exportedMesh);
+
+                if (entity != null && ExportExtras)
                 {
-                    exportedMesh.Extras[key] = value.ValueType == KVValueType.String ? (string)value : value.ToString();
+                    foreach (var (key, value) in entity.Children)
+                    {
+                        exportedMesh.Extras[key] = value.ValueType == KVValueType.String ? (string)value : value.ToString();
+                    }
                 }
             }
 
@@ -695,7 +705,6 @@ namespace ValveResourceFormat.IO
                 MergeBuffers = false,
             };
 
-            // Write GLB to a provided stream
             if (stream != null)
             {
                 exportedModel.MergeBuffers();

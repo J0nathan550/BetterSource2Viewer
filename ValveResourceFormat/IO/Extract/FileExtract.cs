@@ -228,9 +228,7 @@ namespace ValveResourceFormat.IO
                 case ResourceType.Sound:
                     if (resource.DataBlock is Sound { StreamingDataSize: > 0 } soundData)
                     {
-                        using var soundStream = soundData.GetSoundStream();
-                        soundStream.TryGetBuffer(out var buffer);
-                        contentFile.Data = [.. buffer];
+                        contentFile.Data = soundData.GetSound();
 
                         // Lip-sync phoneme data; the compiler bakes this back in when the txt sits next to the source sound.
                         if (soundData.Sentence != null)
@@ -473,9 +471,10 @@ namespace ValveResourceFormat.IO
             {
                 case ResourceType.Texture:
                 {
-                    if (IsChildResource(resource))
+                    var texture = (Texture)resource.DataBlock!;
+
+                    if (IsChildResource(resource) || texture.IsRawAnyImage)
                     {
-                        var texture = (Texture)resource.DataBlock!;
                         return TextureExtract.GetImageOutputExtension(texture);
                     }
 

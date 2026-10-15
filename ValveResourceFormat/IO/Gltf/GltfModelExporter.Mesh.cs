@@ -34,14 +34,12 @@ public partial class GltfModelExporter
     private readonly Dictionary<Accessor, Accessor> ScaledLightmapUvAccessors = [];
     private readonly Dictionary<(Accessor Position, Accessor Normal), Accessor> OverlayOffsetPositionAccessors = [];
 
-    private Mesh CreateGltfMesh(string meshName, VMesh vmesh, VBIB vbib, ModelRoot exportedModel, int[]? boneRemapTable, string? skinMaterialPath, Vector4 tintColor)
+    private Mesh CreateGltfMesh(string meshName, VMesh vmesh, VBIB vbib, ModelRoot exportedModel, int[]? boneRemapTable, Dictionary<string, string>? skinMaterialTable, Vector4 tintColor)
     {
         ProgressReporter?.Report($"Creating mesh: {meshName}");
 
         var mesh = exportedModel.CreateMesh(meshName);
         mesh.Extras = new JsonObject();
-
-        vmesh.LoadExternalMorphData(FileLoader);
 
         var boneWeightCount = vmesh.BoneWeightCount;
 
@@ -57,7 +55,7 @@ public partial class GltfModelExporter
         {
             foreach (var drawCall in sceneObject.GetArray("m_drawCalls"))
             {
-                var primitive = CreateMeshFromDrawCall(drawCall, mesh, vbib, vertexBufferAccessors, exportedModel, skinMaterialPath, tintColor);
+                var primitive = CreateMeshFromDrawCall(drawCall, mesh, vbib, vertexBufferAccessors, exportedModel, skinMaterialTable, tintColor);
 
                 if (flexData != null && normalData != null)
                 {
@@ -318,7 +316,7 @@ public partial class GltfModelExporter
     }
 
     private MeshPrimitive CreateMeshFromDrawCall(KVObject drawCall, Mesh mesh, VBIB vbib, Dictionary<string,
-        AttributeAccessor>[] vertexBufferAccessors, ModelRoot exportedModel, string? skinMaterialPath, Vector4 parentTintColor)
+        AttributeAccessor>[] vertexBufferAccessors, ModelRoot exportedModel, Dictionary<string, string>? skinMaterialTable, Vector4 parentTintColor)
     {
         CancellationToken.ThrowIfCancellationRequested();
 
@@ -326,7 +324,13 @@ public partial class GltfModelExporter
         var indexBufferIndex = indexBufferInfo.GetInt32Property("m_hBuffer");
         var indexBuffer = vbib.IndexBuffers[indexBufferIndex];
 
-        var materialPath = skinMaterialPath ?? VMesh.GetMaterialName(drawCall)!;
+        var materialPath = VMesh.GetMaterialName(drawCall)!;
+
+        if (skinMaterialTable != null && skinMaterialTable.TryGetValue(materialPath, out var skinMaterialPath))
+        {
+            materialPath = skinMaterialPath;
+        }
+
         Resource? materialResource = null;
 
         // Bake g_vLightmapUvScale into lightmap UVs. Like the renderer, only draw calls with baked
@@ -351,8 +355,8 @@ public partial class GltfModelExporter
 
         var vertexBuffers = drawCall.GetArray("m_vertexBuffers");
 
-        // Each vertex buffer names its TEXCOORDs/COLORs from 0 independently, so remap to a
-        // global counter here to avoid later buffers overwriting earlier ones on the primitive.
+        // Vertex buffers each number TEXCOORDs/COLORs from 0, so count globally or later buffers
+        // overwrite earlier ones.
         var texcoordCounter = 0;
         var colorCounter = 0;
 
@@ -557,9 +561,8 @@ public partial class GltfModelExporter
             {
                 transform *= fragmentTransforms[transformIndex++].ToMatrix4x4();
 
-                // A zero determinant means the transform collapses the fragment to nothing. Testing the
-                // diagonal instead would also match an honest rotation that maps every axis onto a
-                // different one, and throw the fragment away.
+                // A zero determinant collapses the fragment to nothing. Testing the diagonal
+                // would also drop honest axis-permuting rotations.
                 if (transform.GetDeterminant() == 0f)
                 {
                     ProgressReporter?.Report($"Skipping mesh: {meshName} because it has a scale of zero.");
@@ -587,7 +590,7 @@ public partial class GltfModelExporter
             var mesh = exportedModel.CreateMesh(meshName);
             mesh.Extras = new JsonObject();
 
-            CreateMeshFromDrawCall(drawCall, mesh, vbib, vertexBufferAccessors, exportedModel, skinMaterialPath: null, tintColor);
+            CreateMeshFromDrawCall(drawCall, mesh, vbib, vertexBufferAccessors, exportedModel, skinMaterialTable: null, tintColor);
 
             var newNode = scene.CreateNode(name).WithMesh(mesh);
             // The conversion is baked into the geometry (CreateVertexBufferAccessors), so the placement
@@ -604,9 +607,8 @@ public partial class GltfModelExporter
         var morphIndex = 0;
         var flexDesc = morph.GetFlexDescriptors();
 
-        // Morph deltas are mostly zero, so each target is written as a sparse accessor over one shared
-        // run of zeroes rather than a full copy of the mesh. A buffer view that several accessors read
-        // has to declare its stride.
+        // Morph deltas are mostly zero, so targets are sparse accessors over one shared zero run.
+        // A buffer view read by several accessors must declare its stride.
         var zeroes = model.CreateBufferView(3 * sizeof(float) * vertexCount, 3 * sizeof(float), BufferMode.ARRAY_BUFFER);
 
         foreach (var morphName in flexDesc)
@@ -633,8 +635,7 @@ public partial class GltfModelExporter
                     { "POSITION", CreateMorphAccessor(model, zeroes, deltas, morphName) }
                 };
 
-            // The normal bundle is optional, and a morph set that carries one only fills it for the
-            // targets that actually move normals.
+            // The normal bundle is optional and only fills targets that move normals.
             if (normalData.TryGetValue(morphName, out var normalDeltas))
             {
                 var normals = new Vector3[vertexCount];

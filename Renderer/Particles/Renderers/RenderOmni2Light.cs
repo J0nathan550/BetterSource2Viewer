@@ -11,7 +11,7 @@ namespace ValveResourceFormat.Renderer.Particles.Renderers
     internal class RenderOmni2Light : ParticleFunctionRenderer
     {
         private readonly Scene scene;
-        private readonly SceneLight light;
+        private readonly List<SceneLight> lights = [];
         private readonly ParticleOmni2LightTypeChoiceList lightType = ParticleOmni2LightTypeChoiceList.PARTICLE_OMNI2_LIGHT_TYPE_POINT;
         private readonly IVectorProvider colorBlend = new LiteralVectorProvider(Vector3.One);
         private readonly ParticleColorBlendType colorBlendType = ParticleColorBlendType.PARTICLE_COLOR_BLEND_MULTIPLY;
@@ -19,17 +19,14 @@ namespace ValveResourceFormat.Renderer.Particles.Renderers
         private readonly INumberProvider brightnessLumens = new LiteralNumberProvider(1000f);
         private readonly INumberProvider brightnessCandelas = new LiteralNumberProvider(1000f);
         private readonly bool castShadows;
-        private readonly bool fog;
-        private readonly INumberProvider fogScale = new LiteralNumberProvider(1f);
         private readonly INumberProvider luminaireRadius = new LiteralNumberProvider(1f);
         private readonly INumberProvider skirt = new LiteralNumberProvider(0.1f);
         private readonly INumberProvider range = new LiteralNumberProvider(512f);
         private readonly INumberProvider innerConeAngle = new LiteralNumberProvider(180f);
         private readonly INumberProvider outerConeAngle = new LiteralNumberProvider(180f);
         private readonly string? cookiePath;
-        private readonly bool sphericalCookie = true;
 
-        public RenderOmni2Light(ParticleDefinitionParser parse, RendererContext rendererContext, Scene scene)
+        public RenderOmni2Light(ParticleDefinitionParser parse, Scene scene)
             : base(parse)
         {
             this.scene = scene;
@@ -40,31 +37,48 @@ namespace ValveResourceFormat.Renderer.Particles.Renderers
             brightnessLumens = parse.NumberProvider("m_flBrightnessLumens", brightnessLumens);
             brightnessCandelas = parse.NumberProvider("m_flBrightnessCandelas", brightnessCandelas);
             castShadows = parse.Boolean("m_bCastShadows", castShadows);
-            fog = parse.Boolean("m_bFog", fog);
-            fogScale = parse.NumberProvider("m_flFogScale", fogScale);
             luminaireRadius = parse.NumberProvider("m_flLuminaireRadius", luminaireRadius);
             skirt = parse.NumberProvider("m_flSkirt", skirt);
             range = parse.NumberProvider("m_flRange", range);
             innerConeAngle = parse.NumberProvider("m_flInnerConeAngle", innerConeAngle);
             outerConeAngle = parse.NumberProvider("m_flOuterConeAngle", outerConeAngle);
             cookiePath = parse.Data.GetStringProperty("m_hLightCookie") is { Length: > 0 } cookie ? cookie : null;
-            sphericalCookie = parse.Boolean("m_bSphericalCookie", sphericalCookie);
-
-            light = CreateLight();
-            scene.LightingInfo.BarnLights.Add(light);
         }
 
-        public override void Simulate(ParticleCollection particles, ParticleSystemState systemState)
+        /// <inheritdoc/>
+        public override void Hide()
         {
-            if (particles.Count == 0)
+            foreach (var light in lights)
             {
                 light.IsDirty = light.IsDirty || light.BrightnessScale != 0f;
                 light.BrightnessScale = 0f;
-                return;
+            }
+        }
+
+        // Every live particle is its own light. The pool only grows on the main thread, since the
+        // scene's light list is shared.
+        public override void Act(ParticleCollection particles, ParticleSystemState systemState)
+        {
+            while (lights.Count < particles.Count)
+            {
+                var light = CreateLight();
+                lights.Add(light);
+                scene.LightingInfo.BarnLights.Add(light);
             }
 
-            ref var particle = ref particles.Current[0];
-            UpdateLight(light, ref particle, systemState);
+            for (var i = 0; i < lights.Count; i++)
+            {
+                var light = lights[i];
+
+                if (i < particles.Count)
+                {
+                    UpdateLight(light, ref particles.Current[i], systemState);
+                    continue;
+                }
+
+                light.IsDirty = light.IsDirty || light.BrightnessScale != 0f;
+                light.BrightnessScale = 0f;
+            }
         }
 
         public override void Render(ParticleCollection particles, ParticleSystemState systemState, Camera camera)
@@ -74,7 +88,12 @@ namespace ValveResourceFormat.Renderer.Particles.Renderers
 
         public override void Delete()
         {
-            scene.LightingInfo.BarnLights.Remove(light);
+            foreach (var light in lights)
+            {
+                scene.LightingInfo.BarnLights.Remove(light);
+            }
+
+            lights.Clear();
         }
 
         private SceneLight CreateLight()
@@ -104,10 +123,37 @@ namespace ValveResourceFormat.Renderer.Particles.Renderers
             };
         }
 
+        /// <summary>
+        /// Combines the particle color with the blend color. The particle color is quantized to bytes
+        /// while the blend color stays normalized, so the modes that do not multiply the two mix
+        /// both scales.
+        /// </summary>
+        private static Vector3 BlendColor(ParticleColorBlendType type, Vector3 blend, Vector3 particleColor)
+        {
+            var color = Vector3.Truncate(Vector3.Clamp(particleColor, Vector3.Zero, Vector3.One) * 255f);
+            var white = new Vector3(255f);
+
+            var blended = type switch
+            {
+                ParticleColorBlendType.PARTICLE_COLOR_BLEND_DIVIDE => color / blend,
+                ParticleColorBlendType.PARTICLE_COLOR_BLEND_ADD => blend + color,
+                ParticleColorBlendType.PARTICLE_COLOR_BLEND_SUBTRACT => color - blend,
+                ParticleColorBlendType.PARTICLE_COLOR_BLEND_SCREEN => white - ((white - color) * blend),
+                ParticleColorBlendType.PARTICLE_COLOR_BLEND_MAX => Vector3.Max(color, blend),
+                ParticleColorBlendType.PARTICLE_COLOR_BLEND_MIN => Vector3.Min(color, blend),
+                ParticleColorBlendType.PARTICLE_COLOR_BLEND_REPLACE => blend,
+                ParticleColorBlendType.PARTICLE_COLOR_BLEND_AVERAGE => (blend + color) * 0.5f,
+                ParticleColorBlendType.PARTICLE_COLOR_BLEND_NEGATE => white - (blend * color),
+                ParticleColorBlendType.PARTICLE_COLOR_BLEND_LUMINANCE => Vector3.Dot(blend, new Vector3(0.2125f, 0.7154f, 0.0721f)) * color,
+                _ => blend * color,
+            };
+
+            return Vector3.Round(Vector3.Clamp(blended, Vector3.Zero, white)) / 255f;
+        }
+
         private void UpdateLight(SceneLight light, ref Particle particle, ParticleSystemState systemState)
         {
-            var baseColor = colorBlend.NextVector(ref particle, systemState);
-            var color = Vector3.Clamp(baseColor, Vector3.Zero, Vector3.One);
+            var color = BlendColor(colorBlendType, colorBlend.NextVector(ref particle, systemState), particle.Color);
 
             var brightness = brightnessUnit switch
             {
@@ -121,7 +167,7 @@ namespace ValveResourceFormat.Renderer.Particles.Renderers
             // Lumens spread over the cone, as the intensity the faces are lit with 100 units away
             light.Color = color;
             light.LinearBrightness = MathF.Max(0f, brightness) * 4f * MathF.PI * 10f / (light.ComputeConeSolidAngle() * 100f * 100f);
-            light.BrightnessScale = MathF.Max(0f, 1 - particle.NormalizedAge);
+            light.BrightnessScale = MathF.Max(0f, particle.Alpha);
             light.Range = lightRange;
             light.FallOff = skirtValue;
             light.Position = particle.Position;

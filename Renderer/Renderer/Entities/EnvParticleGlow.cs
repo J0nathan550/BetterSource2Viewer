@@ -6,6 +6,7 @@ namespace ValveResourceFormat.Renderer.Entities;
 /// <c>env_particle_glow</c>: a particle system whose effect reads its tint from control point 16, and its
 /// alpha, scale and self-illumination scale from control point 17.
 /// </summary>
+/// <seealso href="https://s2v.app/SchemaExplorer/cs2/server/CEnvParticleGlow">CEnvParticleGlow</seealso>
 public sealed class EnvParticleGlow : InfoParticleSystem
 {
     /// <summary>Initializes a glow from its keyvalues.</summary>
@@ -35,5 +36,33 @@ public sealed class EnvParticleGlow : InfoParticleSystem
         {
             Effect.SetTextureOverride(textureOverride);
         }
+    }
+
+    [EntityInput("SetAlphaScale")]
+    private void InputSetAlphaScale(EntityInputData data) => SetGlowParameter(0, data.Float());
+
+    [EntityInput("SetScale")]
+    private void InputSetScale(EntityInputData data) => SetGlowParameter(1, data.Float());
+
+    [EntityInput("SetColorTint")]
+    private void InputSetColorTint(EntityInputData data)
+    {
+        if (Effect != null)
+        {
+            Effect.GetControlPoint(16).Position = data.Vector();
+        }
+    }
+
+    private void SetGlowParameter(int component, float value)
+    {
+        if (Effect == null)
+        {
+            return;
+        }
+
+        var controlPoint = Effect.GetControlPoint(17);
+        var parameters = controlPoint.Position;
+        parameters[component] = value;
+        controlPoint.Position = parameters;
     }
 }

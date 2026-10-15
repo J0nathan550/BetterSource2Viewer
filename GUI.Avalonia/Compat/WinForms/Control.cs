@@ -83,6 +83,16 @@ public abstract class Control
 
     public virtual string Text { get; set; } = string.Empty;
 
+    /// <summary>The control this one is placed in, such as the row of a sidebar option.</summary>
+    public Control? Parent => OnUIThread<Control?>(() => Native.Parent is AvaloniaControl parent ? new ParentControl(parent) : null);
+
+    /// <summary>The control's width, or 0 to let it stretch to its parent.</summary>
+    public int Width
+    {
+        get => OnUIThread(() => (int)Native.Bounds.Width);
+        set => SetOnUIThread(() => Native.Width = value > 0 ? value : double.NaN);
+    }
+
     public bool InvokeRequired => !Dispatcher.UIThread.CheckAccess();
 
     public void BeginInvoke(Action action) => Dispatcher.UIThread.Post(action);
@@ -110,6 +120,8 @@ public abstract class Control
 
     protected static T OnUIThread<T>(Func<T> func)
         => Dispatcher.UIThread.CheckAccess() ? func() : Dispatcher.UIThread.Invoke(func);
+
+    private sealed class ParentControl(AvaloniaControl native) : Control(native);
 }
 #pragma warning restore CA1822
 

@@ -195,7 +195,7 @@ namespace GUI
                     }
 
                     file = Path.GetFullPath(file);
-                    Log.Info(nameof(MainForm), $"Opening {file}");
+                    Log.Info(nameof(MainForm), $"Opening {VrfGuiContext.GetDisplayPath(file)}");
 
                     VrfGuiContext? packageContext = null;
 
@@ -563,7 +563,7 @@ namespace GUI
 
         private void OnAboutItemClick(object sender, EventArgs e)
         {
-            mainFormBottomPanel.ShowAboutDialog();
+            ShowAbout();
         }
 
         private void OnSettingsItemClick(object sender, EventArgs e)
@@ -616,8 +616,6 @@ namespace GUI
 
         public void OpenFile(string fileName)
         {
-            Log.Info(nameof(MainForm), $"Opening {fileName}");
-
             if (Regexes.VpkNumberArchive().IsMatch(fileName))
             {
                 var fixedPackage = $"{fileName[..^8]}_dir.vpk";
@@ -630,6 +628,9 @@ namespace GUI
             }
 
             var vrfGuiContext = new VrfGuiContext(fileName, null, loadSearchPaths: false);
+
+            Log.Info(nameof(MainForm), $"Opening {vrfGuiContext.DisplayPath}");
+
             OpenFile(vrfGuiContext, null, loadSearchPaths: true);
 
             Settings.TrackRecentFile(fileName);
@@ -676,13 +677,13 @@ namespace GUI
 
             try
             {
-                tab.ToolTipText = vrfGuiContext.FullPath;
+                tab.ToolTipText = vrfGuiContext.DisplayPath;
 
                 var extension = Path.GetExtension(vrfGuiContext.FileName.AsSpan());
 
                 if (MemoryExtensions.Equals(extension, ".vpk", StringComparison.OrdinalIgnoreCase))
                 {
-                    if (GameFolderLocator.FindSteamGameContainingPath(vrfGuiContext.FileName, ExplorerControl.SteamGames) is { } game
+                    if (GameFolderLocator.FindSteamGameContainingPath(vrfGuiContext.FileName, InstalledSteamGames.Games) is { } game
                         && AppIcons.GameIcons.TryGetValue(game.AppID, out var imageIndexGame))
                     {
                         tab.ImageIndex = imageIndexGame;
@@ -737,7 +738,11 @@ namespace GUI
                 {
                     // Show the loading panel in the preview area right away (replacing the blank page).
                     Debug.Assert(packageTreeView != null);
-                    packageTreeView.ReplaceListViewWithControl(tab, file?.TypeName);
+
+                    if (!packageTreeView.ReplaceListViewWithControl(tab, file?.TypeName))
+                    {
+                        return;
+                    }
                 }
             }
 
@@ -766,7 +771,7 @@ namespace GUI
                             return;
                         }
 
-                        var control = CodeTextBox.CreateFromException(ex, tab.ToolTipText);
+                        var control = CodeTextBox.CreateFromException(ex, vrfGuiContext.DisplayPath);
 
                         tab.Controls.Add(control);
                     });
@@ -809,6 +814,16 @@ namespace GUI
                         {
                             return;
                         }
+                        catch (Exception ex)
+                        {
+                            var control = CodeTextBox.CreateFromException(ex, vrfGuiContext.DisplayPath);
+
+                            tab.Controls.Add(control);
+
+                            // Controls the viewer added before throwing would otherwise cover the error
+                            control.BringToFront();
+                            return;
+                        }
 
                         if (tab.IsDisposed)
                         {
@@ -845,18 +860,16 @@ namespace GUI
                                 return;
                             }
 
-                            var control = CodeTextBox.CreateFromException(ex, tab.ToolTipText);
+                            var control = CodeTextBox.CreateFromException(ex, vrfGuiContext.DisplayPath);
 
                             tab.Controls.Add(control);
                         });
-
-                        Log.Error(nameof(MainForm), ex.ToString());
 
                         return false;
                     }
                     catch (Exception e)
                     {
-                        Program.ShowError(e);
+                        ErrorReport.ShowError(e);
 
                         return true;
                     }
@@ -878,7 +891,11 @@ namespace GUI
                     {
                         // Same-type preview: swap the frozen previous view for the newly loaded viewer.
                         Debug.Assert(packageTreeView != null);
-                        packageTreeView.ReplaceListViewWithControl(tab, file?.TypeName);
+
+                        if (!packageTreeView.ReplaceListViewWithControl(tab, file?.TypeName))
+                        {
+                            return;
+                        }
                     }
                     else
                     {
@@ -1069,6 +1086,11 @@ namespace GUI
             await UpdateChecker.CheckForUpdatesIfNecessary().ConfigureAwait(true);
 
             mainFormBottomPanel.RefreshUpdateState();
+        }
+
+        public void ShowAbout()
+        {
+            mainFormBottomPanel.ShowAboutDialog();
         }
 
         public void ShowUpdateAfterError()

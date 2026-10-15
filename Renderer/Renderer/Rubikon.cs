@@ -31,17 +31,35 @@ public class Rubikon
     /// <summary>
     /// Triangle mesh collision data for ray tracing.
     /// </summary>
+    /// <seealso href="https://s2v.app/SchemaExplorer/cs2/physicslib/RnMesh_t">RnMesh_t</seealso>
     public record PhysicsMeshData(
         string[] InteractAs,
         string[] InteractExclude,
         Vector3[] VertexPositions,
         Triangle[] Triangles,
         Node[] PhysicsTree
-    );
+    )
+    {
+        /// <summary>Gets the hash of the surface property shared by triangles without their own.</summary>
+        public uint SurfacePropertyHash { get; init; }
+
+        /// <summary>Gets the aggregate's surface property hashes, which <see cref="TriangleSurfaceProperties"/> index.</summary>
+        public uint[] SurfacePropertyHashes { get; init; } = [];
+
+        /// <summary>Gets the surface property index of each triangle, or an empty array when the whole mesh uses <see cref="SurfacePropertyHash"/>.</summary>
+        public int[] TriangleSurfaceProperties { get; init; } = [];
+
+        /// <summary>Gets the surface property hash of a triangle in <see cref="Triangles"/>.</summary>
+        public uint GetSurfacePropertyHash(int triangleIndex)
+            => (uint)triangleIndex < (uint)TriangleSurfaceProperties.Length
+                ? Rubikon.GetSurfacePropertyHash(SurfacePropertyHashes, TriangleSurfaceProperties[triangleIndex])
+                : SurfacePropertyHash;
+    }
 
     /// <summary>
     /// Convex hull collision data with vertices, edges, and planes.
     /// </summary>
+    /// <seealso href="https://s2v.app/SchemaExplorer/cs2/physicslib/RnHull_t">RnHull_t</seealso>
     public record PhysicsHullData(
         string[] InteractAs,
         string[] InteractExclude,
@@ -51,9 +69,14 @@ public class Rubikon
         Hull.HalfEdge[] HalfEdges,
         byte[] FaceEdgeIndices,
         Hull.Plane[] Planes
-    );
+    )
+    {
+        /// <summary>Gets the hash of the surface property of the hull.</summary>
+        public uint SurfacePropertyHash { get; init; }
+    }
 
     /// <summary>Compound collision data: child shapes under the compound's own tree, whose leaves hold child shape ids.</summary>
+    /// <seealso href="https://s2v.app/SchemaExplorer/cs2/physicslib/RnCompound_t">RnCompound_t</seealso>
     public record PhysicsCompoundData(
         string[] InteractAs,
         string[] InteractExclude,
@@ -97,10 +120,12 @@ public class Rubikon
 
         Meshes = new PhysicsMeshData[worldMeshes.Length];
         var meshIndex = 0;
+        var surfacePropertyHashes = physicsData.SurfacePropertyHashes;
 
         foreach (var mesh in worldMeshes)
         {
-            Meshes[meshIndex++] = CreateMeshData(mesh.Shape, physicsData.CollisionAttributes[mesh.CollisionAttributeIndex]);
+            Meshes[meshIndex++] = CreateMeshData(mesh.Shape, physicsData.CollisionAttributes[mesh.CollisionAttributeIndex],
+                surfacePropertyHashes, mesh.SurfacePropertyIndex);
         }
 
         // we want to run player clip traces first because the mesh is much simpler
@@ -110,24 +135,30 @@ public class Rubikon
         var hullIndex = 0;
         foreach (var hullDesc in physicsData.Parts[0].Shape.Hulls)
         {
-            Hulls[hullIndex++] = CreateHullData(hullDesc.Shape, physicsData.CollisionAttributes[hullDesc.CollisionAttributeIndex]);
+            Hulls[hullIndex++] = CreateHullData(hullDesc.Shape, physicsData.CollisionAttributes[hullDesc.CollisionAttributeIndex],
+                GetSurfacePropertyHash(surfacePropertyHashes, hullDesc.SurfacePropertyIndex));
         }
 
         // Build BVH for hulls
         HullIndices = [.. Enumerable.Range(0, Hulls.Length)];
         HullTree = BuildHullBVH();
 
-        Compounds = [.. physicsData.Parts[0].Shape.Compounds.Select(compound => CreateCompoundData(compound, physicsData.CollisionAttributes[compound.CollisionAttributeIndex]))];
+        Compounds = [.. physicsData.Parts[0].Shape.Compounds.Select(compound => CreateCompoundData(compound, physicsData.CollisionAttributes[compound.CollisionAttributeIndex], surfacePropertyHashes))];
     }
 
-    private static PhysicsMeshData CreateMeshData(ResourceTypes.RubikonPhysics.Shapes.Mesh mesh, KVObject collisionAttributes)
+    private static PhysicsMeshData CreateMeshData(ResourceTypes.RubikonPhysics.Shapes.Mesh mesh, KVObject collisionAttributes, uint[] surfacePropertyHashes, int surfacePropertyIndex)
     {
         var (interactAs, interactExclude) = GetInteractStrings(collisionAttributes);
 
-        return new PhysicsMeshData(interactAs, interactExclude, [.. mesh.GetVertices()], [.. mesh.GetTriangles()], [.. mesh.ParseNodes()]);
+        return new PhysicsMeshData(interactAs, interactExclude, [.. mesh.GetVertices()], [.. mesh.GetTriangles()], [.. mesh.ParseNodes()])
+        {
+            SurfacePropertyHash = GetSurfacePropertyHash(surfacePropertyHashes, surfacePropertyIndex),
+            SurfacePropertyHashes = surfacePropertyHashes,
+            TriangleSurfaceProperties = mesh.Materials,
+        };
     }
 
-    private static PhysicsHullData CreateHullData(Hull hull, KVObject collisionAttributes)
+    private static PhysicsHullData CreateHullData(Hull hull, KVObject collisionAttributes, uint surfacePropertyHash)
     {
         var (interactAs, interactExclude) = GetInteractStrings(collisionAttributes);
 
@@ -138,11 +169,15 @@ public class Rubikon
             [.. hull.GetEdges()],
             [.. MemoryMarshal.Cast<Hull.Face, byte>(hull.GetFaces())],
             [.. hull.GetPlanes()]
-        );
+        )
+        {
+            SurfacePropertyHash = surfacePropertyHash,
+        };
     }
 
-    private static PhysicsCompoundData CreateCompoundData(CompoundDescriptor descriptor, KVObject collisionAttributes)
+    private static PhysicsCompoundData CreateCompoundData(CompoundDescriptor descriptor, KVObject collisionAttributes, uint[] surfacePropertyHashes)
     {
+        var surfacePropertyHash = GetSurfacePropertyHash(surfacePropertyHashes, descriptor.SurfacePropertyIndex);
         var compound = descriptor.Shape;
         var (interactAs, interactExclude) = GetInteractStrings(collisionAttributes);
 
@@ -151,10 +186,13 @@ public class Rubikon
             compound.GetTreeNodes(),
             compound.HullBaseIndex,
             compound.MeshBaseIndex,
-            [.. compound.Hulls.Select(hull => CreateHullData(hull, collisionAttributes))],
-            [.. compound.Meshes.Select(mesh => CreateMeshData(mesh, collisionAttributes))]
+            [.. compound.Hulls.Select(hull => CreateHullData(hull, collisionAttributes, surfacePropertyHash))],
+            [.. compound.Meshes.Select(mesh => CreateMeshData(mesh, collisionAttributes, surfacePropertyHashes, descriptor.SurfacePropertyIndex))]
         );
     }
+
+    private static uint GetSurfacePropertyHash(uint[] surfacePropertyHashes, int index)
+        => (uint)index < (uint)surfacePropertyHashes.Length ? surfacePropertyHashes[index] : 0;
 
     /// <summary>
     /// Older assets carry their tags in m_PhysicsTagStrings instead of m_InteractAsStrings,
@@ -179,10 +217,9 @@ public class Rubikon
         private bool fired = true;
 
         /// <summary>
-        /// Gets or sets a value indicating whether the trace actually fired. <see langword="false"/>
-        /// when the sweep was rejected (sub-<see cref="Epsilon"/> length): the result is reported
-        /// as a miss but carries no information about the geometry, so callers must not treat
-        /// the sweep as validated.
+        /// Gets or sets whether the trace fired. <see langword="false"/> when the sweep was rejected
+        /// as shorter than <see cref="Epsilon"/>: it reads as a miss but says nothing about the geometry,
+        /// so do not treat it as validated.
         /// </summary>
         public bool IsValid { readonly get => fired; set => fired = value; }
 
@@ -199,18 +236,23 @@ public class Rubikon
         public readonly bool IsMinimalDistance => Distance < 0.00001f;
 
         /// <summary>
-        /// Gets or sets the point of contact on the hit surface. For swept box traces this is
-        /// the closest point on the hit triangle to the box center at the time of impact,
-        /// while <see cref="HitPosition"/> is the center of the swept shape itself.
+        /// Gets or sets the point of contact on the hit surface: for swept box traces, the closest point
+        /// on the hit triangle to the box center at impact. <see cref="HitPosition"/> is the swept shape's center.
         /// </summary>
         public Vector3 ContactPoint { get; set; }
 
         /// <summary>
         /// Gets or sets the entity this hit belongs to, for sweeps that fold brush entities in: the
-        /// entity whose collider was struck, or the world entity for static world geometry, as the engine
-        /// reports it. Null when the sweep did not carry entity identity at all.
+        /// entity whose collider was struck, or the world entity for static world geometry. Null when
+        /// the sweep did not carry entity identity at all.
         /// </summary>
         public Entities.BaseEntity? HitEntity { get; set; }
+
+        /// <summary>
+        /// Gets or sets the hash of the surface property of the hit triangle or hull, zero when unknown.
+        /// Only ray traces report it.
+        /// </summary>
+        public uint SurfacePropertyHash { get; set; }
 
         /// <summary>
         /// Updates this <see cref="TraceResult"/> if the <paramref name="other"/> is closer. Returns true if updated.
@@ -492,9 +534,8 @@ public class Rubikon
     /// Tests a box at rest against the solid volume of this shape, rather than against its surface.
     /// </summary>
     /// <remarks>
-    /// What a trigger volume asks, and the difference from <see cref="IntersectsAABB"/> is a box that has
-    /// gone all the way inside a hull: no surface is in contact there, so the surface test calls it a
-    /// miss and a trigger driven by it would let go of anything that walked far enough in.
+    /// Trigger volumes need this: a box fully inside a hull touches no surface, so <see cref="IntersectsAABB"/>
+    /// calls it a miss, and the trigger would let go of anything that walked far enough in.
     /// </remarks>
     /// <param name="center">Center of the box.</param>
     /// <param name="halfExtents">Half-extents of the box.</param>
@@ -1067,9 +1108,14 @@ public class Rubikon
     // Solid untagged geometry that closely resembles the render mesh
     internal const string DefaultGeometry = "default";
 
+    // What takes a decal: default geometry, and the glass and fences that bullets pass through
+    internal const string DecalGeometry = "decal";
+
     internal const string GrenadeCollisionName = "grenade";
 
     internal const string LadderCollisionName = "ladder";
+
+    internal const string WaterCollisionName = "water";
 
     internal const string Cs2PlayerCollisionFilter = "player";
 
@@ -1101,11 +1147,16 @@ public class Rubikon
             => kind == Kind.Everything || !SkipsCollision(collisionName, interactAs, interactExclude);
     }
 
-    private static bool SkipsCollision(string collisionName, string[] interactAs, string[] interactExclude)
+    internal static bool SkipsCollision(string collisionName, string[] interactAs, string[] interactExclude)
     {
         if (collisionName == DefaultGeometry)
         {
             return interactAs.Length > 0;
+        }
+
+        if (collisionName == DecalGeometry)
+        {
+            return interactAs.Length > 0 && !ContainsString(interactAs, "passbullets");
         }
 
         if (ContainsString(interactExclude, collisionName))
@@ -1113,9 +1164,9 @@ public class Rubikon
             return true;
         }
 
-        if (collisionName == LadderCollisionName)
+        if (collisionName is LadderCollisionName or WaterCollisionName)
         {
-            return !ContainsString(interactAs, LadderCollisionName);
+            return !ContainsString(interactAs, collisionName);
         }
 
         // Untagged geometry stops everything; a tagged shape only stops what its tags name.
@@ -1165,7 +1216,10 @@ public class Rubikon
         {
             if (RayIntersectsTriangle(ray, v0, v1, v2, out var intersection) && intersection.Distance < closestHit.Distance)
             {
-                closestHit = new(true, ray.Origin + ray.Direction * intersection.Distance, intersection.Normal, intersection.Distance, -1);
+                closestHit = new(true, ray.Origin + ray.Direction * intersection.Distance, intersection.Normal, intersection.Distance, -1)
+                {
+                    SurfacePropertyHash = hull.SurfacePropertyHash,
+                };
             }
         }
     }
@@ -1297,7 +1351,10 @@ public class Rubikon
 
                 if (intersection.Distance < ClosestHit.Distance)
                 {
-                    ClosestHit = new(true, ray.Origin + ray.Direction * intersection.Distance, intersection.Normal, intersection.Distance, i);
+                    ClosestHit = new(true, ray.Origin + ray.Direction * intersection.Distance, intersection.Normal, intersection.Distance, i)
+                    {
+                        SurfacePropertyHash = mesh.GetSurfacePropertyHash(i),
+                    };
                 }
             }
 

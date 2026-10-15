@@ -187,7 +187,6 @@ internal sealed partial class ClothExtract
         return rods.Count == 1 && !cloth.IsSourceSpring(edge.A, edge.B) && !rods[0].IsBanded;
     }
 
-    /// <summary>Builds the test for whether a bone has an ancestor that is a cloth control node.</summary>
     private Func<string, bool> ClothControlAncestorTest(ClothReconstruction cloth)
     {
         var (controlNames, boneByName) = ClothControlLookups(cloth);
@@ -210,7 +209,6 @@ internal sealed partial class ClothExtract
         };
     }
 
-    /// <summary>Builds the test for whether a bone's parent bone is a cloth control node.</summary>
     private Func<string, bool> ClothControlParentTest(ClothReconstruction cloth)
     {
         var (controlNames, boneByName) = ClothControlLookups(cloth);
@@ -271,13 +269,13 @@ internal sealed partial class ClothExtract
 
     /// <summary>
     /// The <c>transform_alignment</c> of a <c>ClothNode</c> on an <c>m_Ropes</c> run: 2 for an element node or a based
-    /// node, 1 otherwise, and 0 off the ropes.
+    /// node, 1 otherwise. Off the ropes 1 where it withholds a basis the original lacks, else 0.
     /// </summary>
     private static int RopeClothNodeAlignment(ClothReconstruction cloth, int node, bool isElement, bool hasBasis)
     {
         if (!cloth.IsRopeNode(node))
         {
-            return 0;
+            return !isElement && cloth.WithheldBulkNodeBase(node) ? 1 : 0;
         }
 
         return isElement || hasBasis ? 2 : 1;

@@ -10,8 +10,8 @@ namespace ValveResourceFormat.Renderer.Particles
 {
     /// <summary>
     /// Draws a <see cref="ParticleSystemSimulation"/>. One of these mirrors each system in the
-    /// simulation's child tree, owning the renderers that system draws through and nothing else: the
-    /// particles, control points and timing all belong to the simulation it watches.
+    /// simulation's child tree and owns only the renderers that system draws through. Particles,
+    /// control points and timing belong to the simulation it watches.
     /// </summary>
     internal sealed class ParticleRenderer : IParticleSystemObserver
     {
@@ -63,8 +63,8 @@ namespace ValveResourceFormat.Renderer.Particles
             }
         }
 
-        public ParticleRenderer(ParticleSystem particleSystem, RendererContext rendererContext, Scene scene, ParticleSnapshot? particleSnapshot = null)
-            : this(new ParticleSystemSimulation(particleSystem, rendererContext.FileLoader, rendererContext.Logger, particleSnapshot), rendererContext, scene)
+        public ParticleRenderer(ParticleSystem particleSystem, Scene scene, ParticleSnapshot? particleSnapshot = null)
+            : this(new ParticleSystemSimulation(particleSystem, scene.RendererContext.FileLoader, scene.RendererContext.Logger, particleSnapshot), scene.RendererContext, scene)
         {
         }
 
@@ -74,11 +74,13 @@ namespace ValveResourceFormat.Renderer.Particles
             this.rendererContext = rendererContext;
 
             simulation.Observer = this;
+            simulation.RenderState.Player = scene.ParticlePlayer;
 
             SetupRenderers(simulation.Definition.GetArray("m_Renderers") ?? [], scene);
 
             simulation.RenderState.SequenceDurations = CollectSequenceDurations();
             simulation.RenderState.Lighting = scene.LightingInfo;
+            simulation.RenderState.Collision = scene.ParticleCollision;
 
             foreach (var childSimulation in simulation.Children)
             {
@@ -146,9 +148,14 @@ namespace ValveResourceFormat.Renderer.Particles
 
             foreach (var renderer in renderers)
             {
+                if (!renderer.DrawsInPasses)
+                {
+                    continue;
+                }
+
                 if (renderer.OnlyRenderInEffectsBloomPass)
                 {
-                    // todo: add bloom effects pass
+                    passes |= CustomRenderPasses.EffectsBloom;
                     continue;
                 }
 
@@ -185,17 +192,43 @@ namespace ValveResourceFormat.Renderer.Particles
             }
         }
 
-        /// <summary>Finishes the step for this system's renderers and its children's, on one thread.</summary>
-        public void Act()
+        /// <summary>
+        /// Finishes the frame for this system's renderers and its children's, on one thread. Renderers
+        /// out of draw distance or faded out are hidden; the rest finish the step when there was one.
+        /// </summary>
+        public void Act(Camera camera, bool stepped)
         {
+            var withinDrawDistance = IsWithinDrawDistance(camera);
+
             foreach (var renderer in renderers)
             {
-                renderer.Act(Simulation.Particles, Simulation.RenderState);
+                if (!withinDrawDistance || renderer.GetOperatorRunStrength(Simulation.RenderState) <= 0.0f)
+                {
+                    renderer.Hide();
+                }
+                else if (stepped)
+                {
+                    renderer.Act(Simulation.Particles, Simulation.RenderState);
+                }
             }
 
             foreach (var childRenderer in childRenderers)
             {
-                childRenderer.Act();
+                childRenderer.Act(camera, stepped);
+            }
+        }
+
+        /// <summary>Hides what this system's renderers and its children's placed in the scene.</summary>
+        public void Hide()
+        {
+            foreach (var renderer in renderers)
+            {
+                renderer.Hide();
+            }
+
+            foreach (var childRenderer in childRenderers)
+            {
+                childRenderer.Hide();
             }
         }
 
@@ -231,7 +264,7 @@ namespace ValveResourceFormat.Renderer.Particles
         /// <summary>
         /// Draws the renderers belonging to <paramref name="pass"/>.
         /// </summary>
-        public void Render(Camera camera, RenderPass pass, bool waterEffectsLayer = false)
+        public void Render(Camera camera, RenderPass pass, RenderLayer layer = RenderLayer.Scene)
         {
             foreach (var childRenderer in childRenderers)
             {
@@ -240,7 +273,7 @@ namespace ValveResourceFormat.Renderer.Particles
                     continue;
                 }
 
-                childRenderer.Render(camera, pass, waterEffectsLayer);
+                childRenderer.Render(camera, pass, layer);
             }
 
             if (!IsWithinDrawDistance(camera) || Simulation.Particles.Count == 0)
@@ -254,7 +287,7 @@ namespace ValveResourceFormat.Renderer.Particles
 
             foreach (var renderer in renderers)
             {
-                if (!InPass(renderer, pass, waterEffectsLayer) || renderer.GetOperatorRunStrength(Simulation.RenderState) <= 0.0f)
+                if (!InPass(renderer, pass, layer) || renderer.GetOperatorRunStrength(Simulation.RenderState) <= 0.0f)
                 {
                     continue;
                 }
@@ -278,15 +311,19 @@ namespace ValveResourceFormat.Renderer.Particles
         }
 
         /// <summary>
-        /// Whether <paramref name="renderer"/> draws in <paramref name="pass"/>. The outline pass owns
-        /// no renderer of its own, so everything the system has draws in it.
+        /// Whether <paramref name="renderer"/> draws in <paramref name="pass"/> on <paramref name="layer"/>.
+        /// A bloom-only renderer draws in the effects bloom layer and nowhere else, whatever pass its
+        /// material would otherwise pick. The outline pass owns no renderer of its own, so everything
+        /// else the system has draws in it.
         /// </summary>
-        private static bool InPass(ParticleFunctionRenderer renderer, RenderPass pass, bool waterEffectsLayer)
+        private static bool InPass(ParticleFunctionRenderer renderer, RenderPass pass, RenderLayer layer)
         {
-            if (renderer.OnlyRenderInEffectsBloomPass)
+            if (renderer.OnlyRenderInEffectsBloomPass || layer == RenderLayer.Bloom)
             {
-                return false;
+                return renderer.OnlyRenderInEffectsBloomPass && layer == RenderLayer.Bloom && pass == RenderPass.Translucent;
             }
+
+            var waterEffectsLayer = layer == RenderLayer.WaterEffects;
 
             return pass switch
             {
@@ -321,7 +358,7 @@ namespace ValveResourceFormat.Renderer.Particles
 
             foreach (var renderer in renderers)
             {
-                if (!renderer.CanRenderReplacement || !InPass(renderer, pass, false)
+                if (!renderer.CanRenderReplacement || !InPass(renderer, pass, RenderLayer.Scene)
                     || renderer.GetOperatorRunStrength(Simulation.RenderState) <= 0.0f)
                 {
                     continue;
@@ -426,20 +463,6 @@ namespace ValveResourceFormat.Renderer.Particles
             Passes = CollectPasses();
         }
 
-        // todo: set this when viewer checkbox is toggled
-        public void SetWireframe(bool isWireframe)
-        {
-            foreach (var renderer in renderers)
-            {
-                renderer.SetWireframe(isWireframe);
-            }
-
-            foreach (var childRenderer in childRenderers)
-            {
-                childRenderer.SetWireframe(isWireframe);
-            }
-        }
-
         public void Delete()
         {
             foreach (var renderer in renderers)
@@ -455,13 +478,12 @@ namespace ValveResourceFormat.Renderer.Particles
 
         public AABB LocalBoundingBox => Simulation.LocalBoundingBox;
         public bool IsFinished() => Simulation.IsFinished();
-        public bool HasFinishedEmitting(bool emissionEndIsEnough, bool includeChildren) => Simulation.HasFinishedEmitting(emissionEndIsEnough, includeChildren);
-        public ControlPoint MainControlPoint { get => Simulation.MainControlPoint; set => Simulation.MainControlPoint = value; }
+        public bool HasFinishedEmitting() => Simulation.HasFinishedEmitting(emissionEndIsEnough: true, includeChildren: true);
+        public ControlPoint MainControlPoint => Simulation.MainControlPoint;
         public ControlPoint GetControlPoint(int cp) => Simulation.GetControlPoint(cp);
         public void SetCameraPosition(Vector3 position) => Simulation.SetCameraPosition(position);
         public void SetDetailLevel(ParticleDetailLevel level) => Simulation.SetDetailLevel(level);
         public void Update(float frameTime, float worldTime) => Simulation.Update(frameTime, worldTime);
-        public void Restart() => Simulation.Restart();
         public void Replay() => Simulation.Replay();
         public void Stop() => Simulation.Stop();
         public void PlayEndCap() => Simulation.PlayEndCap();

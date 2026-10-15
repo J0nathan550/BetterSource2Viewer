@@ -265,6 +265,15 @@ namespace ValveResourceFormat.Renderer.World
             }
         }
 
+        /// <summary>Forgets every registered environment map and light probe, for the entities that register them to spawn again.</summary>
+        internal void ClearVolumes()
+        {
+            EnvMaps.Clear();
+            EnvMapHandshakes.Clear();
+            LightProbes.Clear();
+            ProbeHandshakes.Clear();
+        }
+
         /// <summary>
         /// Registers a light probe with the scene, validating its texture set against the lightmap version.
         /// </summary>
@@ -317,7 +326,7 @@ namespace ValveResourceFormat.Renderer.World
         private readonly float[] sunShadowHalfExtent = new float[SunCascadeCount];
         private bool sunShadowFitsDepthToCasters;
 
-        /// <summary>Recalculates <see cref="SunViewProjections"/> and <see cref="SunLightFrustums"/> to fit the current camera view. Cascade extents follow <see cref="SunCascadeExtentFractions"/>. The frustums get a generous depth range for caster culling; once a cascade's casters are collected, <see cref="FitSunLightDepthRange"/> tightens its rendered range around them.</summary>
+        /// <summary>Recalculates <see cref="SunViewProjections"/> and <see cref="SunLightFrustums"/> for the camera view, with extents from <see cref="SunCascadeExtentFractions"/>. Frustums get a generous depth range for caster culling, tightened by <see cref="FitSunLightDepthRange"/>.</summary>
         /// <param name="camera">The active camera used to position the sun shadow frustum.</param>
         /// <param name="shadowMapSize">The shadow map resolution used to compute coverage and texel snapping.</param>
         public void UpdateSunLightFrustum(Camera camera, float shadowMapSize = 512f)
@@ -405,7 +414,6 @@ namespace ValveResourceFormat.Renderer.World
                 // Stabilize shadow map by snapping eye position to texel-sized increments in world space
                 var texelWorldSize = (4.0f * bbox) / shadowMapSize;
 
-                // Project eye onto shadow camera's right/up axes and snap
                 var eyeOffsetX = Vector3.Dot(eye, right);
                 var eyeOffsetY = Vector3.Dot(eye, up);
                 var eyeOffsetZ = Vector3.Dot(eye, sunDir);
@@ -430,7 +438,7 @@ namespace ValveResourceFormat.Renderer.World
             SunCastDirection = sunDir;
         }
 
-        /// <summary>Tightens the depth range of a cascade's <see cref="SunViewProjections"/> entry around the collected shadow casters, given their extent along <see cref="SunCastDirection"/> in world units. A tight range shrinks the world-space size of the normalized shadow bias. Receivers outside the range clamp in the shader and still compare correctly against every caster, and since the fit derives from the same culled set that renders, it covers every rendered caster by construction. <see cref="SunLightFrustums"/> keeps the generous culling range.</summary>
+        /// <summary>Tightens a cascade's <see cref="SunViewProjections"/> depth range around its collected casters, given their extent along <see cref="SunCastDirection"/> in world units. A tight range shrinks the world-space size of the normalized shadow bias. Receivers outside the range clamp in the shader and still compare correctly against every caster. The fit derives from the same culled set that renders, so it covers every rendered caster. <see cref="SunLightFrustums"/> keeps the generous culling range.</summary>
         /// <param name="cascade">The cascade index to tighten.</param>
         /// <param name="casterMin">Smallest caster projection onto the cast direction, or <see cref="float.MaxValue"/> when no casters were collected.</param>
         /// <param name="casterMax">Largest caster projection onto the cast direction.</param>
@@ -458,7 +466,7 @@ namespace ValveResourceFormat.Renderer.World
         private bool usesUniformLightStore;
 
         /// <summary>
-        /// Initial store of map lights to GPU.
+        /// Stores the map's lights to GPU, replacing any stored before.
         /// </summary>
         public void StoreLights(List<SceneLight> lights)
         {
@@ -605,12 +613,34 @@ namespace ValveResourceFormat.Renderer.World
         public void SetSunDirectionFromAngles(Vector3 angles)
         {
             LightingData.SunDirection = new Vector4(-EntityTransformHelper.EulerAnglesToForwardDirection(angles), 0f);
+            UpdateAmbientLighting();
+        }
+
+        private Vector3 skyLight;
+        private Vector3 skyAmbientBounce;
+
+        /// <summary>
+        /// Rebuilds the ambient lighting that fills in where no light probe volume reaches: the sky from
+        /// above, and the sun and sky the ground bounces back from below. It only varies with height.
+        /// </summary>
+        private void UpdateAmbientLighting()
+        {
+            var sunDown = -LightingData.SunDirection.Z;
+            var sunBounce = LightingData.SunColor.AsVector3() * skyAmbientBounce * 0.5f;
+            var skyBounce = skyLight * skyAmbientBounce * 0.5f;
+
+            var vertical = (skyLight * 0.5f) - skyBounce + (sunBounce * sunDown);
+            var constant = (skyLight * 0.5f) + skyBounce + (sunBounce * MathF.Abs(sunDown));
+
+            LightingData.AmbientLightingSHR = new Vector4(0f, 0f, vertical.X, constant.X);
+            LightingData.AmbientLightingSHG = new Vector4(0f, 0f, vertical.Y, constant.Y);
+            LightingData.AmbientLightingSHB = new Vector4(0f, 0f, vertical.Z, constant.Z);
         }
 
         /// <summary>
         /// Stores the environment light into the dedicated sun uniforms, which work across all
-        /// lightmap versions like the HLVR sun fast path. The baked shadow data is the V2 one-hot
-        /// channel mask, or the sun's baked light index in X for V1.
+        /// lightmap versions. The baked shadow data is the V2 one-hot channel mask, or the sun's
+        /// baked light index in X for V1.
         /// </summary>
         private void StoreSunLight(SceneLight envLight, Vector4 bakedShadowData)
         {
@@ -619,6 +649,10 @@ namespace ValveResourceFormat.Renderer.World
             LightingData.SunDirection = new Vector4(-envLight.Direction, 0f);
             LightingData.SunColor = new Vector4(premultipliedColor, envLight.RenderSpecular ? 1f : 0f);
             LightingData.SunLightBakedShadowMask = bakedShadowData;
+
+            skyLight = ColorSpace.SrgbGammaToLinear(envLight.SkyColor) * envLight.SkyIntensity;
+            skyAmbientBounce = ColorSpace.SrgbGammaToLinear(envLight.SkyAmbientBounce);
+            UpdateAmbientLighting();
 
             HasOwnSun = true;
             isSunBorrowed = false;
@@ -643,6 +677,9 @@ namespace ValveResourceFormat.Renderer.World
                 {
                     LightingData.SunDirection = Vector4.Zero;
                     LightingData.SunColor = Vector4.Zero;
+                    LightingData.AmbientLightingSHR = Vector4.Zero;
+                    LightingData.AmbientLightingSHG = Vector4.Zero;
+                    LightingData.AmbientLightingSHB = Vector4.Zero;
                     isSunBorrowed = false;
                 }
 
@@ -651,6 +688,9 @@ namespace ValveResourceFormat.Renderer.World
 
             LightingData.SunDirection = donor.LightingData.SunDirection;
             LightingData.SunColor = donor.LightingData.SunColor;
+            LightingData.AmbientLightingSHR = donor.LightingData.AmbientLightingSHR;
+            LightingData.AmbientLightingSHG = donor.LightingData.AmbientLightingSHG;
+            LightingData.AmbientLightingSHB = donor.LightingData.AmbientLightingSHB;
 
             // These lightmaps have no sun baked in, so nothing is in baked shadow
             LightingData.SunLightBakedShadowMask = new Vector4(-1f, 0f, 0f, 0f);
@@ -672,6 +712,7 @@ namespace ValveResourceFormat.Renderer.World
             }
 
             LightingData.NumBarnLights = 0; // changed dynamically
+            BarnLights.Clear();
 
             var filtered = lights.Where(SceneLight.IsRealTimeLight).ToList();
             if (filtered.Count == 0)

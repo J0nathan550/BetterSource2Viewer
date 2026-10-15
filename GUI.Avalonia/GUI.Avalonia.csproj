@@ -76,6 +76,7 @@
     <Compile Include="..\GUI\Utils\GuiLoggerAdapter.cs" Link="Shared\Utils\%(Filename)%(Extension)" />
     <Compile Include="..\GUI\Utils\HighlightLanguage.cs" Link="Shared\Utils\%(Filename)%(Extension)" />
     <Compile Include="..\GUI\Utils\HumanReadableByteSizeFormatter.cs" Link="Shared\Utils\%(Filename)%(Extension)" />
+    <Compile Include="..\GUI\Utils\InstalledSteamGames.cs" Link="Shared\Utils\%(Filename)%(Extension)" />
     <Compile Include="..\GUI\Utils\KeybindingRegistry.cs" Link="Shared\Utils\%(Filename)%(Extension)" />
     <Compile Include="..\GUI\Utils\UpdateChecker.cs" Link="Shared\Utils\%(Filename)%(Extension)" />
     <Compile Include="..\GUI\Utils\Log.cs" Link="Shared\Utils\%(Filename)%(Extension)" />
@@ -153,6 +154,7 @@
     <Compile Include="..\GUI\Types\GLViewers\GLMeshViewer.cs" Link="Shared\Types\GLViewers\%(Filename)%(Extension)" />
     <Compile Include="..\GUI\Types\GLViewers\GLModelViewer.cs" Link="Shared\Types\GLViewers\%(Filename)%(Extension)" />
     <Compile Include="..\GUI\Types\GLViewers\GLNavMeshViewer.cs" Link="Shared\Types\GLViewers\%(Filename)%(Extension)" />
+    <Compile Include="..\GUI\Types\GLViewers\GLNavSpaceViewer.cs" Link="Shared\Types\GLViewers\%(Filename)%(Extension)" />
     <Compile Include="..\GUI\Types\GLViewers\GLSceneLayerViewer.cs" Link="Shared\Types\GLViewers\%(Filename)%(Extension)" />
     <Compile Include="..\GUI\Types\GLViewers\GLSceneViewer.cs" Link="Shared\Types\GLViewers\%(Filename)%(Extension)" />
     <Compile Include="..\GUI\Types\GLViewers\GLSingleNodeViewer.cs" Link="Shared\Types\GLViewers\%(Filename)%(Extension)" />
@@ -160,5 +162,6 @@
     <Compile Include="..\GUI\Types\GLViewers\GLSmartPropViewer.cs" Link="Shared\Types\GLViewers\%(Filename)%(Extension)" />
     <Compile Include="..\GUI\Types\GLViewers\GLVoxelVisibilityViewer.cs" Link="Shared\Types\GLViewers\%(Filename)%(Extension)" />
     <Compile Include="..\GUI\Types\GLViewers\NativeWindowFactory.cs" Link="Shared\Types\GLViewers\%(Filename)%(Extension)" />
+    <Compile Include="..\GUI\Types\GLViewers\TransformGizmos.cs" Link="Shared\Types\GLViewers\%(Filename)%(Extension)" />
   </ItemGroup>
 </Project>

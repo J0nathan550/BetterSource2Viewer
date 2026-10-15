@@ -3,12 +3,11 @@ using ValveResourceFormat.Serialization.KeyValues;
 namespace ValveResourceFormat.Renderer.Entities;
 
 /// <summary>
-/// <c>info_visibility_box</c>. While enabled, hides the scene objects of its scene by their bounds: those
-/// entirely inside it, or those outside it, as its <c>cull_mode</c> says.
+/// <c>info_visibility_box</c>. While enabled, hides scene objects entirely inside it, or those outside
+/// it, as its <c>cull_mode</c> says.
 /// </summary>
-/// <remarks>
-/// The box is placed where the entity is when it is enabled, and stays there until it is disabled.
-/// </remarks>
+/// <remarks>The box is placed where the entity is when enabled, and stays there until disabled.</remarks>
+/// <seealso href="https://s2v.app/SchemaExplorer/cs2/server/CInfoVisibilityBox">CInfoVisibilityBox</seealso>
 public sealed class InfoVisibilityBox : BaseEntity
 {
     /// <summary>Gets the volume this entity culls with.</summary>

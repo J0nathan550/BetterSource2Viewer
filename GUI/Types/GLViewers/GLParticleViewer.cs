@@ -49,7 +49,6 @@ namespace GUI.Types.GLViewers
         private ThemedButton? pauseButton;
         private ThemedButton? endCapButton;
         private float screenSize = SnapshotParticleSystem.DefaultScreenSize;
-        private bool ShowRenderBounds { get; set; }
 
         public GLParticleViewer(VrfGuiContext vrfGuiContext, RendererContext rendererContext, ParticleSystem particleSystem, ParticleSnapshot? particleSnapshot = null)
             : base(vrfGuiContext, rendererContext, Frustum.CreateEmpty())
@@ -122,7 +121,6 @@ namespace GUI.Types.GLViewers
         protected override void AddUiControls()
         {
             Debug.Assert(UiControl != null);
-            Debug.Assert(SelectedNodeRenderer != null);
 
             AddRenderModeSelectionControl();
 
@@ -208,6 +206,14 @@ namespace GUI.Types.GLViewers
                     particleSceneNode.Restart();
                 });
 
+                UiControl.AddCheckBox("Collide With Floor", false, value =>
+                {
+                    Renderer.EntitySystem.PhysicsWorld.GroundPlane = value ? 0f : null;
+
+                    using var lockedGl = MakeCurrent();
+                    particleSceneNode?.Restart();
+                });
+
                 UiControl.AddControl(restartButton);
                 UiControl.AddControl(pauseButton);
                 UiControl.AddControl(endCapButton);
@@ -220,7 +226,7 @@ namespace GUI.Types.GLViewers
 
             using (UiControl.BeginGroup("Display"))
             {
-                UiControl.AddCheckBox("Show Render Bounds", ShowRenderBounds, value => SelectedNodeRenderer.SelectNode(value ? particleSceneNode : null));
+                UiControl.AddCheckBox("Show Render Bounds", false, value => Selection.Select(value ? particleSceneNode : null));
 
                 // Only when the snapshot stores no radius, in which case the preview invents a size.
                 if (particleSnapshot != null && SnapshotParticleSystem.UsesConstantScreenSize(particleSnapshot))
@@ -438,10 +444,5 @@ namespace GUI.Types.GLViewers
         private sealed record ParticleFunctionItem(string Text, FunctionSupport Support);
 
         private sealed record ChildSystemItem(string Text, string ChildRef, bool Disabled);
-
-        protected override void OnPicked(object? sender, PickingTexture.PickingResponse pixelInfo)
-        {
-            //
-        }
     }
 }

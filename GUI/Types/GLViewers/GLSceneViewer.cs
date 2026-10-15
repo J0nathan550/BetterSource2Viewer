@@ -9,10 +9,13 @@ using GUI.Utils;
 using OpenTK.Graphics.OpenGL;
 using ValveResourceFormat.Renderer;
 using ValveResourceFormat.Renderer.Audio;
+using ValveResourceFormat.Renderer.Editor.Entities;
+using ValveResourceFormat.Renderer.Editor.Picking;
+using ValveResourceFormat.Renderer.Editor.Selection;
 using ValveResourceFormat.Renderer.Input;
 using ValveResourceFormat.Renderer.Materials;
+using ValveResourceFormat.Renderer.SceneEnvironment;
 using ValveResourceFormat.Renderer.SceneNodes;
-using static ValveResourceFormat.Renderer.PickingTexture;
 
 namespace GUI.Types.GLViewers
 {
@@ -24,7 +27,13 @@ namespace GUI.Types.GLViewers
         public ValveResourceFormat.Renderer.TextRenderer TextRenderer { get; protected set; }
         private readonly CrosshairRenderer crosshairRenderer;
 
-        protected PickingTexture? Picker { get; set; }
+        protected ScenePicker? Picker { get; private set; }
+
+        /// <summary>The nodes selected in this viewer, drawn with an outline and helpers.</summary>
+        protected SelectionSet Selection { get; } = new();
+
+        /// <summary>Text drawn in the top-left corner of the viewport, such as stats for the selection.</summary>
+        protected ValveResourceFormat.Renderer.TextRenderer.TextMemory ScreenDebugText { get; set; }
 
         protected QuadOverdraw? QuadOverdrawRenderer { get; set; }
 
@@ -72,13 +81,23 @@ namespace GUI.Types.GLViewers
         private PerfDisplay perfDisplay;
         private ComboBox? perfDisplayComboBox;
 
-        private bool roundStarted;
+        private volatile HashSet<string>? chosenLayers;
+        private volatile bool visibilityDirty;
+        private string? currentRenderMode;
+
+        /// <summary>Gets whether the viewer has its own switches for what of the tools is drawn.</summary>
+        protected virtual bool HasToolsVisibilityControls => false;
+
+        /// <summary>Gets the mode shown at the top of the viewport and its colour, or <see langword="null"/> to show none.</summary>
+        protected virtual (string Text, Color32 Color)? ModeLabel => null;
 
         private readonly List<RenderModes.RenderMode> renderModes = new(RenderModes.Items.Count);
         private int renderModeCurrentIndex;
         private ComboBox? renderModeComboBox;
+        private ComboBox? cubemapColorsComboBox;
+        private bool isCubemapsRenderMode;
         private InfiniteGrid? baseGrid;
-        protected SelectedNodeRenderer? SelectedNodeRenderer;
+        private SelectionVisuals? selectionVisuals;
 
         static readonly TimeSpan FpsUpdateTimeSpan = TimeSpan.FromSeconds(0.1);
 
@@ -102,6 +121,7 @@ namespace GUI.Types.GLViewers
 
             Renderer = new(rendererContext);
             Input = new UserInput(Renderer);
+            Renderer.EntitySystem.ToolVisuals = new HammerEntityVisuals();
             TextRenderer = new(rendererContext, Renderer.Camera);
             crosshairRenderer = new CrosshairRenderer(rendererContext);
             Scene = Renderer.Scene;
@@ -121,6 +141,12 @@ namespace GUI.Types.GLViewers
             physicsTraceRenderer?.Delete();
             physicsTraceRenderer = null;
 
+            selectionVisuals?.Delete();
+            selectionVisuals = null;
+
+            Picker?.Delete();
+            Picker = null;
+
             soundPlayer?.Dispose();
             soundPlayer = null;
 
@@ -136,6 +162,9 @@ namespace GUI.Types.GLViewers
 
             renderModeComboBox?.Dispose();
             renderModeComboBox = null;
+
+            cubemapColorsComboBox?.Dispose();
+            cubemapColorsComboBox = null;
 
 #if DEBUG
             ShaderHotReload.ShadersReloaded -= OnHotReload;
@@ -156,13 +185,54 @@ namespace GUI.Types.GLViewers
 
                 UiControl.AddCheckBox("Show Static Octree", showStaticOctree, (v) => showStaticOctree = v);
                 UiControl.AddCheckBox("Show Dynamic Octree", showDynamicOctree, (v) => showDynamicOctree = v);
-                UiControl.AddCheckBox("Show Tool Materials", Scene.ShowToolsMaterials, (v) =>
+                if (!HasToolsVisibilityControls)
                 {
-                    foreach (var scene in Renderer.Scenes)
+                    UiControl.AddCheckBox("Show Tool Materials", Scene.ShowToolsMaterials, (v) =>
                     {
-                        scene.ShowToolsMaterials = v;
-                    }
-                });
+                        foreach (var scene in Renderer.Scenes)
+                        {
+                            scene.ShowToolsMaterials = v;
+                        }
+                    });
+                }
+
+                if (Renderer.Scenes.Any(static scene => scene.LightingInfo.LightProbes.Count > 0))
+                {
+                    var lightProbeGridComboBox = UiControl.AddSelection("Light Probe Grid", (_, i) =>
+                    {
+                        foreach (var scene in Renderer.Scenes)
+                        {
+                            scene.LightingDebug.LightProbeGrid = (LightProbeDebugGridMode)i;
+                        }
+                    });
+
+                    lightProbeGridComboBox.Items.AddRange(["Off", "Closest", "Closest and keep", "All"]);
+                    lightProbeGridComboBox.SelectedIndex = (int)Scene.LightingDebug.LightProbeGrid;
+
+                    // Mirror samples show the cubemaps reaching into each volume
+                    var lightProbeGridSurfaceComboBox = UiControl.AddSelection("Light Probe Grid Surface", (_, i) =>
+                    {
+                        var mirror = i == 1;
+
+                        foreach (var scene in Renderer.Scenes)
+                        {
+                            scene.LightingDebug.LightProbeGridAlbedo = mirror ? new Color32(255, 255, 255, 255) : new Color32(128, 128, 128, 255);
+                            scene.LightingDebug.LightProbeGridRoughness = mirror ? 0f : 0.5f;
+                            scene.LightingDebug.LightProbeGridMetalness = mirror ? 1f : 0f;
+                        }
+                    });
+
+                    lightProbeGridSurfaceComboBox.Items.AddRange(["Diffuse", "Mirror"]);
+                    lightProbeGridSurfaceComboBox.SelectedIndex = 0;
+                }
+
+                if (Renderer.Scenes.Any(static scene => scene.LightingInfo.EnvMaps.Exists(static envMap => envMap.EntityData != null)))
+                {
+                    cubemapColorsComboBox = UiControl.AddSelection("Cubemap Debug Colors", (_, _) => ApplyCubemapColors());
+                    cubemapColorsComboBox.Items.AddRange(["Off", "Reflections and markers", "Markers only"]);
+                    cubemapColorsComboBox.SelectedIndex = 0;
+                    cubemapColorsComboBox.Parent!.Visible = isCubemapsRenderMode;
+                }
 
                 if (this is GLWorldViewer)
                 {
@@ -280,7 +350,10 @@ namespace GUI.Types.GLViewers
 
         protected abstract void LoadScene();
 
-        protected abstract void OnPicked(object? sender, PickingTexture.PickingResponse pixelInfo);
+        /// <summary>Handles a pick resolved on the render thread. Viewers that do nothing with picks leave this empty.</summary>
+        protected virtual void OnPicked(PickResult result)
+        {
+        }
 
         protected override void OnResize(int w, int h)
         {
@@ -326,7 +399,7 @@ namespace GUI.Types.GLViewers
 
             if (!MouseDragged || GrabbedMouse)
             {
-                Picker?.RequestNextFrame(InitialMousePosition.X, InitialMousePosition.Y, PickingIntent.Select);
+                Picker?.Request(new PickRequest(InitialMousePosition.X, InitialMousePosition.Y, PickIntent.Select, GetPickModifiers()));
             }
         }
 
@@ -343,12 +416,37 @@ namespace GUI.Types.GLViewers
             {
                 if (e.Clicks == 2)
                 {
-                    var intent = Control.ModifierKeys.HasFlag(Keys.Control)
-                        ? PickingIntent.Open
-                        : PickingIntent.Details;
-                    Picker?.RequestNextFrame(e.X, e.Y, intent);
+                    var modifiers = GetPickModifiers();
+                    var intent = modifiers.HasFlag(PickModifiers.Control)
+                        ? PickIntent.Open
+                        : PickIntent.Details;
+                    Picker?.Request(new PickRequest(e.X, e.Y, intent, modifiers));
                 }
             }
+        }
+
+        // Read when the click happens, since the pick only resolves on a later frame
+        private static PickModifiers GetPickModifiers()
+        {
+            var keys = Control.ModifierKeys;
+            var modifiers = PickModifiers.None;
+
+            if ((keys & Keys.Control) != 0)
+            {
+                modifiers |= PickModifiers.Control;
+            }
+
+            if ((keys & Keys.Shift) != 0)
+            {
+                modifiers |= PickModifiers.Shift;
+            }
+
+            if ((keys & Keys.Alt) != 0)
+            {
+                modifiers |= PickModifiers.Alt;
+            }
+
+            return modifiers;
         }
 
         protected override void OnGLLoad()
@@ -371,7 +469,7 @@ namespace GUI.Types.GLViewers
             Renderer.Postprocess.ExposureCompensation = -0.4f; // eyeballed
 
             baseGrid = new InfiniteGrid(Scene);
-            SelectedNodeRenderer = new(Scene.RendererContext);
+            selectionVisuals = new(Scene.RendererContext, Selection);
             Picker = new(Scene.RendererContext, OnPicked);
 
             QuadOverdrawRenderer = new(Scene.RendererContext);
@@ -420,6 +518,9 @@ namespace GUI.Types.GLViewers
             Renderer.Camera.CopyFrom(Input.Camera);
             Renderer.Prewarming = true;
 
+            var decals = Scene.ProjectedDecals;
+            var prewarmDecal = decals.SpawnImpactDecal(Renderer.Camera.Location, Vector3.UnitZ, -Vector3.UnitZ, surfacePropertyHash: 0);
+
             try
             {
                 // A non-zero delta so that particles actually simulate
@@ -432,6 +533,8 @@ namespace GUI.Types.GLViewers
             }
             finally
             {
+                decals.Remove(prewarmDecal);
+
                 Renderer.DisableAllCulling = false;
                 Renderer.Prewarming = false;
             }
@@ -514,6 +617,12 @@ namespace GUI.Types.GLViewers
 
             Input.EnableMouseLook = true;
 
+            if (visibilityDirty)
+            {
+                visibilityDirty = false;
+                ApplyVisibility();
+            }
+
             if (loadedDefaultLighting && Input.NoClip && (CurrentlyPressedKeys & TrackedKeys.Control) != 0)
             {
                 var delta = new Vector2(LastMouseDelta.Y, LastMouseDelta.X);
@@ -556,13 +665,8 @@ namespace GUI.Types.GLViewers
                 // cancel unintentional selection
                 if (!wasWalkMode && Input.WalkMode)
                 {
-                    SelectedNodeRenderer?.SelectNode(null);
-
-                    if (!roundStarted)
-                    {
-                        roundStarted = true;
-                        Renderer.EntitySystem.StartRound();
-                    }
+                    Selection.Clear();
+                    OnWalkModeEntered();
                 }
 
                 // Walk mode and mouse look aim with the mouse, so they hold the cursor. Leaving both,
@@ -611,6 +715,11 @@ namespace GUI.Types.GLViewers
             });
         }
 
+        /// <summary>Draws viewer specific lines over the scene, after the frame's camera is final.</summary>
+        protected virtual void RenderOverlayLines(Scene.RenderContext renderContext)
+        {
+        }
+
         protected void DrawWorldSpaceText(string text, float size, Vector3 position, Color32 color, Scene.RenderContext renderContext)
         {
             TextRenderer.AddTextBillboard(position, new ValveResourceFormat.Renderer.TextRenderer.TextRenderRequest
@@ -631,9 +740,9 @@ namespace GUI.Types.GLViewers
             Renderer.PostprocessRender(MainFramebuffer, GLDefaultFramebuffer);
 
             // Over the final image, so the selection keeps its colors whatever the exposure
-            if (SelectedNodeRenderer != null && Renderer.ResolvedSceneDepth != null)
+            if (selectionVisuals != null && Renderer.ResolvedSceneDepth != null)
             {
-                SelectedNodeRenderer.Render(Renderer.ResolvedSceneDepth);
+                selectionVisuals.Render(Renderer.ResolvedSceneDepth);
             }
         }
 
@@ -646,7 +755,7 @@ namespace GUI.Types.GLViewers
         {
             Debug.Assert(MainFramebuffer != null);
             Debug.Assert(Picker != null);
-            Debug.Assert(SelectedNodeRenderer != null);
+            Debug.Assert(selectionVisuals != null);
 
             Renderer.PerfStats.Capture = perfDisplay == PerfDisplay.Stats;
             Renderer.PerfStats.Timings.Capture = perfDisplay == PerfDisplay.Timings;
@@ -676,31 +785,35 @@ namespace GUI.Types.GLViewers
 
                 Input.LateUpdate(Renderer.Camera);
 
-                SelectedNodeRenderer.Update(renderContext, updateContext);
+                if (ScreenDebugText.Length > 0)
+                {
+                    TextRenderer.AddTextRelative(new ValveResourceFormat.Renderer.TextRenderer.TextRenderRequest
+                    {
+                        X = 0.005f,
+                        Y = 0.03f,
+                        Scale = 14f,
+                        Text = ScreenDebugText,
+                    }, Renderer.Camera);
+                }
+
+                selectionVisuals.Update(renderContext, updateContext);
             }
 
             // After the update, so the listener is placed with this frame's camera vectors rather than
             // this frame's position and last frame's facing
             UpdateSoundPlayer();
 
-            Renderer.ForceResolveSceneDepth = ShowBaseGrid || SelectedNodeRenderer.HasSelectedNodes;
+            Renderer.ForceResolveSceneDepth = ShowBaseGrid || !Selection.IsEmpty;
 
             var quadOverdrawThisFrame = false;
 
             using (new GLDebugGroup("Scenes Render"))
             {
-                if (Picker.ActiveNextFrame)
-                {
-                    using var _ = new GLDebugGroup("Picker Object Id Render");
+                Picker.Render(Renderer, renderContext);
 
-                    var pickerContext = renderContext with { ReplacementShader = Picker.Shader, Framebuffer = Picker };
-                    Renderer.RenderScenesWithView(pickerContext);
-                    Picker.Finish();
-                }
-
-                if (Picker.IsDebugActive)
+                if (Picker.Texture.IsDebugActive)
                 {
-                    renderContext.ReplacementShader = Picker.DebugShader;
+                    renderContext.ReplacementShader = Picker.Texture.DebugShader;
                 }
                 else if (QuadOverdrawRenderer?.IsActive == true)
                 {
@@ -730,6 +843,8 @@ namespace GUI.Types.GLViewers
 
             using (new GLDebugGroup("Lines Render"))
             {
+                RenderOverlayLines(renderContext);
+
                 if (showStaticOctree && Scene.StaticOctree.DebugRenderer != null)
                 {
                     Scene.StaticOctree.DebugRenderer.Render();
@@ -815,6 +930,19 @@ namespace GUI.Types.GLViewers
                 crosshairRenderer.Render(Renderer.Camera);
             }
 
+            if (ModeLabel is { } modeLabel)
+            {
+                TextRenderer.AddTextRelative(new ValveResourceFormat.Renderer.TextRenderer.TextRenderRequest
+                {
+                    X = 0.5f,
+                    Y = 0.03f,
+                    Scale = 14f,
+                    Color = modeLabel.Color,
+                    Text = modeLabel.Text,
+                    CenterHorizontal = true,
+                }, Renderer.Camera);
+            }
+
             if (GrabbedMouse && ShowSpeed)
             {
                 TextRenderer.AddTextRelative(new ValveResourceFormat.Renderer.TextRenderer.TextRenderRequest
@@ -881,7 +1009,7 @@ namespace GUI.Types.GLViewers
             }
 
             TextRenderer.Render(Renderer.Camera, Renderer.ResolvedSceneDepth);
-            Picker?.TriggerEventIfAny();
+            Picker?.DispatchResults();
 
             Renderer.PerfStats.MarkFrameEnd();
         }
@@ -925,6 +1053,7 @@ namespace GUI.Types.GLViewers
             UiControl.AddCheckBox("Show Wireframe", Renderer.IsWireframe, (v) => Renderer.IsWireframe = v);
         }
 
+        /// <summary>Adds the render mode dropdown on the right of the toolbar above the viewport.</summary>
         protected void AddRenderModeSelectionControl()
         {
             if (renderModeComboBox != null)
@@ -934,7 +1063,14 @@ namespace GUI.Types.GLViewers
 
             Debug.Assert(UiControl != null);
 
-            renderModeComboBox = UiControl.AddSelection("Render Mode", (_, i) =>
+            renderModeComboBox = UiControl.AddToolbarSelection(OnRenderModeSelected, "Render mode");
+
+            // Hands the keyboard back to the viewport, which the dropdown took
+            renderModeComboBox.DropDownClosed += (_, _) => GLControl?.Focus();
+
+            SetAvailableRenderModes();
+
+            void OnRenderModeSelected(string name, int i)
             {
                 if (renderModeCurrentIndex < -1)
                 {
@@ -957,9 +1093,7 @@ namespace GUI.Types.GLViewers
 
                 renderModeCurrentIndex = i;
                 SetRenderMode(renderMode.Name);
-            }, true, true);
-
-            SetAvailableRenderModes();
+            }
         }
 
         private void SetAvailableRenderModes(bool keepCurrentSelection = false)
@@ -968,7 +1102,7 @@ namespace GUI.Types.GLViewers
             {
                 var selectedIndex = 0;
                 var currentlySelected = keepCurrentSelection ? renderModeComboBox.SelectedItem?.ToString() : null;
-                var supportedRenderModes = new HashSet<string>(Picker.Shader.RenderModes);
+                var supportedRenderModes = new HashSet<string>(Picker.Texture.Shader.RenderModes);
 
                 if (QuadOverdrawRenderer != null)
                 {
@@ -1024,18 +1158,58 @@ namespace GUI.Types.GLViewers
             }
         }
 
+        /// <summary>Called on the render thread when the camera starts walking as the player.</summary>
+        protected virtual void OnWalkModeEntered()
+        {
+        }
+
+        /// <summary>Shows the chosen layers from the next frame.</summary>
         protected void SetEnabledLayers(HashSet<string> layers)
         {
+            chosenLayers = layers;
+            RequestVisibilityUpdate();
+        }
+
+        /// <summary>
+        /// Reapplies what is shown at the start of the next frame. Nodes are added and removed on the render
+        /// thread, so they are only walked there.
+        /// </summary>
+        protected void RequestVisibilityUpdate() => visibilityDirty = true;
+
+        /// <summary>Applies the chosen layers. Runs on the render thread.</summary>
+        protected virtual void ApplyVisibility()
+        {
+            if (chosenLayers is not { } layers)
+            {
+                return;
+            }
+
             foreach (var scene in Renderer.Scenes)
             {
-                scene.SetEnabledLayers(layers);
+                scene.SetEnabledLayers(FilterLayers(layers));
+            }
+        }
+
+        /// <summary>Narrows the chosen layers to the ones that end up shown.</summary>
+        protected virtual HashSet<string> FilterLayers(HashSet<string> layers) => layers;
+
+        // Only shown in the Cubemaps render mode; the choice is kept for when that mode is selected again
+        private void ApplyCubemapColors()
+        {
+            var mode = isCubemapsRenderMode && cubemapColorsComboBox != null
+                ? (EnvMapDebugColorsMode)Math.Max(cubemapColorsComboBox.SelectedIndex, 0)
+                : EnvMapDebugColorsMode.Off;
+
+            foreach (var scene in Renderer.Scenes)
+            {
+                scene.LightingDebug.EnvMapColors = mode;
             }
         }
 
         private void SetRenderMode(string renderMode)
         {
             Debug.Assert(Picker != null);
-            Debug.Assert(SelectedNodeRenderer != null);
+            Debug.Assert(selectionVisuals != null);
 
             Renderer.ViewBuffer!.Data!.RenderMode = RenderModes.GetShaderId(renderMode);
 
@@ -1046,9 +1220,34 @@ namespace GUI.Types.GLViewers
                 scene.EnableCompaction = renderMode != "Meshlets";
             }
 
-            Picker.SetRenderMode(renderMode);
+            Picker.Texture.SetRenderMode(renderMode);
             QuadOverdrawRenderer?.SetRenderMode(renderMode);
-            SelectedNodeRenderer.SetRenderMode(renderMode);
+
+            isCubemapsRenderMode = renderMode == "Cubemaps";
+
+            // The label and the box together, so the row is gone rather than empty
+            cubemapColorsComboBox?.Parent!.Visible = isCubemapsRenderMode;
+
+            ApplyCubemapColors();
+
+            selectionVisuals.LightingBindings = renderMode switch
+            {
+                "Cubemaps" => LightingBindingDisplay.EnvMaps,
+                "Irradiance" or "Illumination" => LightingBindingDisplay.LightProbe,
+                _ => LightingBindingDisplay.None,
+            };
+
+            currentRenderMode = renderMode;
+            ApplyRenderModeToNodes();
+        }
+
+        /// <summary>Gives every node the chosen render mode, for the nodes added since it was chosen.</summary>
+        protected void ApplyRenderModeToNodes()
+        {
+            if (currentRenderMode is not { } renderMode)
+            {
+                return;
+            }
 
             foreach (var node in Renderer.Scenes.SelectMany(static scene => scene.AllNodes))
             {
@@ -1058,17 +1257,20 @@ namespace GUI.Types.GLViewers
 
         protected override void OnKeyDown(Keys keyData)
         {
-            Debug.Assert(SelectedNodeRenderer != null);
-
             if (keyData == Keys.Delete)
             {
-                SelectedNodeRenderer.DisableSelectedNodes();
+                // Hides the selection, or shows it again
+                foreach (var node in Selection.Nodes)
+                {
+                    node.LayerEnabled = !node.LayerEnabled;
+                }
+
                 return;
             }
 
             if (keyData == Keys.Escape)
             {
-                SelectedNodeRenderer.SelectNode(null);
+                Selection.Clear();
                 if (Input.WalkMode)
                 {
                     MouseReleased = true;

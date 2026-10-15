@@ -138,8 +138,7 @@ namespace ValveResourceFormat.CompiledShader
         /// Gets the static combo entries, keyed by static combo ID.
         /// </summary>
         /// <remarks>
-        /// Each entry holds the information needed to locate and decompress its static combo;
-        /// to save processing, static combos are only decompressed on request.
+        /// Each entry locates its static combo; decompression happens only on request, to save processing.
         /// </remarks>
         public SortedDictionary<long, VfxStaticComboVcsEntry> StaticComboEntries { get; } = [];
 
@@ -195,7 +194,7 @@ namespace ValveResourceFormat.CompiledShader
         /// <param name="filenamepath">The file to open and read.</param>
         public void Read(string filenamepath)
         {
-            var stream = new FileStream(filenamepath, FileMode.Open, FileAccess.Read, FileShare.ReadWrite);
+            var stream = new FileStream(filenamepath, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete);
 
             try
             {
@@ -544,7 +543,7 @@ namespace ValveResourceFormat.CompiledShader
 
         private static void ThrowIfNotSupported(int vcsFileVersion)
         {
-            const int earliest = 59;
+            const int earliest = 58;
             const int latest = 72;
 
             if (vcsFileVersion < earliest || vcsFileVersion > latest)

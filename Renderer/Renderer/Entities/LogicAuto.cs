@@ -1,8 +1,9 @@
 namespace ValveResourceFormat.Renderer.Entities;
 
 /// <summary>
-/// <c>logic_auto</c>. Fires its outputs when the map starts - how a map kicks off its own wiring.
+/// <c>logic_auto</c>. Fires its outputs when the map starts.
 /// </summary>
+/// <seealso href="https://s2v.app/SchemaExplorer/cs2/server/CLogicAuto">CLogicAuto</seealso>
 public sealed class LogicAuto : BaseEntity
 {
     /// <summary>What a <c>logic_auto</c>'s <c>spawnflags</c> mean.</summary>

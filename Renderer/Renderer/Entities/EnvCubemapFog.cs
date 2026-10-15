@@ -6,9 +6,10 @@ using ValveResourceFormat.Serialization.KeyValues;
 namespace ValveResourceFormat.Renderer.Entities;
 
 /// <summary>
-/// <c>env_cubemap_fog</c>. Sets the fog of its scene that takes its colour from a cubemap: a texture, a
-/// sky material, or the material of an <c>env_sky</c> it names.
+/// <c>env_cubemap_fog</c>: fog coloured from a cubemap texture, a sky material, or the material of a
+/// named <c>env_sky</c>.
 /// </summary>
+/// <seealso href="https://s2v.app/SchemaExplorer/cs2/server/CEnvCubemapFog">CEnvCubemapFog</seealso>
 public sealed class EnvCubemapFog : BaseEntity
 {
     /// <summary>The <c>cubemapfogsource</c> values.</summary>

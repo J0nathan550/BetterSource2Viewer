@@ -9,7 +9,7 @@ namespace GUI.Utils
     /// </summary>
     static class Settings
     {
-        private const int SettingsFileCurrentVersion = 17;
+        private const int SettingsFileCurrentVersion = 18;
         private const int RecentFilesLimit = 20;
 
         /// <summary>
@@ -44,12 +44,16 @@ namespace GUI.Utils
             public bool CheckAutomatically { get; set; }
             /// <summary>Gets or sets the channel that updates are offered from.</summary>
             public UpdateChannel Channel { get; set; }
-            /// <summary>Gets or sets whether a newer version of the application is available.</summary>
-            public bool UpdateAvailable { get; set; }
             /// <summary>Gets or sets when the next automatic update check is due.</summary>
             public string NextCheck { get; set; } = string.Empty;
             /// <summary>Gets or sets the application version recorded the last time settings were loaded, used to detect version changes and reset update state.</summary>
             public string Version { get; set; } = string.Empty;
+            /// <summary>Gets or sets the latest dev build number seen by the last successful update check, 0 when unknown.</summary>
+            public int LatestDevBuild { get; set; }
+            /// <summary>Gets or sets the latest stable release version seen by the last successful update check, empty when unknown.</summary>
+            public string LatestStableVersion { get; set; } = string.Empty;
+            /// <summary>Gets or sets the latest dev build version seen by the last successful update check, empty when unknown.</summary>
+            public string LatestDevVersion { get; set; } = string.Empty;
         }
 
         /// <summary>
@@ -206,6 +210,8 @@ namespace GUI.Utils
             Config.BookmarkedFiles ??= [];
             Config.RecentFiles ??= new(RecentFilesLimit);
             Config.Update ??= new();
+            Config.Update.LatestStableVersion ??= string.Empty;
+            Config.Update.LatestDevVersion ??= string.Empty;
 
             if (string.IsNullOrEmpty(Config.OpenDirectory))
             {
@@ -331,7 +337,6 @@ namespace GUI.Utils
             if (Config.Update.Version != Program.ProductVersion)
             {
                 Config.Update.Version = Program.ProductVersion;
-                Config.Update.UpdateAvailable = false;
                 Config.Update.NextCheck = string.Empty;
 
                 // Installing a build, whether through the updater or by hand, is choosing its channel

@@ -21,6 +21,10 @@ sealed class RendererControl : Grid
     private readonly TextBlock moveSpeed;
     private readonly Dictionary<string, StackPanel> namedGroups = [];
     private readonly bool isPreview;
+    private readonly Grid toolbar;
+    private readonly StackPanel toolbarLeftItems;
+    private readonly StackPanel toolbarCenterItems;
+    private readonly StackPanel toolbarRightItems;
     private Panel? currentControlsTarget;
 
     public Panel GLControlContainer { get; }
@@ -52,7 +56,20 @@ sealed class RendererControl : Grid
         DockPanel.SetDock(moveSpeed, Dock.Bottom);
         controlsHost = new DockPanel { Children = { moveSpeed, sidebar } };
 
-        var viewportHost = GLControlContainer;
+        toolbarLeftItems = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 2, HorizontalAlignment = HorizontalAlignment.Left };
+        toolbarCenterItems = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 2, HorizontalAlignment = HorizontalAlignment.Center };
+        toolbarRightItems = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 2, HorizontalAlignment = HorizontalAlignment.Right };
+
+        // Above the viewport, only shown once a viewer adds something to it
+        toolbar = new Grid
+        {
+            IsVisible = false,
+            Margin = new(2),
+            Children = { toolbarLeftItems, toolbarCenterItems, toolbarRightItems },
+        };
+
+        DockPanel.SetDock(toolbar, Dock.Top);
+        var viewportHost = new DockPanel { Children = { toolbar, GLControlContainer } };
 
         splitter = new GridSplitter { ResizeDirection = GridResizeDirection.Columns, Background = Brushes.Transparent };
 
@@ -258,6 +275,61 @@ sealed class RendererControl : Grid
             Margin = new(0, 8),
             Background = new SolidColorBrush(Colors.Gray, 0.5),
         });
+    }
+
+    /// <summary>Adds a button to the toolbar above the viewport, either on its left or in its middle.</summary>
+    public ThemedButton AddToolbarButton(string text, Action onClick, bool centered = false)
+    {
+        var button = new ThemedButton(text, onClick);
+        AddToolbarItem(button.Native, centered ? toolbarCenterItems : toolbarLeftItems);
+
+        return button;
+    }
+
+    /// <summary>Adds a button that stays pressed while on to the toolbar above the viewport.</summary>
+    public ThemedToggleButton AddToolbarToggle(string text, bool initialChecked, Action<bool> onToggled)
+    {
+        var button = new ThemedToggleButton(text) { Checked = initialChecked };
+        AddToolbarItem(button.Native, toolbarLeftItems);
+        button.Toggled += onToggled;
+
+        return button;
+    }
+
+    /// <summary>Adds a dropdown on the right of the toolbar above the viewport.</summary>
+    /// <param name="changeCallback">Called with the selected item's text and index.</param>
+    /// <param name="defaultItemText">Shown while nothing is picked.</param>
+    public WinForms.ComboBox AddToolbarSelection(Action<string, int> changeCallback, string? defaultItemText = null)
+    {
+        var comboBox = new WinForms.ComboBox();
+
+        if (comboBox.Native is ComboBox native)
+        {
+            native.MinWidth = 180;
+            native.PlaceholderText = defaultItemText;
+        }
+
+        comboBox.SelectedIndexChanged += (_, _) =>
+        {
+            if (comboBox.SelectedItem is string selectedItem)
+            {
+                changeCallback(selectedItem, comboBox.SelectedIndex);
+            }
+            else if (comboBox.SelectedItem is ThemedComboBoxItem selectedThemedItem)
+            {
+                changeCallback(selectedThemedItem.Text, comboBox.SelectedIndex);
+            }
+        };
+
+        AddToolbarItem(comboBox.Native, toolbarRightItems);
+
+        return comboBox;
+    }
+
+    private void AddToolbarItem(Control item, StackPanel side)
+    {
+        side.Children.Add(item);
+        toolbar.IsVisible = true;
     }
 
     public void SetMoveSpeed(string text) => moveSpeed.Text = text;

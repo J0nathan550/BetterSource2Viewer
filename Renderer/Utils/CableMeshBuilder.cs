@@ -10,7 +10,7 @@ namespace ValveResourceFormat.Renderer.Utils
     /// tessellated into a tube by <see cref="Particles.Renderers.RenderCables"/> via
     /// <see cref="CableMeshBuilder.BuildTubeMesh"/>.
     /// </summary>
-    readonly struct RopeSample(Vector3 position, float radius, Vector3 color, float v, bool pinned)
+    readonly struct RopeSample(Vector3 position, float radius, Vector3 color, float v, bool pinned, float alpha = 1f)
     {
         /// <summary>Initial, origin-relative spline position (no sag).</summary>
         public readonly Vector3 Position = position;
@@ -20,6 +20,8 @@ namespace ValveResourceFormat.Renderer.Utils
         public readonly float V = v;
         /// <summary>True when this sample sits on a pinned path node (force_scale 0, immovable).</summary>
         public readonly bool Pinned = pinned;
+        /// <summary>Opacity carried to the vertex color alpha, for materials that blend or alpha test.</summary>
+        public readonly float Alpha = alpha;
     }
 
     /// <summary>
@@ -219,9 +221,8 @@ namespace ValveResourceFormat.Renderer.Utils
             var ringCount = positions.Length;
             var previousNormal = Vector3.Zero;
 
-            // Emit a duplicate seam vertex per ring (sides + 1): the extra vertex sits at the j == 0 position
-            // but carries u == CircumferenceRepeats, so the closing quad interpolates the texture forward to
-            // the full repeat instead of wrapping u back to 0.
+            // The seam is duplicated per ring (sides + 1 vertices): the extra one sits at j == 0 but carries
+            // u == CircumferenceRepeats, so the closing quad interpolates to the full repeat instead of wrapping.
             var vertsPerRing = sides + 1;
             var vertexCursor = 0;
 
@@ -229,7 +230,7 @@ namespace ValveResourceFormat.Renderer.Utils
             {
                 var sample = samples[i];
                 var center = positions[i];
-                var color = Color32.FromVector4Clamped(new Vector4(sample.Color, 1.0f));
+                var color = Color32.FromVector4Clamped(new Vector4(sample.Color, sample.Alpha));
 
                 var (normal, bitangent) = BuildFrame(positions, i, previousNormal);
                 previousNormal = normal;
@@ -308,8 +309,7 @@ namespace ValveResourceFormat.Renderer.Utils
             indices[cursor++] = d;
         }
 
-        // Approximates the arc length of a cubic Bezier by summing a fixed set of straight chords. Used to
-        // pick the per-segment particle count (count = ceil(arcLength / spacing)).
+        // Approximates the arc length of a cubic Bezier by summing straight chords.
         private static float BezierArcLength(Vector3 p0, Vector3 p1, Vector3 p2, Vector3 p3)
         {
             const int subdivisions = 16;

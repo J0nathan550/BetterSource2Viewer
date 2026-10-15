@@ -5,9 +5,9 @@ using ValveResourceFormat.ResourceTypes;
 namespace ValveResourceFormat.Renderer.Particles.Renderers
 {
     /// <summary>
-    /// Base class for all particle renderers. Renderers are responsible for drawing the visual
-    /// representation of a particle collection each frame.
+    /// Base class for particle renderers, which draw a particle collection each frame.
     /// </summary>
+    /// <seealso href="https://s2v.app/SchemaExplorer/cs2/particles/CBaseRendererSource2">CBaseRendererSource2</seealso>
     abstract class ParticleFunctionRenderer : ParticleFunction
     {
         /// <summary>Scales the radius every particle is drawn at.</summary>
@@ -46,9 +46,6 @@ namespace ValveResourceFormat.Renderer.Particles.Renderers
         /// <summary>Whether the vertex colour is decoded from gamma space in the shader.</summary>
         protected bool GammaCorrectVertexColors { get; } = true;
 
-        /// <summary>Whether the colour is clamped to 0-1 before the alpha blend rather than after.</summary>
-        protected bool SaturateColorPreAlphaBlend { get; } = true;
-
         /// <summary>Whether sheet frame blending keeps the brighter of the two frames per channel.</summary>
         protected bool MaxLuminanceFrameBlend { get; }
 
@@ -66,6 +63,9 @@ namespace ValveResourceFormat.Renderer.Particles.Renderers
         /// drawn position alone. Pulls a card in front of geometry it would otherwise intersect.
         /// </summary>
         protected INumberProvider DepthBias { get; } = new LiteralNumberProvider(0f);
+
+        /// <summary>The order the particles are drawn in.</summary>
+        private ParticleSortingChoiceList SortMethod { get; }
 
         /// <summary>Whether this renderer draws only into the water effects map, never into the scene.</summary>
         public bool OnlyRenderInEffectsWaterPass { get; }
@@ -105,12 +105,14 @@ namespace ValveResourceFormat.Renderer.Particles.Renderers
 
             OnlyRenderInEffectsWaterPass = parse.Boolean("m_bOnlyRenderInEffectsWaterPass", false);
             OnlyRenderInEffectsBloomPass = parse.Boolean("m_bOnlyRenderInEffectsBloomPass", false);
+            LightingMode = parse.Enum("m_nLightingMode", LightingMode);
             RadiusScale = parse.NumberProvider("m_flRadiusScale", RadiusScale);
             AlphaScale = parse.NumberProvider("m_flAlphaScale", AlphaScale);
             ColorScale = parse.VectorProvider("m_vecColorScale", ColorScale);
             OverbrightFactor = parse.NumberProvider("m_flOverbrightFactor", OverbrightFactor);
             AddSelfAmount = parse.NumberProvider("m_flAddSelfAmount", AddSelfAmount);
             DepthBias = parse.NumberProvider("m_flDepthBias", DepthBias);
+            SortMethod = parse.Enum("m_nSortMethod", SortMethod);
             DiffuseAmount = parse.NumberProvider("m_flDiffuseAmount", DiffuseAmount);
             SelfIllumAmount = parse.NumberProvider("m_flSelfIllumAmount", SelfIllumAmount);
             Desaturation = parse.NumberProvider("m_flDesaturation", Desaturation);
@@ -118,7 +120,6 @@ namespace ValveResourceFormat.Renderer.Particles.Renderers
             SourceAlphaValueToMapToZero = parse.NumberProvider("m_flSourceAlphaValueToMapToZero", SourceAlphaValueToMapToZero);
             SourceAlphaValueToMapToOne = parse.NumberProvider("m_flSourceAlphaValueToMapToOne", SourceAlphaValueToMapToOne);
             GammaCorrectVertexColors = parse.Boolean("m_bGammaCorrectVertexColors", GammaCorrectVertexColors);
-            SaturateColorPreAlphaBlend = parse.Boolean("m_bSaturateColorPreAlphaBlend", SaturateColorPreAlphaBlend);
             MaxLuminanceFrameBlend = parse.Boolean("m_bMaxLuminanceBlendingSequence0", MaxLuminanceFrameBlend);
             CenterXOffset = parse.NumberProvider("m_flCenterXOffset", CenterXOffset);
             CenterYOffset = parse.NumberProvider("m_flCenterYOffset", CenterYOffset);
@@ -157,8 +158,10 @@ namespace ValveResourceFormat.Renderer.Particles.Renderers
         /// its own factors, while everything else composites premultiplied. Both faces are drawn,
         /// since a card or ribbon can turn either one toward the camera.
         /// </summary>
-        protected static RenderPassScope SpritecardStateScope(RenderStateTracker renderState, ParticleBlendMode blendMode, bool opaque = false)
+        protected static RenderPassScope SpritecardStateScope(ParticleBlendMode blendMode, bool opaque = false)
         {
+            var renderState = GraphicsContext.RenderState;
+
             if (opaque)
             {
                 return renderState.Scope(cullMode: RsCullMode.None);
@@ -169,6 +172,34 @@ namespace ValveResourceFormat.Renderer.Particles.Renderers
             return renderState.Scope(blend: true, depthWrite: false, cullMode: RsCullMode.None,
                 srcBlend: mod2x ? RsBlendMode.DestColor : RsBlendMode.One,
                 dstBlend: mod2x ? RsBlendMode.SrcColor : RsBlendMode.InvSrcAlpha);
+        }
+
+        /// <summary>
+        /// Whether the particles are drawn farthest from the camera first rather than as stored, which
+        /// is oldest first.
+        /// </summary>
+        protected bool SortsByDistance(ParticleBlendMode blendMode)
+            // Additive and modulate cards composite to the same result in any order
+            => SortMethod == ParticleSortingChoiceList.PARTICLE_SORTING_NEAREST
+                && blendMode is not (ParticleBlendMode.PARTICLE_OUTPUT_BLEND_MODE_ADD or ParticleBlendMode.PARTICLE_OUTPUT_BLEND_MODE_MOD2X);
+
+        /// <summary>
+        /// Fills <paramref name="order"/> with one entry per particle, farthest from the camera first.
+        /// The low half of an entry is the particle's index.
+        /// </summary>
+        protected static void SortBackToFront(ReadOnlySpan<Particle> particles, Vector3 cameraPosition, Span<ulong> order)
+        {
+            for (var i = 0; i < order.Length; i++)
+            {
+                var distance = Vector3.DistanceSquared(particles[i].Position, cameraPosition);
+
+                // A distance is never negative, so its bits order as an integer, and inverting them
+                // puts the farthest first. The index below them keeps coincident particles in a
+                // steady order from frame to frame.
+                order[i] = ((ulong)~BitConverter.SingleToUInt32Bits(distance) << 32) | (uint)i;
+            }
+
+            order.Sort();
         }
 
         /// <summary>
@@ -186,8 +217,8 @@ namespace ValveResourceFormat.Renderer.Particles.Renderers
             shader.SetUniform3("uColorScale", ColorScale.NextVector(systemState));
             shader.SetUniform1("uGammaCorrectVertexColors", GammaCorrectVertexColors);
             shader.SetUniform1("uDepthBias", DepthBias.NextNumber(systemState));
-            shader.SetUniform1("uSaturateColorPreAlphaBlend", SaturateColorPreAlphaBlend);
             shader.SetUniform1("uMaxLuminanceFrameBlend", MaxLuminanceFrameBlend);
+            shader.SetUniform1("uLightingMode", (int)LightingMode);
             shader.SetUniform1("g_tSceneDepth", (int)ReservedTextureSlots.SceneDepth);
 
             if (LitByProbes && OwnerNode != null)
@@ -203,6 +234,9 @@ namespace ValveResourceFormat.Renderer.Particles.Renderers
 
         /// <summary>The pass this renderer draws in.</summary>
         public RenderPass Pass { get; protected set; } = RenderPass.Translucent;
+
+        /// <summary>Where scene lighting is sampled.</summary>
+        protected ParticleLightingQuality LightingMode { get; } = ParticleLightingQuality.PARTICLE_LIGHTING_PER_PARTICLE;
 
         /// <summary>
         /// The scene node the system this belongs to renders under, when it was created for one.
@@ -223,6 +257,21 @@ namespace ValveResourceFormat.Renderer.Particles.Renderers
         public virtual void Act(ParticleCollection particles, ParticleSystemState systemState)
         {
         }
+
+        /// <summary>
+        /// Called in place of <see cref="Act"/> while the system does not draw: hidden, on a disabled
+        /// layer, stopped, out of draw distance or faded out. Renderers that place nodes or decals in the
+        /// scene take them away here.
+        /// </summary>
+        public virtual void Hide()
+        {
+        }
+
+        /// <summary>
+        /// Whether this renderer draws in the passes of the node it belongs to. Renderers that draw
+        /// through scene nodes or decals of their own do not.
+        /// </summary>
+        public virtual bool DrawsInPasses => true;
 
         /// <summary>Uploads this renderer's vertex buffer. Called once a frame, before any pass draws.</summary>
         public virtual void UpdateBuffers(ParticleCollection particles, ParticleSystemState systemState, Camera camera)
@@ -295,7 +344,6 @@ namespace ValveResourceFormat.Renderer.Particles.Renderers
             }
 
             var totalTime = sequence.EffectiveTotalTime;
-            var lastFrame = frameCount - 1;
 
             float passes;
 
@@ -335,7 +383,6 @@ namespace ValveResourceFormat.Renderer.Particles.Renderers
         /// </summary>
         public virtual void SetMaterialOverride(RenderMaterial material) { }
 
-        public virtual void SetWireframe(bool wireframe) { }
         public virtual void SetRenderMode(string renderMode) { }
         public virtual IEnumerable<string> GetSupportedRenderModes() => [];
         public virtual void Delete() { }

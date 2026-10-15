@@ -69,8 +69,10 @@ namespace ValveResourceFormat.Renderer
         /// <param name="initialMaterialTable">Optional material name overrides.</param>
         /// <param name="morph">Optional morph data for facial animation.</param>
         /// <param name="isAggregate">When <see langword="true"/>, all draw calls go into the opaque bucket for aggregate rendering.</param>
+        /// <param name="shaderArguments">Optional shader combos set on every draw call, over the ones the scene gives it.</param>
         public RenderableMesh(Mesh mesh, int meshIndex, Scene scene, Model? model = null,
-            Dictionary<string, string>? initialMaterialTable = null, Morph? morph = null, bool isAggregate = false)
+            Dictionary<string, string>? initialMaterialTable = null, Morph? morph = null, bool isAggregate = false,
+            IReadOnlyDictionary<string, byte>? shaderArguments = null)
         {
             renderContext = scene.RendererContext;
 
@@ -92,7 +94,7 @@ namespace ValveResourceFormat.Renderer
             MeshIndex = meshIndex;
 
             var meshSceneObjects = mesh.Data.GetArray("m_sceneObjects");
-            ConfigureDrawCalls(scene, vbib, meshSceneObjects, initialMaterialTable, isAggregate);
+            ConfigureDrawCalls(scene, vbib, meshSceneObjects, initialMaterialTable, isAggregate, shaderArguments);
 
             // Without an atlas of deltas there is nothing for the composite to sample.
             if (morph?.TextureResource != null)
@@ -101,7 +103,7 @@ namespace ValveResourceFormat.Renderer
             }
         }
 
-        /// <summary>Returns the render mode names supported by the materials in this mesh, concatenated across draw calls (may contain duplicates).</summary>
+        /// <summary>Returns render mode names of all draw call materials, without deduplication.</summary>
         public IEnumerable<string> GetSupportedRenderModes()
             => DrawCalls
                 .SelectMany(static drawCall => drawCall.Material.Shader.RenderModes);
@@ -258,7 +260,8 @@ namespace ValveResourceFormat.Renderer
             return boneWeightCount > 4 ? MeshSkinning.EightBones : MeshSkinning.FourBones;
         }
 
-        private void ConfigureDrawCalls(Scene scene, VBIB vbib, IReadOnlyList<KVObject> sceneObjects, Dictionary<string, string>? materialReplacementTable, bool isAggregate)
+        private void ConfigureDrawCalls(Scene scene, VBIB vbib, IReadOnlyList<KVObject> sceneObjects, Dictionary<string, string>? materialReplacementTable, bool isAggregate,
+            IReadOnlyDictionary<string, byte>? extraShaderArguments)
         {
             if (vbib.VertexBuffers.Count == 0)
             {
@@ -267,8 +270,7 @@ namespace ValveResourceFormat.Renderer
 
             var gpuVbib = renderContext.MeshBufferCache.CreateVertexIndexBuffers(Name, vbib);
 
-            // note: we are flattening the scene objects into one mesh
-            // we are not sure when there can be more than one scene object here.
+            // Scene objects are flattened into one mesh. Unsure when there can be more than one.
 
             var vertexOffset = 0;
             var drawCallIndex = 0;
@@ -300,6 +302,14 @@ namespace ValveResourceFormat.Renderer
                         hasLightmapUvs: Mesh.HasBakedLightingFromLightMap(objectDrawCall),
                         hasVertexLighting: Mesh.HasBakedLightingFromVertexStream(objectDrawCall)
                     );
+
+                    if (extraShaderArguments != null)
+                    {
+                        foreach (var (name, value) in extraShaderArguments)
+                        {
+                            shaderArguments[name] = value;
+                        }
+                    }
 
                     if (Skinning != MeshSkinning.None)
                     {
