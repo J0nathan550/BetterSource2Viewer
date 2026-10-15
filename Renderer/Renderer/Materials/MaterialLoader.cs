@@ -158,6 +158,11 @@ namespace ValveResourceFormat.Renderer.Materials
 
             var vrfMaterial = (VrfMaterial?)resource.DataBlock;
             Debug.Assert(vrfMaterial != null);
+
+            // The input signature lives in the edit info block, which is only parsed on first access, and meshes created
+            // later (e.g. by particles) would read it after the file loader has disposed the resource
+            _ = vrfMaterial.InputSignature;
+
             var mat = new RenderMaterial(
                 vrfMaterial,
                 RendererContext,
