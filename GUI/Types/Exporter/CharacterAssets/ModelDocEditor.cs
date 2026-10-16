@@ -891,10 +891,14 @@ namespace GUI.Types.Exporter.CharacterAssets
                 .Where(animation => animation.Activity == "ACT_DOTA_IDLE"
                     && (state == null ? modifiers[animation].Count == 0 : modifiers[animation].Contains(state, StringComparer.OrdinalIgnoreCase)))
                 .OrderBy(animation => modifiers[animation].Count)
+                .ThenByDescending(static animation => animation.ActivityWeight)
                 .FirstOrDefault();
 
             var plainIdle = FindIdle(null)
-                ?? topLevel.Where(static animation => animation.Activity == "ACT_DOTA_IDLE").MinBy(animation => modifiers[animation].Count)
+                ?? topLevel.Where(static animation => animation.Activity == "ACT_DOTA_IDLE")
+                    .OrderBy(animation => modifiers[animation].Count)
+                    .ThenByDescending(static animation => animation.ActivityWeight)
+                    .FirstOrDefault()
                 ?? topLevel.FirstOrDefault(static animation => animation.Looping)
                 ?? animations.First(static animation => animation.Looping);
 
@@ -966,6 +970,12 @@ namespace GUI.Types.Exporter.CharacterAssets
                         && !(own == null && activity.Equals("ACT_DOTA_IDLE", StringComparison.OrdinalIgnoreCase) && modifier.Equals("aggressive", StringComparison.OrdinalIgnoreCase)))
                     .ToHashSet(StringComparer.OrdinalIgnoreCase);
 
+                // When the original has no other version for the same state, the server only ever sends this number, so
+                // it plays the version the game picks most rather than the one its name looks like, e.g. Skywrath Mage's
+                // only run is called "run_glide" while his arcana mostly flaps its wings and rarely glides
+                var onlyVersion = original.Count(other => activity.Equals(other.Activity, StringComparison.OrdinalIgnoreCase)
+                    && other.Modifiers.ToHashSet(StringComparer.OrdinalIgnoreCase).SetEquals(sequence.Modifiers)) == 1;
+
                 return candidates
                     .Where(animation => activity.Equals(animation.Activity, StringComparison.OrdinalIgnoreCase))
                     .Select(animation =>
@@ -983,6 +993,7 @@ namespace GUI.Types.Exporter.CharacterAssets
                     .ThenBy(static candidate => candidate.Extra)
                     .ThenBy(candidate => candidate.Animation.IsBlend != sequence.Multi)
                     .ThenBy(candidate => candidate.Animation != own)
+                    .ThenByDescending(candidate => onlyVersion ? candidate.Animation.ActivityWeight : 0)
                     .ThenByDescending(static candidate => candidate.Score.Action)
                     .ThenByDescending(static candidate => candidate.Score.Number)
                     .ThenByDescending(static candidate => candidate.Score.State)
@@ -2168,6 +2179,7 @@ namespace GUI.Types.Exporter.CharacterAssets
                         .Where(static name => name.Length > 0)],
                     SourceFile = FindOwn(SourceFilenameRegex())?.Groups["file"].Value,
                     StartFrame = FindOwn(StartFrameRegex()) is { } startFrame ? int.Parse(startFrame.Groups["value"].Value, CultureInfo.InvariantCulture) : 0,
+                    ActivityWeight = FindOwn(ActivityWeightRegex()) is { } weight ? int.Parse(weight.Groups["value"].Value, CultureInfo.InvariantCulture) : 1,
                 });
             }
 
@@ -2197,6 +2209,9 @@ namespace GUI.Types.Exporter.CharacterAssets
 
             /// <summary>The first frame of the file it plays.</summary>
             public int StartFrame { get; init; }
+
+            /// <summary>How often the game picks it over the other versions of its activity.</summary>
+            public int ActivityWeight { get; init; } = 1;
         }
 
         /// <summary>
@@ -2906,6 +2921,9 @@ namespace GUI.Types.Exporter.CharacterAssets
 
         [GeneratedRegex(@"\bstart_frame\s*=\s*(?<value>-?[0-9]+)", RegexOptions.CultureInvariant)]
         private static partial Regex StartFrameRegex();
+
+        [GeneratedRegex(@"\bactivity_weight\s*=\s*(?<value>[0-9]+)", RegexOptions.CultureInvariant)]
+        private static partial Regex ActivityWeightRegex();
 
         [GeneratedRegex(@"\bhidden\s*=\s*(?<value>true|false)\b", RegexOptions.CultureInvariant)]
         private static partial Regex HiddenRegex();
