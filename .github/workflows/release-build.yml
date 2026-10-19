@@ -55,7 +55,12 @@ jobs:
           last=$(git ls-remote --tags --refs origin \
             | sed -nE 's#^.*refs/tags/build-([0-9]+)$#\1#p' \
             | sort -n | tail -n 1)
-          build=$(( 10#${last:-0} + 1 ))
+          # Count up from the highest build-N tag, but never at or below the committed floor, so the
+          # sequence survives tags being deleted. See ProjectBuildNumberFloor in Directory.Build.props.
+          floor=$(sed -n 's:.*<ProjectBuildNumberFloor>\(.*\)</ProjectBuildNumberFloor>.*:\1:p' Directory.Build.props)
+          last=$(( 10#${last:-0} ))
+          floor=$(( 10#${floor:-0} ))
+          build=$(( (last > floor ? last : floor) + 1 ))
         fi
 
         tag=$([[ "$REF_TYPE" == "tag" ]] && echo "$REF_NAME" || echo "build-$build")

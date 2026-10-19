@@ -6,6 +6,9 @@
     <!-- Versions are major.minor.patch.revision. Release builds pass the full version and their sequential
          build number, see .github/workflows/release-build.yml. Local builds are build 0 with version base.0 -->
     <ProjectBaseVersion>1.0.0</ProjectBaseVersion>
+    <!-- The release build number is the next one above the highest build-N tag, but never at or below this
+         floor. Build 35 was 1.0.3.5, so a floor of 35 makes the next release 1.0.3.6 even with no tags. -->
+    <ProjectBuildNumberFloor>35</ProjectBuildNumberFloor>
     <ProjectBuildNumber Condition="'$(ProjectBuildNumber)' == ''">0</ProjectBuildNumber>
     <ProjectVersion>$(ProjectBaseVersion).0</ProjectVersion>
     <DefineConstants Condition="'$(ProjectBuildNumber)' != '0'">$(DefineConstants);CI_BUILD</DefineConstants>

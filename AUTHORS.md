@@ -1,0 +1,103 @@
+# Authors and Contributors
+
+BetterSource2Viewer is a fork of ValveResourceFormat, which is distributed
+under the MIT License (see LICENSE).
+
+The following people contributed to this project and its upstream history.
+This list is preserved from the full commit history and is sorted by name.
+
+- Alexey <lewa.j20@gmail.com>
+- Andrew Lonsway <alonzberry@gmail.com>
+- Angel <93685608+Angel-foxxo@users.noreply.github.com>
+- Angel <angelcazacu8@gmail.com>
+- Angel-foxxo <angelcazacu8@gmail.com>
+- Ansimist <55619735+Ansimist@users.noreply.github.com>
+- aoisensi <1350990+aoisensi@users.noreply.github.com>
+- Aquarius <31861541+aquaismissing@users.noreply.github.com>
+- Arenovas <54878864+Arenovas@users.noreply.github.com>
+- Arenovas <arennovas@gmail.com>
+- Artemon121 <60071510+Artemon121@users.noreply.github.com>
+- AveYo <aveyo@yahoo.com>
+- babelshift <justin.d.skiles@gmail.com>
+- Bogdanuq <158528538+Bogdanuq@users.noreply.github.com>
+- Boris Litvyakov <n3c1kk@gmail.com>
+- Boris <n3c1kk@gmail.com>
+- boyned//Kampfkarren <3190756+Kampfkarren@users.noreply.github.com>
+- Chloe Marcec <dmarcecguzman@gmail.com>
+- Copilot <198982749+Copilot@users.noreply.github.com>
+- danggui <837727384@qq.com>
+- DatGuy1 <datguysteam@gmail.com>
+- dem0nd <artem1029111@gmail.com>
+- dirtkiller23 <63861677+dirtkiller23@users.noreply.github.com>
+- dirtkiller23 <eyeidol@gmail.com>
+- dr3fty <12001194+dr3fty@users.noreply.github.com>
+- Drake <drakeluce@gmail.com>
+- Dyna <32040777+KonqiTheKonqueror@users.noreply.github.com>
+- Egezenn <88906665+Egezenn@users.noreply.github.com>
+- EmielRegis <70418164+w1tcherrr@users.noreply.github.com>
+- Fekete Krisztofer <gc2qlj@inf.elte.hu>
+- Garry Newman <garrynewman@users.noreply.github.com>
+- H7perus <57438242+H7perus@users.noreply.github.com>
+- Hoff Inc <hoff.rj@gmail.com>
+- ibcsz12 <ibcsz123@gmail.com>
+- ifpCD <mr.imforpeace.xx@gmail.com>
+- Illia Khudokormov <88881607+J0nathan550@users.noreply.github.com>
+- in0finite <leshow816@gmail.com>
+- itrisa <C0HHblU.X0Pb0K@gmail.com>
+- iwasinminedream <iwasinminedream@gmail.com>
+- J0nathan550 <88881607+J0nathan550@users.noreply.github.com>
+- J0nathan550 <ihudokormov@gmail.com>
+- Kashimura <kashimura@qq.com>
+- Konqi the Konqueror <32040777+KonqiTheKonqueror@users.noreply.github.com>
+- Kristi K <26466974+kristiker@users.noreply.github.com>
+- kristiker <kristik06@outlook.com>
+- Kristi K <kristigylm@gmail.com>
+- Kristi K <kristik06@outlook.com>
+- Kristi K. <kristik06@outlook.com>
+- krotter0 <65136069+krotter0@users.noreply.github.com>
+- Krotter <65136069+krotter0@users.noreply.github.com>
+- Krystian <KrystianoXPL@gmail.com>
+- Lee Walker <1388264+IOExceptional@users.noreply.github.com>
+- lewa_j <lewa.j20@gmail.com>
+- lewa_j <lewa_j@mail.ru>
+- Lion Doge <KrystianoXPL@gmail.com>
+- litianxing <837727384@qq.com>
+- long0900 <conquerthevoid@gmail.com>
+- Malcolm Diller <malcolm@dillerm.io>
+- Martin Benjamins <marlamin@marlamin.com>
+- Matt Filer <matthew.filer@hotmail.co.uk>
+- Mirco Kroon <23699979+mircokroon@users.noreply.github.com>
+- mircokroon <23699979+mircokroon@users.noreply.github.com>
+- moofMonkey <11695747+moofMonkey@users.noreply.github.com>
+- NeoExperiences <70493616+NeoExperiences@users.noreply.github.com>
+- NeoExperiences/Eodeas <dantebumer@gmail.com>
+- Pavel Djundik <github@xpaw.me>
+- Pavel Djundik <xPaw@users.noreply.github.com>
+- Pelle Johnsen <pelle.johnsen@skybox.gg>
+- Perry <perry.wesel@gmail.com>
+- Perry van Wesel <Perryvw@users.noreply.github.com>
+- Perryvw <perryvw@users.noreply.github.com>
+- Perryvw <perry.wesel@gmail.com>
+- Peter Johansson <p.c.o.johansson@gmail.com>
+- Poggu <45881722+Poggicek@users.noreply.github.com>
+- Poggu <poggu@seznam.cz>
+- Purrspctiv <36551033+Purrspctiv@users.noreply.github.com>
+- Robert Hoff <hoff.rj@gmail.com>
+- Rodrigo Diaz Tajada <r2d2rigo@gmail.com>
+- Sam Byass <sam@samboycoding.me>
+- snowyukitty <snowyukitty@outlook.com>
+- Stephen Fournier <stephennf@gmail.com>
+- STL1te <malyshkirill@gmail.com>
+- tgrgds <tyler@tgrgds.dev>
+- Thomas Kosiewski <thoma471@googlemail.com>
+- Tim Kurvers <tim@moonsphere.net>
+- Trent Monahan <github@361zn.is>
+- Trent Monahan <sinz@d3s.co>
+- ttrebuchon <ttrebuchon@live.com>
+- user8738423 <32457153+user8738423@users.noreply.github.com>
+- vermadas <adam.graves@careevolution.com>
+- w1tcherrr <70418164+w1tcherrr@users.noreply.github.com>
+- Yaakov <git@yaakov.online>
+- YuRaNnNzZZ <medved609@yandex.ru>
+- zirrboy <st178533@stud.uni-stuttgart.de>
+- 田七不甜 <1633557643@qq.com>
