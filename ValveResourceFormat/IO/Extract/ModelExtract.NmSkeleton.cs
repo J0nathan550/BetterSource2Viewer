@@ -230,6 +230,7 @@ partial class ModelExtract
             {
                 ["app"] = "sfm", // maya
                 ["source"] = $"Generated with {StringToken.VRF_GENERATOR}",
+                ["provenance"] = StringToken.VRF_PROVENANCE,
             }
         };
 

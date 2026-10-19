@@ -253,6 +253,7 @@ partial class ModelExtract
             {
                 ["app"] = "sfm", //modeldoc won't import dmx animations without this
                 ["source"] = $"Generated with {StringToken.VRF_GENERATOR}",
+                ["provenance"] = StringToken.VRF_PROVENANCE,
             }
         };
 

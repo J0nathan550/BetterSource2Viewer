@@ -108,6 +108,7 @@ internal static class DmxScaffolding
             ["exportTags"] = new Element(dmx, "exportTags", null, "DmeExportTags")
             {
                 ["source"] = $"Generated with {StringToken.VRF_GENERATOR}",
+                ["provenance"] = StringToken.VRF_PROVENANCE,
             }
         };
     }

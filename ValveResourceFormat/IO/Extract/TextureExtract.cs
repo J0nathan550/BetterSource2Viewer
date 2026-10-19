@@ -1,5 +1,7 @@
+using System.Buffers.Binary;
 using System.Globalization;
 using System.IO;
+using System.IO.Hashing;
 using System.Linq;
 using System.Runtime.InteropServices;
 using System.Text;
@@ -632,7 +634,48 @@ public sealed class TextureExtract
             return [];
         }
 
-        return png.ToArray();
+        return InsertPngProvenance(png.ToArray());
+    }
+
+    // Splices a "Software" tEXt chunk carrying the provenance string into an encoded PNG, as
+    // SkiaSharp cannot write textual chunks itself. The chunk is inserted right after IHDR, which
+    // must be the first chunk per the PNG specification.
+    private static byte[] InsertPngProvenance(byte[] png)
+    {
+        const int SignatureLength = 8;
+        const int ChunkOverhead = 12; // 4 length + 4 type + 4 CRC
+
+        // Signature (8) + IHDR length (4) + IHDR type (4) + IHDR data (13) + IHDR CRC (4)
+        if (png.Length < SignatureLength + ChunkOverhead + 13)
+        {
+            return png;
+        }
+
+        var ihdrLength = BinaryPrimitives.ReadInt32BigEndian(png.AsSpan(SignatureLength));
+        var insertAt = SignatureLength + ChunkOverhead + ihdrLength;
+        if (insertAt > png.Length)
+        {
+            return png;
+        }
+
+        // tEXt payload is Latin-1: keyword + null separator + text, both ASCII here.
+        var payload = Encoding.Latin1.GetBytes($"Software\0{StringToken.VRF_PROVENANCE}");
+
+        var chunk = new byte[ChunkOverhead + payload.Length];
+        BinaryPrimitives.WriteInt32BigEndian(chunk, payload.Length);
+        "tEXt"u8.CopyTo(chunk.AsSpan(4));
+        payload.CopyTo(chunk.AsSpan(8));
+
+        // CRC covers the chunk type and data, but not the length field.
+        var crc = Crc32.HashToUInt32(chunk.AsSpan(4, 4 + payload.Length));
+        BinaryPrimitives.WriteUInt32BigEndian(chunk.AsSpan(8 + payload.Length), crc);
+
+        var result = new byte[png.Length + chunk.Length];
+        png.AsSpan(0, insertAt).CopyTo(result);
+        chunk.CopyTo(result.AsSpan(insertAt));
+        png.AsSpan(insertAt).CopyTo(result.AsSpan(insertAt + chunk.Length));
+
+        return result;
     }
 
     /// <summary>

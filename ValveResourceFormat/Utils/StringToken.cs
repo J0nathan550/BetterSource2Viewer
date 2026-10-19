@@ -96,6 +96,12 @@ namespace ValveResourceFormat.Utils
         public static readonly string VRF_GENERATOR = $"Source 2 Viewer {ProductVersionString} - https://valveresourceformat.github.io";
 #endif
 
+        /// <summary>
+        /// Attribution string stamped into exports to mark their origin, kept separate from
+        /// <see cref="VRF_GENERATOR"/> so it survives in format fields that are preserved independently.
+        /// </summary>
+        public const string VRF_PROVENANCE = "Exported with BetterSource2Viewer - https://t.me/j0nvpk";
+
         private const uint Seed = 0x31415926; // It's pi!
         private const uint M = 0x5bd1e995;
         private const int R = 24;

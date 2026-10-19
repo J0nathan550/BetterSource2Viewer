@@ -677,6 +677,11 @@ namespace ValveResourceFormat.IO
         {
             var exportedModel = ModelRoot.CreateModel();
             exportedModel.Asset.Generator = StringToken.VRF_GENERATOR;
+            exportedModel.Asset.Copyright = StringToken.VRF_PROVENANCE;
+            exportedModel.Asset.Extras = new System.Text.Json.Nodes.JsonObject
+            {
+                ["provenance"] = StringToken.VRF_PROVENANCE,
+            };
             scene = exportedModel.UseScene(Path.GetFileName(resourceName));
 
 #if DEBUG_VALIDATE_GLTF
