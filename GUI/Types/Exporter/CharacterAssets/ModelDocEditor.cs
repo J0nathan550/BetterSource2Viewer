@@ -2272,6 +2272,83 @@ namespace GUI.Types.Exporter.CharacterAssets
         }
 
         /// <summary>
+        /// Makes every sequence the hero only plays in the loadout screen create a particle as it starts: the loadout
+        /// idles, the rare ones the game picks at random, and the ones the loadout picks by its "loadout" activity
+        /// modifier, e.g. the spawn. Each stops its particle when another sequence starts, so only one is ever shown.
+        /// </summary>
+        /// <param name="vmdl">The .vmdl text.</param>
+        /// <param name="getParticle">
+        /// The particle a sequence creates, by its name and whether it loops, or null to leave it out. A looping one creates
+        /// it again every loop, so its particle has to end with the loop.
+        /// </param>
+        /// <param name="config">The particles' control point configuration that places them on the model.</param>
+        /// <param name="details">Receives a description of what was added.</param>
+        public static string AddLoadoutParticle(string vmdl, Func<string, bool, string?> getParticle, string config, ICollection<string>? details = null)
+        {
+            var insertions = new List<(int Index, string Text)>();
+
+            foreach (var animation in GetAnimFiles(vmdl))
+            {
+                var isLoadout = animation.Activity?.StartsWith("ACT_DOTA_LOADOUT", StringComparison.Ordinal) == true
+                    || animation.ActivityModifiers.Any(range => ActivityNameRegex().Match(vmdl, range.Start, range.End - range.Start).Groups["name"].Value == "loadout");
+
+                if (!isLoadout || getParticle(animation.Name.Value, animation.Looping) is not { } particle
+                    || vmdl.AsSpan(animation.Start, animation.End - animation.Start).Contains($"resource:\"{particle}\"", StringComparison.Ordinal))
+                {
+                    continue;
+                }
+
+                var particleEvent = $$"""
+                    {
+                    	_class = "AnimEvent"
+                    	event_class = "AE_CL_CREATE_PARTICLE_EFFECT_CFG"
+                    	event_frame = 0
+                    	event_keys =
+                    	{
+                    		name = resource:"{{particle}}"
+                    		detach_from_owner = false
+                    		always_run = true
+                    		stop_on_seq_change = true
+                    		stop_immediately = true
+                    		use_layer_sequence = true
+                    		tags = null
+                    		config = "{{config}}"
+                    		aggregate = false
+                    	}
+                    }
+                    """.ReplaceLineEndings("\n");
+
+                var depth = GetIndentation(vmdl, animation.Start);
+                var text = "\n" + MoveIndentation(particleEvent, depth + 2) + ",";
+
+                if (animation.ChildrenIndex is { } childrenIndex)
+                {
+                    insertions.Add((childrenIndex, text));
+                }
+                else
+                {
+                    var tabs = new string('\t', depth + 1);
+                    insertions.Add((animation.Name.Index + animation.Name.Length + 1, $"\n{tabs}children =\n{tabs}[{text}\n{tabs}]"));
+                }
+            }
+
+            if (insertions.Count == 0)
+            {
+                details?.Add("no loadout sequences to create the watermark");
+                return vmdl;
+            }
+
+            foreach (var (index, text) in insertions.OrderByDescending(static insertion => insertion.Index))
+            {
+                vmdl = vmdl.Insert(index, text);
+            }
+
+            details?.Add($"{insertions.Count} loadout sequence{(insertions.Count == 1 ? "" : "s")} create the watermark");
+
+            return Validate(vmdl);
+        }
+
+        /// <summary>
         /// Scales the whole model, its meshes, skeleton, animations, attachments and physics alike.
         /// </summary>
         /// <param name="vmdl">The .vmdl text.</param>

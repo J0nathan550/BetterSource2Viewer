@@ -571,6 +571,38 @@ namespace GUI.Types.Exporter.CharacterAssets
                         }
                     }
 
+                    if (replacement.Watermark)
+                    {
+                        try
+                        {
+                            var loopLengths = GetLoopLengths(fileLoader, replacement.Source);
+                            var lifetimes = new SortedSet<int>();
+
+                            // Sequences whose loop length is unknown are left out, a particle that outlives the loop would pile up
+                            vmdl = ModelDocEditor.AddLoadoutParticle(vmdl, (sequence, looping) =>
+                            {
+                                if (!looping)
+                                {
+                                    return ExportWatermark.Particle;
+                                }
+
+                                if (!loopLengths.TryGetValue(sequence, out var milliseconds))
+                                {
+                                    return null;
+                                }
+
+                                lifetimes.Add(milliseconds);
+                                return ExportWatermark.GetLoopParticle(milliseconds);
+                            }, ExportWatermark.Config, details);
+
+                            ExportWatermark.Write(outputRoot, lifetimes);
+                        }
+                        catch (Exception e)
+                        {
+                            progress.Report($"  ! {replacement.Target}: the watermark was not added: {e.Message}");
+                        }
+                    }
+
                     if (replacement.Scale != 1f)
                     {
                         try
@@ -719,6 +751,31 @@ namespace GUI.Types.Exporter.CharacterAssets
             }
 
             return counts;
+        }
+
+        /// <summary>
+        /// How long one loop of each of a model's animations plays, in milliseconds, by name.
+        /// </summary>
+        private static Dictionary<string, int> GetLoopLengths(IFileLoader fileLoader, string model)
+        {
+            using var resource = fileLoader.LoadFileCompiled(CharacterLoadout.NormalizePath(model));
+            var lengths = new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
+
+            if (resource?.DataBlock is not Model modelData)
+            {
+                return lengths;
+            }
+
+            foreach (var animation in modelData.GetAllAnimations(fileLoader))
+            {
+                // The last frame is the first one again, which a loop does not hold
+                if (animation.Fps > 0 && animation.FrameCount > 1)
+                {
+                    lengths.TryAdd(animation.Name, (int)MathF.Round((animation.FrameCount - 1) / animation.Fps * 1000f));
+                }
+            }
+
+            return lengths;
         }
 
         /// <summary>

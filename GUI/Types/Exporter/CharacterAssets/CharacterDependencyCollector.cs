@@ -414,6 +414,8 @@ namespace GUI.Types.Exporter.CharacterAssets
         /// <summary>How much to scale the model, see <see cref="CharacterLoadout.HeroScale"/>.</summary>
         public float Scale { get; init; } = 1f;
 
+        /// <summary>Whether its loadout sequences show <see cref="ExportWatermark"/>, only for the hero's own model.</summary>
+        public bool Watermark { get; init; }
     }
 
     /// <summary>
@@ -1612,22 +1614,20 @@ namespace GUI.Types.Exporter.CharacterAssets
                 plan.Notes.Add(string.Create(CultureInfo.InvariantCulture, $"the items make the hero {loadout.HeroScale:0.##} times bigger, which needs the item models to be exported too, it was left out"));
             }
 
-            if (!CharacterLoadout.IsSamePath(heroModel, hero.Model) || heroSkin != 0 || dayHeroParticles.Count > 0 || merged.Count > 0 || heroBodyGroups.Count > 0
-                || activityModifiers.Count > 0 || heroScale != 1f)
+            // Written even when the loadout leaves it as it is, it carries the watermark
+            plan.ModelReplacements.Add(new ModelReplacement(
+                NormalizePath(heroModel),
+                NormalizePath(hero.Model),
+                heroSkin,
+                dayHeroParticles)
             {
-                plan.ModelReplacements.Add(new ModelReplacement(
-                    NormalizePath(heroModel),
-                    NormalizePath(hero.Model),
-                    heroSkin,
-                    dayHeroParticles)
-                {
-                    BodyGroups = heroBodyGroups,
-                    Merged = merged,
-                    ActivityModifiers = activityModifiers,
-                    Rename = rename,
-                    RangedAttack = hero.RangedAttack,
-                });
-            }
+                BodyGroups = heroBodyGroups,
+                Merged = merged,
+                ActivityModifiers = activityModifiers,
+                Rename = rename,
+                RangedAttack = hero.RangedAttack,
+                Watermark = true,
+            });
 
             // The hero's other models wear the night versions too, e.g. Night Stalker's, which he turns into at night
             foreach (var (variant, variantModels) in variantMerged)
