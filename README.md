@@ -59,6 +59,8 @@ The AppImage runs on any recent distribution without installing anything: make i
 
 Contents of this repository are available under the [MIT license](LICENSE), except for the `Tests/Files` folder, which contains files that have likely come from Valve's games.
 
+The character export feature in `GUI/Types/Exporter/CharacterAssets` has [its own license](GUI/Types/Exporter/CharacterAssets/LICENSE.md) on top of MIT: mods made of its exports without substantial changes may not be sold and must credit BetterSource2Viewer when shared for free, while substantially reworked mods may be sold freely.
+
 Third party code and assets used by this project are listed in [THIRD_PARTY_NOTICES.txt](THIRD_PARTY_NOTICES.txt).
 
 This project is not affiliated with Valve Software. Source 2 is a trademark and/or registered trademark of Valve Corporation.

@@ -1,38 +1,46 @@
-# Character Export Feature - Attribution License
+# Character Export Feature License
 
 Copyright (c) 2026 J0nathan550 (https://t.me/j0nvpk)
 
-This license applies to the character export feature of BetterSource2Viewer:
-the source files in this directory (`GUI/Types/Exporter/CharacterAssets/`) and
-the character asset exports that this feature produces. It is in addition to,
-and does not replace, the MIT license that covers the rest of the project.
-Where this feature incorporates MIT-licensed code from the upstream project,
-that code remains under its original MIT terms.
+This license applies to the character export feature of BetterSource2Viewer (the source files in this directory,
+`GUI/Types/Exporter/CharacterAssets/`) and to the files it exports. It is in addition to the MIT license that covers
+the rest of the project. Code in this feature that comes from the upstream ValveResourceFormat project stays under its
+MIT license.
 
-Permission is hereby granted, free of charge, to any person obtaining a copy of
-this feature and its output, to use, copy, modify, and distribute them, subject
-to the following conditions:
+## The source code
 
-1. Attribution. Any public distribution, release, upload, video, stream, or
-   other published work that includes or is derived from character assets
-   exported with this feature must give clear and visible credit to the author:
+You may use, copy, modify, merge, publish and distribute the source code of this feature, free of charge, as long as
+this license is included with every copy or substantial portion of it, including in modified versions.
 
-       J0nathan550 - https://t.me/j0nvpk
+## Mods made with exported files
 
-   The credit must appear somewhere a viewer would reasonably find it, such as
-   a description, readme, credits section, or on-screen notice.
+"Exported files" are the files this feature produces, in the form the feature produces them. Choosing heroes, items,
+styles, skins, icons, sounds and colors in the feature, and recompiling its output, does not change their form.
 
-2. Notice retention. This license file and the attribution notices embedded in
-   exported files (the "Exported with BetterSource2Viewer - https://t.me/j0nvpk"
-   provenance metadata) must not be removed or altered.
+"Substantially modified" means exported files that were reworked into new content, such as new or remade materials and
+textures, new or changed animations, remodeled or new models, or new particle effects, so the result is clearly more
+than what the feature exported.
 
-3. No misrepresentation. You may not claim the character export feature, or
-   assets produced by it, as your own original work, or remove the author's
-   identification from them.
+1. **Unmodified mods may not be sold.** A mod, addon or other work made of exported files that are not substantially
+   modified may not be sold, put behind a paywall, subscription or paid tier, or otherwise distributed for money.
+2. **Unmodified mods must give credit.** When such a work is distributed for free, its description, readme or credits
+   must state that it was exported with BetterSource2Viewer, for example:
 
-THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
-IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY, FITNESS
-FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHOR BE
-LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF
-CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE
-SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
+       Exported with BetterSource2Viewer by J0nathan550 - https://t.me/j0nvpk
+
+3. **Substantially modified mods are free to sell.** A work in which the exported files were substantially modified may
+   be distributed and sold freely, without credit. Credit is appreciated.
+
+## Game content
+
+The exported files are made from the game's own assets, which belong to their owners, such as Valve Corporation. This
+license only covers what this feature contributes. It grants no rights to those assets, and you are responsible for
+following the terms that apply to them.
+
+## No warranty
+
+THE SOFTWARE AND THE EXPORTED FILES ARE PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLIED, INCLUDING
+BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT
+SHALL THE AUTHOR BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR
+OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE EXPORTED FILES OR THE USE OR OTHER DEALINGS IN
+THEM.

@@ -1,6 +1,6 @@
 // Character export feature of BetterSource2Viewer.
 // Copyright (c) 2026 J0nathan550 (https://t.me/j0nvpk).
-// Use of this feature and its exports requires attribution; see LICENSE.md in this directory.
+// Selling mods made of its exports, and crediting it, is governed by LICENSE.md in this directory.
 
 using System;
 using System.Collections.Generic;
