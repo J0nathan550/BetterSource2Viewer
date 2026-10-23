@@ -550,6 +550,19 @@ namespace GUI.Types.Exporter.CharacterAssets
                         }
                     }
 
+                    foreach (var chain in CharacterAnimations.GetChains(replacement.Source))
+                    {
+                        try
+                        {
+                            vmdl = AddChainedAnimation(fileLoader, outputRoot, vmdl, replacement.Source, chain);
+                            details.Add($"{chain.Name} plays {string.Join(" then ", chain.Parts)}");
+                        }
+                        catch (Exception e)
+                        {
+                            progress.Report($"  ! {replacement.Target}: {chain.Name} was not added: {e.Message}");
+                        }
+                    }
+
                     // Also for the model itself, layered animations add sequences the compiler numbers in among its own
                     if (GetSequences(fileLoader, replacement.Target) is { Count: > 0 } original)
                     {
@@ -732,6 +745,33 @@ namespace GUI.Types.Exporter.CharacterAssets
                 progress.Report($"  ! {replacement.Target}: the animations it includes from itself were not added: {e.Message}");
                 return vmdl;
             }
+        }
+
+        /// <summary>
+        /// Writes the file of a chain of a model's animations, and adds the animation that plays it to the model's text.
+        /// </summary>
+        private static string AddChainedAnimation(IFileLoader fileLoader, string outputRoot, string vmdl, string model, AnimationChain chain)
+        {
+            using var resource = fileLoader.LoadFileCompiled(CharacterLoadout.NormalizePath(model));
+
+            if (resource?.DataBlock is not Model modelData)
+            {
+                throw new InvalidDataException("The model could not be loaded");
+            }
+
+            var animations = modelData.GetAllAnimations(fileLoader).ToList();
+            var parts = chain.Parts
+                .Select(name => animations.FirstOrDefault(animation => animation.Name.Equals(name, StringComparison.OrdinalIgnoreCase))
+                    ?? throw new InvalidDataException($"The model has no animation called {name}"))
+                .ToList();
+            var chained = new ChainedAnimation(chain.Name, parts, modelData.Skeleton, modelData.FlexControllers);
+            var (text, sourceFile) = ModelDocEditor.AddChainedAnimation(vmdl, chain.Name, [.. chain.Parts.Zip(chained.PartStartFrames)], chained.FrameCount - 1);
+
+            var outputPath = GetOutputPath(outputRoot, sourceFile);
+            Directory.CreateDirectory(Path.GetDirectoryName(outputPath)!);
+            File.WriteAllBytes(outputPath, ModelExtract.ToDmxAnim(modelData, chained));
+
+            return text;
         }
 
         /// <summary>

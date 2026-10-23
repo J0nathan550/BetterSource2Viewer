@@ -845,6 +845,93 @@ namespace GUI.Types.Exporter.CharacterAssets
         }
 
         /// <summary>
+        /// Adds an animation that plays others one after another, see <see cref="ChainedAnimation"/>. It is a copy of the
+        /// first one's node that plays the chain's file, with the events and bone parent changes of the others moved to
+        /// where they play in it. Their layers are left out, the first one's already apply to the whole chain.
+        /// </summary>
+        /// <param name="vmdl">The .vmdl text.</param>
+        /// <param name="name">The chain's name.</param>
+        /// <param name="parts">The chained animations' names, with the frame each starts on.</param>
+        /// <param name="endFrame">The chain's last frame.</param>
+        /// <returns>The text with the chain added, and the file it plays, which goes next to the first animation's.</returns>
+        public static (string Vmdl, string SourceFile) AddChainedAnimation(string vmdl, string name, IReadOnlyList<(string Name, int StartFrame)> parts,
+            int endFrame)
+        {
+            var animations = GetAnimFiles(vmdl);
+
+            if (animations.Any(animation => animation.Name.Value.Equals(name, StringComparison.OrdinalIgnoreCase)))
+            {
+                throw new InvalidDataException($"The model already has an animation called {name}");
+            }
+
+            var nodes = parts
+                .Select(part => animations.FirstOrDefault(animation => animation.Name.Value.Equals(part.Name, StringComparison.OrdinalIgnoreCase))
+                    ?? throw new InvalidDataException($"The model has no animation called {part.Name}"))
+                .ToList();
+            var first = nodes[0];
+
+            if (first.SourceFileValue is not { } sourceFileValue || first.ChildrenIndex is not { } childrenIndex)
+            {
+                throw new InvalidDataException($"{first.Name.Value} has no file or children of its own");
+            }
+
+            var sourceFile = $"{sourceFileValue.Value[..(sourceFileValue.Value.LastIndexOf('/') + 1)]}{name}.dmx";
+            var objects = FindObjects(vmdl);
+            var children = new StringBuilder();
+
+            foreach (var (node, startFrame) in nodes.Zip(parts.Select(static part => part.StartFrame)).Skip(1))
+            {
+                var nested = objects.Where(child => child.Start > node.Start && child.End < node.End).ToList();
+
+                foreach (var (start, end) in nested.Where(child => !nested.Any(other => other.Start < child.Start && other.End > child.End)))
+                {
+                    if (ObjectHeaderRegex().Match(vmdl, start) is not { Success: true } header
+                        || header.Groups["class"].Value is not ("AnimEvent" or "LocalHierarchy"))
+                    {
+                        continue;
+                    }
+
+                    var childText = ChildFrameRegex().Replace(vmdl[GetLineStart(vmdl, start)..end], match =>
+                        string.Concat(match.Groups["key"].Value, (int.Parse(match.Groups["value"].Value, CultureInfo.InvariantCulture) + startFrame)
+                            .ToString(CultureInfo.InvariantCulture)));
+
+                    children.Append('\n').Append(childText).Append(',');
+                }
+            }
+
+            var lineStart = GetLineStart(vmdl, first.Start);
+            var edits = new List<(int Index, int Length, string Text)>
+            {
+                (first.Name.Index, first.Name.Length, name),
+                (sourceFileValue.Index, sourceFileValue.Length, sourceFile),
+                (childrenIndex, 0, children.ToString()),
+            };
+
+            if (first.EndFrameValue is { } endFrameValue)
+            {
+                edits.Add((endFrameValue.Index, endFrameValue.Length, endFrame.ToString(CultureInfo.InvariantCulture)));
+            }
+
+            var text = new StringBuilder(vmdl[lineStart..first.End]);
+
+            foreach (var (index, length, replacement) in edits.OrderByDescending(static edit => edit.Index))
+            {
+                text.Remove(index - lineStart, length).Insert(index - lineStart, replacement);
+            }
+
+            var animationList = AnimationListChildrenRegex().Match(vmdl);
+
+            if (!animationList.Success)
+            {
+                throw new InvalidDataException("The model's animation list was not found");
+            }
+
+            vmdl = vmdl.Insert(animationList.Index + animationList.Length, $"\n{text},");
+
+            return (Validate(vmdl), sourceFile);
+        }
+
+        /// <summary>
         /// Numbers a model's sequences like those of the model it is written over. A mod only changes what the client
         /// shows, the server still picks sequences from the original by number, e.g. one of two runs for each of Death
         /// Prophet's Exorcism spirits, so each of the original's numbers has to play this model's version of that
@@ -2199,6 +2286,8 @@ namespace GUI.Types.Exporter.CharacterAssets
                         .Select(static match => match.Groups["name"].Value)
                         .Where(static name => name.Length > 0)],
                     SourceFile = FindOwn(SourceFilenameRegex())?.Groups["file"].Value,
+                    SourceFileValue = FindOwn(SourceFilenameRegex())?.Groups["file"],
+                    EndFrameValue = FindOwn(EndFrameRegex())?.Groups["value"],
                     StartFrame = FindOwn(StartFrameRegex()) is { } startFrame ? int.Parse(startFrame.Groups["value"].Value, CultureInfo.InvariantCulture) : 0,
                     ActivityWeight = FindOwn(ActivityWeightRegex()) is { } weight ? int.Parse(weight.Groups["value"].Value, CultureInfo.InvariantCulture) : 1,
                 });
@@ -2213,6 +2302,8 @@ namespace GUI.Types.Exporter.CharacterAssets
             public Group? ActivityValue { get; init; }
             public Group? HiddenValue { get; init; }
             public Group? WeightListValue { get; init; }
+            public Group? SourceFileValue { get; init; }
+            public Group? EndFrameValue { get; init; }
             public List<(int Start, int End)> ActivityModifiers { get; init; } = [];
             public List<(int Start, int End)> CycleOverrides { get; init; } = [];
 
@@ -3070,6 +3161,9 @@ namespace GUI.Types.Exporter.CharacterAssets
 
         [GeneratedRegex(@"\bend_frame\s*=\s*(?<value>-?[0-9]+)", RegexOptions.CultureInvariant)]
         private static partial Regex EndFrameRegex();
+
+        [GeneratedRegex(@"\b(?<key>(?:event|start|peak|tail|end)_frame\s*=\s*)(?<value>-?[0-9]+)", RegexOptions.CultureInvariant)]
+        private static partial Regex ChildFrameRegex();
 
         [GeneratedRegex(@"\bgame_class\s*=\s*""(?<class>[^""]*)""", RegexOptions.CultureInvariant)]
         private static partial Regex GameClassRegex();

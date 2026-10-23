@@ -23,6 +23,13 @@ namespace GUI.Types.Exporter.CharacterAssets
     }
 
     /// <summary>
+    /// Animations of a model played one after another as an animation of its own, see <see cref="ChainedAnimation"/>.
+    /// </summary>
+    /// <param name="Name">The chain's name.</param>
+    /// <param name="Parts">The animations' names, in the order they play.</param>
+    sealed record AnimationChain(string Name, IReadOnlyList<string> Parts);
+
+    /// <summary>
     /// Works out which activity modifiers the hero's models are exported with, so animations of items can be mixed with
     /// other items' looks.
     /// </summary>
@@ -37,6 +44,16 @@ namespace GUI.Types.Exporter.CharacterAssets
             {
                 ["attack_main_injured"] = "ti9_axe_attack_kick_injured",
             },
+            // Drow Ranger has one run, which plays the arcana's long run and then its slide
+            ["models/items/drow/drow_arcana/drow_arcana.vmdl"] = new(StringComparer.OrdinalIgnoreCase)
+            {
+                ["run_anim"] = "drow_arc_run_long_slide",
+            },
+        };
+
+        private static readonly Dictionary<string, AnimationChain[]> Chains = new(StringComparer.OrdinalIgnoreCase)
+        {
+            ["models/items/drow/drow_arcana/drow_arcana.vmdl"] = [new("drow_arc_run_long_slide", ["drow_arc_run_long", "drow_arc_arcana_run_slide"])],
         };
 
         /// <summary>
@@ -45,6 +62,12 @@ namespace GUI.Types.Exporter.CharacterAssets
         /// </summary>
         /// <param name="model">The model, as a package source path.</param>
         public static IReadOnlyDictionary<string, string>? GetPickedSequences(string model) => PickedSequences.GetValueOrDefault(model);
+
+        /// <summary>
+        /// The animations a model gets that play some of its own one after another, see <see cref="ChainedAnimation"/>.
+        /// </summary>
+        /// <param name="model">The model, as a package source path.</param>
+        public static IReadOnlyList<AnimationChain> GetChains(string model) => Chains.GetValueOrDefault(model) ?? [];
 
         /// <summary>
         /// Every activity modifier any of the hero's items sets, by name.

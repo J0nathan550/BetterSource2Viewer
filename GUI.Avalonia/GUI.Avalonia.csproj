@@ -109,6 +109,7 @@
     <Compile Include="..\GUI\Types\Exporter\CustomVmatExporter.cs" Link="Shared\Types\Exporter\%(Filename)%(Extension)" />
     <Compile Include="..\GUI\Types\Exporter\CustomVmdlExporter.cs" Link="Shared\Types\Exporter\%(Filename)%(Extension)" />
     <Compile Include="..\GUI\Types\Exporter\CharacterAssets\CharacterAnimations.cs" Link="Shared\Types\Exporter\CharacterAssets\%(Filename)%(Extension)" />
+    <Compile Include="..\GUI\Types\Exporter\CharacterAssets\ChainedAnimation.cs" Link="Shared\Types\Exporter\CharacterAssets\%(Filename)%(Extension)" />
     <Compile Include="..\GUI\Types\Exporter\CharacterAssets\CharacterParticles.cs" Link="Shared\Types\Exporter\CharacterAssets\%(Filename)%(Extension)" />
     <Compile Include="..\GUI\Types\Exporter\CharacterAssets\CharacterAssetsExporter.cs" Link="Shared\Types\Exporter\CharacterAssets\%(Filename)%(Extension)" />
     <Compile Include="..\GUI\Types\Exporter\CharacterAssets\CharacterAssetsExporter.GemColor.cs" Link="Shared\Types\Exporter\CharacterAssets\%(Filename)%(Extension)" />
