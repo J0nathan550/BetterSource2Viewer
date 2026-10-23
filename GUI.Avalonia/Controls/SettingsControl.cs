@@ -14,7 +14,7 @@ namespace GUI.Controls
     /// The Settings tab, laid out like the WinForms SettingsControl: full width group boxes one under another, with
     /// their controls where the WinForms designer puts them. Changes are saved when the tab is left.
     /// </summary>
-    sealed class SettingsControl : ScrollViewer
+    sealed partial class SettingsControl : ScrollViewer
     {
         private static readonly int[] AntiAliasingSampleOptions = [0, 2, 4, 8, 16];
         private static readonly int[] ShadowQualityResolutions = [512, 1024, 2048, 4096];
@@ -199,7 +199,7 @@ namespace GUI.Controls
             };
             footer.Classes.Add("settingsFooter");
 
-            Content = new StackPanel
+            var page = new StackPanel
             {
                 Margin = new(16, 18, 16, 18),
                 Children =
@@ -212,6 +212,9 @@ namespace GUI.Controls
                     new Border { Height = 100, Child = footer },
                 },
             };
+
+            AddDiscordGroup(page);
+            Content = page;
 
             LostFocus += OnLostFocus;
             DetachedFromVisualTree += (_, _) => Settings.Save();

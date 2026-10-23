@@ -106,6 +106,7 @@ namespace GUI.Types.Exporter.CharacterAssets
                 gameRoot = form.GameFolder;
             }
 
+            await WatermarkUnlock.VerifyAsync().ConfigureAwait(true);
             await RunInDialogAsync(vpkPath, package, loadout, options, contentRoot, gameRoot).ConfigureAwait(true);
         }
 

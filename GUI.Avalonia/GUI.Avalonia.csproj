@@ -125,6 +125,7 @@
     <Compile Include="..\GUI\Types\Exporter\CharacterAssets\ModelDocEditor.cs" Link="Shared\Types\Exporter\CharacterAssets\%(Filename)%(Extension)" />
     <Compile Include="..\GUI\Types\Exporter\CharacterAssets\ParticleFixes.cs" Link="Shared\Types\Exporter\CharacterAssets\%(Filename)%(Extension)" />
     <Compile Include="..\GUI\Types\Exporter\CharacterAssets\ExportWatermark.cs" Link="Shared\Types\Exporter\CharacterAssets\%(Filename)%(Extension)" />
+    <Compile Include="..\GUI\Types\Exporter\CharacterAssets\WatermarkUnlock.cs" Link="Shared\Types\Exporter\CharacterAssets\%(Filename)%(Extension)" />
     <EmbeddedResource Include="..\GUI\Types\Exporter\CharacterAssets\watermark.png" LogicalName="CharacterAssets.watermark.png" />
     <Compile Include="..\GUI\Types\Exporter\CharacterAssets\VoiceLayers.cs" Link="Shared\Types\Exporter\CharacterAssets\%(Filename)%(Extension)" />
     <Compile Include="..\GUI\Types\Exporter\CharacterAssets\VmatTextureRecolorer.cs" Link="Shared\Types\Exporter\CharacterAssets\%(Filename)%(Extension)" />

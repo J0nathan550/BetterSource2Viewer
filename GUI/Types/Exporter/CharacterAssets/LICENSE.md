@@ -10,7 +10,8 @@ MIT license.
 ## The source code
 
 You may use, copy, modify, merge, publish and distribute the source code of this feature, free of charge, as long as
-this license is included with every copy or substantial portion of it, including in modified versions.
+this license is included with every copy or substantial portion of it, including in modified versions. Modified
+versions are still bound by "The watermark" below for the exports they produce.
 
 ## Mods made with exported files
 
@@ -30,6 +31,23 @@ than what the feature exported.
 
 3. **Substantially modified mods are free to sell.** A work in which the exported files were substantially modified may
    be distributed and sold freely, without credit. Credit is appreciated.
+
+## The watermark
+
+Exported heroes show a watermark in the loadout screen.
+
+4. **Whitelisted supporters may leave it out.** A person whose Discord account is listed in `watermark-whitelist.txt`
+   in the root of the BetterSource2Viewer repository may sign in with that account in the settings and leave the
+   watermark out of their exports. Being listed is at the author's discretion, and removing an account from the list
+   ends the permission for exports made after that.
+5. **Nobody else may remove it from unmodified mods.** A work made of exported files that are not substantially
+   modified may not be distributed with the watermark removed, hidden or altered, whether by editing the exported
+   files, by modifying this feature, or by any other means, unless the exports were made by a whitelisted supporter
+   as described in point 4.
+6. **Leaving it out changes nothing else.** Exports made without the watermark are still bound by points 1 to 3.
+
+Signing in only asks Discord for the account's ID and name, to look it up in the whitelist. The sign in is saved on
+the computer it was made on, in the BetterSource2Viewer settings folder, and is not sent anywhere but to Discord.
 
 ## Game content
 

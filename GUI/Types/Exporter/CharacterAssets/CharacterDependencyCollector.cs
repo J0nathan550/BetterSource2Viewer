@@ -1626,7 +1626,7 @@ namespace GUI.Types.Exporter.CharacterAssets
                 ActivityModifiers = activityModifiers,
                 Rename = rename,
                 RangedAttack = hero.RangedAttack,
-                Watermark = true,
+                Watermark = !WatermarkUnlock.RemoveWatermark,
             });
 
             // The hero's other models wear the night versions too, e.g. Night Stalker's, which he turns into at night

@@ -1,0 +1,4 @@
+# Discord user IDs that may remove the watermark from character exports, one per line.
+# BetterSource2Viewer reads this file from the master branch on GitHub after a Discord sign in in the settings.
+# Anything after a '#' is ignored, so a name can follow the ID, e.g. "123456789012345678 # someone".
+608994148313333763 # J0nathan550

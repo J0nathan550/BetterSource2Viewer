@@ -59,7 +59,7 @@ The AppImage runs on any recent distribution without installing anything: make i
 
 Contents of this repository are available under the [MIT license](LICENSE), except for the `Tests/Files` folder, which contains files that have likely come from Valve's games.
 
-The character export feature in `GUI/Types/Exporter/CharacterAssets` has [its own license](GUI/Types/Exporter/CharacterAssets/LICENSE.md) on top of MIT: mods made of its exports without substantial changes may not be sold and must credit BetterSource2Viewer when shared for free, while substantially reworked mods may be sold freely.
+The character export feature in `GUI/Types/Exporter/CharacterAssets` has [its own license](GUI/Types/Exporter/CharacterAssets/LICENSE.md) on top of MIT: mods made of its exports without substantial changes may not be sold and must credit BetterSource2Viewer when shared for free, while substantially reworked mods may be sold freely. Exports carry a watermark that only supporters whose Discord account is on the [whitelist](watermark-whitelist.txt) may leave out, by signing in with Discord in the settings.
 
 Third party code and assets used by this project are listed in [THIRD_PARTY_NOTICES.txt](THIRD_PARTY_NOTICES.txt).
 
