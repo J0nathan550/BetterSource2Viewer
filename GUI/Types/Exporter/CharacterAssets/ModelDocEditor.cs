@@ -852,7 +852,8 @@ namespace GUI.Types.Exporter.CharacterAssets
         /// counting the ones the items set, e.g. an arcana's totem attack for the hero's, or a totem's own version of it
         /// when the loadout wears that totem. Sequences without an activity go by their name, and only fall back to the
         /// plain idle, never to one made for a modifier. The number's sequence is a copy of that version, or that version
-        /// itself when nothing else needs it, and an AnimOrder keeps the original's numbering.
+        /// itself when nothing else needs it, and an AnimOrder keeps the original's numbering. When the original has
+        /// several versions of the same activity and modifiers, each plays a different one of this model's where it can.
         /// </summary>
         /// <param name="vmdl">The .vmdl text, with <see cref="ApplyActivityModifiers"/> already applied.</param>
         /// <param name="original">The original model's sequences in order.</param>
@@ -861,9 +862,13 @@ namespace GUI.Types.Exporter.CharacterAssets
         /// Whether the hero attacks from range, which picks the versions of an attack made for that over the ones the game
         /// only plays by distance, e.g. the whip over the sword of Razor's arcana, or null when not a hero's model.
         /// </param>
+        /// <param name="picked">
+        /// This model's sequence each of the original's plays instead of the closest one, by the original's name, see
+        /// <see cref="CharacterAnimations.GetPickedSequences"/>.
+        /// </param>
         /// <param name="details">Receives a description of what the original's sequences play.</param>
         public static string MatchSequenceOrder(string vmdl, IReadOnlyList<OriginalSequence> original, IReadOnlyCollection<ActivityModifier> appliedModifiers,
-            bool? rangedAttack = null, ICollection<string>? details = null)
+            bool? rangedAttack = null, IReadOnlyDictionary<string, string>? picked = null, ICollection<string>? details = null)
         {
             var sequences = GetSequenceNames(vmdl);
             var animations = GetAnimFiles(vmdl);
@@ -915,6 +920,9 @@ namespace GUI.Types.Exporter.CharacterAssets
 
             // The game picks some versions by itself, e.g. by how far the target is, a mod can only pick the one made
             // for how the hero attacks
+            // What each of the original's sequences plays, by name
+            var played = new Dictionary<string, AnimFileNode>(StringComparer.OrdinalIgnoreCase);
+
             var otherAttack = rangedAttack switch
             {
                 true => "melee",
@@ -924,6 +932,11 @@ namespace GUI.Types.Exporter.CharacterAssets
 
             AnimFileNode PickSource(OriginalSequence sequence)
             {
+                if (picked?.GetValueOrDefault(sequence.Name) is { } pickedName && FindNode(pickedName) is { } pickedNode)
+                {
+                    return pickedNode;
+                }
+
                 var own = FindNode(sequence.Name);
 
                 if (sequence.Activity is not { Length: > 0 } activity)
@@ -973,8 +986,16 @@ namespace GUI.Types.Exporter.CharacterAssets
                 // When the original has no other version for the same state, the server only ever sends this number, so
                 // it plays the version the game picks most rather than the one its name looks like, e.g. Skywrath Mage's
                 // only run is called "run_glide" while his arcana mostly flaps its wings and rarely glides
-                var onlyVersion = original.Count(other => activity.Equals(other.Activity, StringComparison.OrdinalIgnoreCase)
-                    && other.Modifiers.ToHashSet(StringComparer.OrdinalIgnoreCase).SetEquals(sequence.Modifiers)) == 1;
+                var versions = original.Where(other => activity.Equals(other.Activity, StringComparison.OrdinalIgnoreCase)
+                    && other.Modifiers.ToHashSet(StringComparer.OrdinalIgnoreCase).SetEquals(sequence.Modifiers)).ToList();
+                var onlyVersion = versions.Count == 1;
+
+                // The server picks between the original's versions, e.g. Axe's two attacks, so each plays a different one
+                // of this model's while there are enough, or a persona with six attacks would only ever show one
+                var taken = versions.Where(other => other != sequence)
+                    .Select(other => played.GetValueOrDefault(other.Name))
+                    .OfType<AnimFileNode>()
+                    .ToHashSet();
 
                 return candidates
                     .Where(animation => activity.Equals(animation.Activity, StringComparison.OrdinalIgnoreCase))
@@ -993,6 +1014,7 @@ namespace GUI.Types.Exporter.CharacterAssets
                     .ThenBy(static candidate => candidate.Extra)
                     .ThenBy(candidate => candidate.Animation.IsBlend != sequence.Multi)
                     .ThenBy(candidate => candidate.Animation != own)
+                    .ThenBy(candidate => taken.Contains(candidate.Animation))
                     .ThenByDescending(candidate => onlyVersion ? candidate.Animation.ActivityWeight : 0)
                     .ThenByDescending(static candidate => candidate.Score.Action)
                     .ThenByDescending(static candidate => candidate.Score.Number)
@@ -1025,7 +1047,6 @@ namespace GUI.Types.Exporter.CharacterAssets
             var copies = new StringBuilder();
             var replacements = new List<(AnimFileNode Node, string Text)>();
             var remapped = new List<string>();
-            var played = new Dictionary<string, AnimFileNode>(StringComparer.OrdinalIgnoreCase);
             var layered = new List<OriginalSequence>();
             var copied = 0;
             string? bindPoseNode = null;

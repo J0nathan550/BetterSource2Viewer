@@ -564,7 +564,8 @@ namespace GUI.Types.Exporter.CharacterAssets
 
                         try
                         {
-                            vmdl = ModelDocEditor.MatchSequenceOrder(vmdl, original, replacement.ActivityModifiers, replacement.RangedAttack, details);
+                            vmdl = ModelDocEditor.MatchSequenceOrder(vmdl, original, replacement.ActivityModifiers, replacement.RangedAttack,
+                                CharacterAnimations.GetPickedSequences(replacement.Source), details);
                         }
                         catch (Exception e)
                         {

@@ -28,6 +28,24 @@ namespace GUI.Types.Exporter.CharacterAssets
     /// </summary>
     static class CharacterAnimations
     {
+        // The server only picks between the original's few versions of an activity, so models with more versions get
+        // some of theirs played in another state's place by hand
+        private static readonly Dictionary<string, Dictionary<string, string>> PickedSequences = new(StringComparer.OrdinalIgnoreCase)
+        {
+            // Axe has two attacks, which play the punch and the left hook, so the kick plays while he is injured
+            ["models/items/axe/ti9_jungle_axe/axe_bare.vmdl"] = new(StringComparer.OrdinalIgnoreCase)
+            {
+                ["attack_main_injured"] = "ti9_axe_attack_kick_injured",
+            },
+        };
+
+        /// <summary>
+        /// The sequence of a model each sequence of the one it is written over plays instead of the closest one, by the
+        /// original's name, see <see cref="ModelDocEditor.MatchSequenceOrder"/>.
+        /// </summary>
+        /// <param name="model">The model, as a package source path.</param>
+        public static IReadOnlyDictionary<string, string>? GetPickedSequences(string model) => PickedSequences.GetValueOrDefault(model);
+
         /// <summary>
         /// Every activity modifier any of the hero's items sets, by name.
         /// </summary>
