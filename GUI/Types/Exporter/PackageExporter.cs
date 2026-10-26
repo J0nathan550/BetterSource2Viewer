@@ -13,6 +13,7 @@ using GUI.Utils;
 using ValvePak;
 using ValveResourceFormat;
 using ValveResourceFormat.IO;
+using ValveResourceFormat.ResourceTypes;
 
 namespace GUI.Types.Exporter
 {
@@ -409,7 +410,8 @@ namespace GUI.Types.Exporter
 
                 var fileFullName = packageFile.GetFullPath();
 
-                if (extractedFiles.Contains(fileFullName))
+                // Materials pull their textures in as images, but an explicit vtex choice still wants the vtex itself
+                if (outputFormat != "vtex" && extractedFiles.Contains(fileFullName))
                 {
                     continue;
                 }
@@ -530,7 +532,15 @@ namespace GUI.Types.Exporter
                     flatSubfiles = false;
                 }
 
-                contentFile = FileExtract.Extract(resource, exportData.VrfGuiContext, progress);
+                if (resource.DataBlock is Texture texture && !texture.IsRawAnyImage)
+                {
+                    // Textures compiled as part of a material are exported as images only unless vtex was chosen
+                    contentFile = new TextureExtract(resource) { IgnoreVtexFile = outExtension != ".vtex" }.ToContentFile();
+                }
+                else
+                {
+                    contentFile = FileExtract.Extract(resource, exportData.VrfGuiContext, progress);
+                }
 
                 if (contentFile.Data != null)
                 {

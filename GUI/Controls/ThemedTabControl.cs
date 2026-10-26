@@ -362,6 +362,15 @@ namespace GUI.Controls
             CalculateTabWidth();
         }
 
+        protected override void OnHandleCreated(EventArgs e)
+        {
+            base.OnHandleCreated(e);
+
+            // A recreated handle gets the managed ItemSize, which is stale after resizes only sent the size to the native control
+            cachedItemSize = Size.Empty;
+            CalculateTabWidth();
+        }
+
         protected override void InitLayout()
         {
             SetStyle(ControlStyles.AllPaintingInWmPaint, true);
