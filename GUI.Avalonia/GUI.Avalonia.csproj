@@ -120,6 +120,8 @@
     <Compile Include="..\GUI\Types\Exporter\CharacterAssets\CharacterIcons.cs" Link="Shared\Types\Exporter\CharacterAssets\%(Filename)%(Extension)" />
     <Compile Include="..\GUI\Types\Exporter\CharacterAssets\CharacterLoadout.cs" Link="Shared\Types\Exporter\CharacterAssets\%(Filename)%(Extension)" />
     <Compile Include="..\GUI\Types\Exporter\CharacterAssets\CharacterSounds.cs" Link="Shared\Types\Exporter\CharacterAssets\%(Filename)%(Extension)" />
+    <Compile Include="..\GUI\Types\Exporter\CharacterAssets\DeadlockHeroCatalog.cs" Link="Shared\Types\Exporter\CharacterAssets\%(Filename)%(Extension)" />
+    <Compile Include="..\GUI\Types\Exporter\CharacterAssets\DeadlockHeroExporter.cs" Link="Shared\Types\Exporter\CharacterAssets\%(Filename)%(Extension)" />
     <Compile Include="..\GUI\Types\Exporter\CharacterAssets\ItemsGameCatalog.cs" Link="Shared\Types\Exporter\CharacterAssets\%(Filename)%(Extension)" />
     <Compile Include="..\GUI\Types\Exporter\CharacterAssets\ItemsGameCatalog.GemColors.cs" Link="Shared\Types\Exporter\CharacterAssets\%(Filename)%(Extension)" />
     <Compile Include="..\GUI\Types\Exporter\CharacterAssets\ItemsGameEditor.cs" Link="Shared\Types\Exporter\CharacterAssets\%(Filename)%(Extension)" />

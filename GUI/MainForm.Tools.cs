@@ -13,6 +13,8 @@ namespace GUI
         {
             UpdatePackageToolItem(toolsExportCharacterAssetsToolStripMenuItem, CharacterAssetsExporter.CanExport,
                 $"Open Dota 2's pak01_dir.vpk, or another package with {ItemsGameCatalog.ItemsGamePath}, to export characters.");
+            UpdatePackageToolItem(toolsExportDeadlockHeroToolStripMenuItem, DeadlockHeroExporter.CanExport,
+                $"Open Deadlock's pak01_dir.vpk, or another package with {DeadlockHeroCatalog.HeroesPath}, to export heroes.");
         }
 
         private async void OnToolsExportCharacterAssetsClick(object sender, EventArgs e)
@@ -22,6 +24,16 @@ namespace GUI
             if (context != null)
             {
                 await CharacterAssetsExporter.ExportAsync(context).ConfigureAwait(true);
+            }
+        }
+
+        private async void OnToolsExportDeadlockHeroClick(object sender, EventArgs e)
+        {
+            var context = FindPackageForTool(DeadlockHeroExporter.CanExport);
+
+            if (context != null)
+            {
+                await DeadlockHeroExporter.ExportAsync(context).ConfigureAwait(true);
             }
         }
 

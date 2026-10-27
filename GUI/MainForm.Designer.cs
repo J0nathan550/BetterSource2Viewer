@@ -59,6 +59,7 @@ namespace GUI
             findToolStripButton = new ThemedToolStripMenuItem();
             toolsToolStripMenuItem = new ThemedToolStripMenuItem();
             toolsExportCharacterAssetsToolStripMenuItem = new ThemedToolStripMenuItem();
+            toolsExportDeadlockHeroToolStripMenuItem = new ThemedToolStripMenuItem();
             toolsVtexCreateToolStripMenuItem = new ThemedToolStripMenuItem();
             toolsParticlesRecolorToolStripMenuItem = new ThemedToolStripMenuItem();
             settingsToolStripMenuItem = new ThemedToolStripMenuItem();
@@ -205,7 +206,7 @@ namespace GUI
             //
             // toolsToolStripMenuItem
             //
-            toolsToolStripMenuItem.DropDownItems.AddRange(new ToolStripItem[] { toolsExportCharacterAssetsToolStripMenuItem, toolsVtexCreateToolStripMenuItem, toolsParticlesRecolorToolStripMenuItem, });
+            toolsToolStripMenuItem.DropDownItems.AddRange(new ToolStripItem[] { toolsExportCharacterAssetsToolStripMenuItem, toolsExportDeadlockHeroToolStripMenuItem, toolsVtexCreateToolStripMenuItem, toolsParticlesRecolorToolStripMenuItem, });
             toolsToolStripMenuItem.Name = "toolsToolStripMenuItem";
             toolsToolStripMenuItem.Padding = new Padding(4);
             toolsToolStripMenuItem.Size = new System.Drawing.Size(72, 32);
@@ -229,6 +230,14 @@ namespace GUI
             toolsExportCharacterAssetsToolStripMenuItem.SVGImageResourceName = "GUI.Icons.Decompile.svg";
             toolsExportCharacterAssetsToolStripMenuItem.Text = "Export character assets (items_game.txt)...";
             toolsExportCharacterAssetsToolStripMenuItem.Click += OnToolsExportCharacterAssetsClick;
+            // 
+            // toolsExportDeadlockHeroToolStripMenuItem
+            // 
+            toolsExportDeadlockHeroToolStripMenuItem.Name = "toolsExportDeadlockHeroToolStripMenuItem";
+            toolsExportDeadlockHeroToolStripMenuItem.Size = new System.Drawing.Size(320, 30);
+            toolsExportDeadlockHeroToolStripMenuItem.SVGImageResourceName = "GUI.Icons.Decompile.svg";
+            toolsExportDeadlockHeroToolStripMenuItem.Text = "Export Deadlock hero...";
+            toolsExportDeadlockHeroToolStripMenuItem.Click += OnToolsExportDeadlockHeroClick;
             // 
             // toolsVtexCreateToolStripMenuItem
             // 
@@ -641,6 +650,7 @@ namespace GUI
         private ThemedToolStripMenuItem findToolStripButton;
         private ThemedToolStripMenuItem toolsToolStripMenuItem;
         private ThemedToolStripMenuItem toolsExportCharacterAssetsToolStripMenuItem;
+        private ThemedToolStripMenuItem toolsExportDeadlockHeroToolStripMenuItem;
         private ThemedToolStripMenuItem toolsVtexCreateToolStripMenuItem;
         private ThemedToolStripMenuItem toolsParticlesRecolorToolStripMenuItem;
         private ThemedToolStripMenuItem openWithoutViewerToolStripMenuItem;

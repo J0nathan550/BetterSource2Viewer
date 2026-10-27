@@ -764,6 +764,34 @@ namespace GUI.Types.Exporter.CharacterAssets
         }
 
         /// <summary>
+        /// Collects assets to export as they are, with nothing written over the game's own.
+        /// </summary>
+        /// <param name="roots">The assets, and whether to include the sounds of the sound event files among them.</param>
+        /// <param name="materials">Whether to also export the materials the models use, with their textures.</param>
+        public CharacterExportPlan CollectAssets(IEnumerable<(string Path, bool IncludeSounds)> roots, bool materials, CancellationToken cancellationToken)
+        {
+            var plan = new CharacterExportPlan();
+
+            foreach (var (path, includeSounds) in roots)
+            {
+                Enqueue(path, includeSounds);
+            }
+
+            while (queue.TryDequeue(out var next))
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+                Visit(next.Path, next.IncludeSounds, plan);
+            }
+
+            if (materials)
+            {
+                AddMaterials(plan, plan.Models, cancellationToken);
+            }
+
+            return plan;
+        }
+
+        /// <summary>
         /// The models that end up changed in the addon, see <see cref="CharacterExportOptions.SkipUnchangedModels"/>: the
         /// ones written over others or added to them, and the ones exported as they are for want of a model to be written
         /// over, which would otherwise be lost.

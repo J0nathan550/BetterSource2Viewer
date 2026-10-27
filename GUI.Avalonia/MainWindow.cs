@@ -278,11 +278,17 @@ namespace GUI
             ToolTip.SetShowOnDisabled(exportCharacterAssets, true);
             tools.Items.Add(exportCharacterAssets);
 
+            var exportDeadlockHero = Item("Export Deadlock hero...", "Decompile", () => RunTool(ExportDeadlockHeroAsync));
+            ToolTip.SetShowOnDisabled(exportDeadlockHero, true);
+            tools.Items.Add(exportDeadlockHero);
+
             tools.Items.Add(Item("VTEX Create", "AssetTypes.tex", () => RunTool(() => new VtexCompilerWindow().ShowDialog(this))));
             tools.Items.Add(Item("Particles recolor", "AssetTypes.pcf", () => RunTool(() => new VpcfCompilerWindow().ShowDialog(this))));
 
             tools.SubmenuOpened += (_, _) => UpdatePackageToolItem(exportCharacterAssets, CharacterAssetsExporter.CanExport,
                 $"Open Dota 2's pak01_dir.vpk, or another package with {ItemsGameCatalog.ItemsGamePath}, to export characters.");
+            tools.SubmenuOpened += (_, _) => UpdatePackageToolItem(exportDeadlockHero, DeadlockHeroExporter.CanExport,
+                $"Open Deadlock's pak01_dir.vpk, or another package with {DeadlockHeroCatalog.HeroesPath}, to export heroes.");
 
             return new Menu
             {
@@ -320,6 +326,16 @@ namespace GUI
             if (context != null)
             {
                 await CharacterAssetsExporter.ExportAsync(context).ConfigureAwait(true);
+            }
+        }
+
+        private async Task ExportDeadlockHeroAsync()
+        {
+            var context = FindPackageForTool(DeadlockHeroExporter.CanExport);
+
+            if (context != null)
+            {
+                await DeadlockHeroExporter.ExportAsync(context).ConfigureAwait(true);
             }
         }
 

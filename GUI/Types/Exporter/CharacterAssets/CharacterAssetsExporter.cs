@@ -378,7 +378,7 @@ namespace GUI.Types.Exporter.CharacterAssets
             }
         }
 
-        private static int ExportModels(List<string> models, string vpkPath, string outputRoot, GameFileLoader fileLoader,
+        internal static int ExportModels(List<string> models, string vpkPath, string outputRoot, GameFileLoader fileLoader,
             IProgress<string> progress, CancellationToken cancellationToken)
         {
             if (models.Count == 0)
@@ -1094,7 +1094,7 @@ namespace GUI.Types.Exporter.CharacterAssets
         /// game's, which some item materials render semi-transparent with.
         /// </summary>
         /// 
-        private static int ExportResources(List<string> resources, string outputRoot, GameFileLoader fileLoader,
+        internal static int ExportResources(List<string> resources, string outputRoot, GameFileLoader fileLoader,
             IProgress<string> progress, HashSet<string> writtenFiles, CancellationToken cancellationToken)
         {
             if (resources.Count == 0)
@@ -1178,7 +1178,7 @@ namespace GUI.Types.Exporter.CharacterAssets
             }
         }
 
-        private static int ExportRawFiles(List<string> files, string outputRoot, GameFileLoader fileLoader,
+        internal static int ExportRawFiles(List<string> files, string outputRoot, GameFileLoader fileLoader,
             IProgress<string> progress, HashSet<string> writtenFiles, CancellationToken cancellationToken)
         {
             var failed = 0;
@@ -1840,7 +1840,7 @@ namespace GUI.Types.Exporter.CharacterAssets
             progress.Report($"+ {relativePath}");
         }
 
-        private static string GetOutputPath(string outputRoot, string relativePath)
+        internal static string GetOutputPath(string outputRoot, string relativePath)
         {
             var outputPath = Path.GetFullPath(Path.Combine(outputRoot, relativePath.Replace('/', Path.DirectorySeparatorChar)));
 
@@ -1854,7 +1854,7 @@ namespace GUI.Types.Exporter.CharacterAssets
 
         private static string GetFolder(string path) => Path.GetDirectoryName(path)?.Replace('\\', '/') ?? string.Empty;
 
-        private static string StripCompiledSuffix(string path)
+        internal static string StripCompiledSuffix(string path)
             => path.EndsWith(GameFileLoader.CompiledFileSuffix, StringComparison.OrdinalIgnoreCase)
                 ? path[..^GameFileLoader.CompiledFileSuffix.Length]
                 : path;

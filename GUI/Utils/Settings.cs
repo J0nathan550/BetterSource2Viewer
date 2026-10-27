@@ -123,6 +123,8 @@ namespace GUI.Utils
             public string CharacterExportContentDir { get; set; } = string.Empty;
             /// <summary>Gets or sets the addon game folder the character export last wrote compiled files to.</summary>
             public string CharacterExportGameDir { get; set; } = string.Empty;
+            /// <summary>Gets or sets the content folder the Deadlock hero export last wrote sources to.</summary>
+            public string DeadlockHeroExportContentDir { get; set; } = string.Empty;
             /// <summary>Gets or sets the width of the character export dialog's controls next to its preview, at 96 DPI, or 0 for the default width.</summary>
             public int CharacterExportControlsWidth { get; set; }
             /// <summary>Gets or sets the height of the character export dialog's export options, at 96 DPI, or 0 to fit them all.</summary>
