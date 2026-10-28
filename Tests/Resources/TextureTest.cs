@@ -1,6 +1,7 @@
 using System.Diagnostics;
 using System.IO;
 using System.Linq;
+using System.Text;
 using System.Threading.Tasks;
 using SkiaSharp;
 using ValveResourceFormat;
@@ -335,6 +336,41 @@ namespace Tests.Resources
                 await Assert.That(lines).Contains("name 2");
                 await Assert.That(lines[Array.IndexOf(lines, "sequence 0") + 1]).IsEqualTo("name embers_loop");
                 await Assert.That(lines[Array.IndexOf(lines, "sequence 0") + 2]).IsEqualTo("LOOP");
+            }
+        }
+
+        [Test]
+        public async Task RawImageExtractsImageOnlyByDefault()
+        {
+            using var resource = new Resource();
+            resource.Read(Path.Combine(TexturesDir, "PNG_RGBA8888_dynamic_images_ti7_sentinel.vtex_c"));
+
+            using var contentFile = new TextureExtract(resource).ToContentFile();
+
+            using (Assert.Multiple())
+            {
+                await Assert.That(contentFile.Data!.AsSpan(0, 4).SequenceEqual((ReadOnlySpan<byte>)[0x89, 0x50, 0x4E, 0x47])).IsTrue();
+                await Assert.That(contentFile.SubFiles).IsEmpty();
+            }
+        }
+
+        [Test]
+        public async Task RawImageExtractsVtexWithEmbeddedImage()
+        {
+            using var resource = new Resource();
+            resource.Read(Path.Combine(TexturesDir, "JPEG_DXT5_halloween_jpg.vtex_c"));
+
+            using var contentFile = new TextureExtract(resource) { IgnoreVtexFile = false }.ToContentFile();
+
+            var vtex = Encoding.UTF8.GetString(contentFile.Data!);
+            var image = contentFile.SubFiles.Single();
+
+            using (Assert.Multiple())
+            {
+                await Assert.That(vtex).Contains("/JPEG_DXT5_halloween_jpg.jpeg\"");
+                await Assert.That(vtex).Contains("\"DXT5\"");
+                await Assert.That(image.FileName).IsEqualTo("JPEG_DXT5_halloween_jpg.jpeg");
+                await Assert.That(image.Extract!().AsSpan(0, 2).SequenceEqual((ReadOnlySpan<byte>)[0xFF, 0xD8])).IsTrue();
             }
         }
 

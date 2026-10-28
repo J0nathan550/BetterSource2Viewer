@@ -2,7 +2,7 @@ using GUI.Forms;
 
 namespace GUI.Types.PackageViewer
 {
-    internal readonly record struct SearchRequest(string Text, SearchType Type, string? FilterKey, string? FilterValue);
+    internal readonly record struct SearchRequest(string Text, SearchType Type, string? FileType, string? FilterKey, string? FilterValue);
 
     /// <summary>
     /// A single back/forward history location: either a folder node or a search.

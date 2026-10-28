@@ -532,7 +532,7 @@ namespace GUI.Types.Exporter
                     flatSubfiles = false;
                 }
 
-                if (resource.DataBlock is Texture texture && !texture.IsRawAnyImage)
+                if (resource.DataBlock is Texture)
                 {
                     // Textures compiled as part of a material are exported as images only unless vtex was chosen
                     contentFile = new TextureExtract(resource) { IgnoreVtexFile = outExtension != ".vtex" }.ToContentFile();

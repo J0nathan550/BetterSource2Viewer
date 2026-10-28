@@ -15,6 +15,11 @@ namespace GUI.Forms
             public override string ToString() => Key;
         }
 
+        private record FileTypeEntry(string Type, int Count)
+        {
+            public override string ToString() => string.Create(CultureInfo.InvariantCulture, $".{Type} ({Count})");
+        }
+
         private readonly TaskScheduler uiTaskScheduler;
         private int filterLoadVersion;
         private int lastPopulatedKeysHash;
@@ -32,6 +37,11 @@ namespace GUI.Forms
         /// Gets whatever option was selected by the user in the search type combobox.
         /// </summary>
         public SearchType SelectedSearchType => searchTypeComboBox.SelectedItem is SearchTypeItem item ? item.Type : SearchType.FileNamePartialMatch;
+
+        /// <summary>
+        /// Gets the selected file type (such as "vmat_c"), or null if files of any type are accepted.
+        /// </summary>
+        public string? SelectedFileType => fileTypeComboBox.SelectedItem is FileTypeEntry entry ? entry.Type : null;
 
         /// <summary>
         /// Gets the selected SearchableUserData filter key, or null if no filter is selected.
@@ -59,6 +69,31 @@ namespace GUI.Forms
             searchTypeComboBox.SelectedIndex = 0;
 
             filterKeyComboBox.SelectedIndexChanged += FilterKeyComboBox_SelectedIndexChanged;
+        }
+
+        /// <summary>
+        /// Sets the file types that can be filtered on, keeping the current selection if the type is still available.
+        /// </summary>
+        public void SetFileTypes(IEnumerable<KeyValuePair<string, int>> fileTypes)
+        {
+            var selectedType = SelectedFileType;
+
+            fileTypeComboBox.BeginUpdate();
+            fileTypeComboBox.Items.Clear();
+            fileTypeComboBox.Items.Add("(Any type)");
+            fileTypeComboBox.SelectedIndex = 0;
+
+            foreach (var (type, count) in fileTypes.OrderBy(static type => type.Key, StringComparer.OrdinalIgnoreCase))
+            {
+                var index = fileTypeComboBox.Items.Add(new FileTypeEntry(type, count));
+
+                if (type == selectedType)
+                {
+                    fileTypeComboBox.SelectedIndex = index;
+                }
+            }
+
+            fileTypeComboBox.EndUpdate();
         }
 
         /// <summary>

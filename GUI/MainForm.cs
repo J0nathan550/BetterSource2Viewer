@@ -965,15 +965,17 @@ namespace GUI
             if (package != null)
             {
                 searchForm ??= new();
+                searchForm.SetFileTypes(package.GetFileTypes());
                 searchForm.SetSearchableUserDataKeys(package.GetSearchDataKeysAsync());
                 var result = searchForm.ShowDialog();
                 if (result == DialogResult.OK)
                 {
                     var searchText = searchForm.SearchText;
+                    var fileType = searchForm.SelectedFileType;
                     var filterKey = searchForm.SelectedFilterKey;
-                    if (!string.IsNullOrEmpty(searchText) || filterKey != null)
+                    if (!string.IsNullOrEmpty(searchText) || fileType != null || filterKey != null)
                     {
-                        package.SearchAndFillResults(searchText, searchForm.SelectedSearchType, filterKey, searchForm.SelectedFilterValue);
+                        package.SearchAndFillResults(searchText, searchForm.SelectedSearchType, fileType, filterKey, searchForm.SelectedFilterValue);
                     }
                 }
                 return;

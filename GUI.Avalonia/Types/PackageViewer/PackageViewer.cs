@@ -1584,6 +1584,7 @@ namespace GUI.Types.PackageViewer
             }
 
             searchWindow ??= new SearchWindow();
+            searchWindow.SetFileTypes(vrfGuiContext.CurrentPackage?.Entries?.Select(static type => KeyValuePair.Create(type.Key, type.Value.Count)) ?? []);
             searchWindow.SetSearchableUserDataKeys(GetSearchDataKeysAsync());
 
             var result = await searchWindow.ShowDialog<bool>(owner).ConfigureAwait(true);
@@ -1598,17 +1599,18 @@ namespace GUI.Types.PackageViewer
             }
 
             var searchText = closedWindow.SearchText;
+            var fileType = closedWindow.SelectedFileType;
             var filterKey = closedWindow.SelectedFilterKey;
 
-            if (!string.IsNullOrEmpty(searchText) || filterKey != null)
+            if (!string.IsNullOrEmpty(searchText) || fileType != null || filterKey != null)
             {
-                SearchAndFillResults(searchText, closedWindow.SelectedSearchType, filterKey, closedWindow.SelectedFilterValue);
+                SearchAndFillResults(searchText, closedWindow.SelectedSearchType, fileType, filterKey, closedWindow.SelectedFilterValue);
             }
         }
 
-        internal void SearchAndFillResults(string searchText, SearchType searchType, string? filterKey = null, string? filterValue = null)
+        internal void SearchAndFillResults(string searchText, SearchType searchType, string? fileType = null, string? filterKey = null, string? filterValue = null)
         {
-            var request = new SearchRequest(searchText, searchType, filterKey, filterValue);
+            var request = new SearchRequest(searchText, searchType, fileType, filterKey, filterValue);
 
             suppressHistoryRecording = true;
 
@@ -1630,12 +1632,20 @@ namespace GUI.Types.PackageViewer
 
             try
             {
-                results = Search(request.Text, request.Type);
+                // No text lists every file, so the filters alone can narrow it down
+                results = string.IsNullOrEmpty(request.Text)
+                    ? Search(string.Empty, SearchType.FileNamePartialMatch)
+                    : Search(request.Text, request.Type);
             }
             catch (Exception e) when (e is ArgumentException or InvalidOperationException or FormatException)
             {
                 _ = AppMessageDialogs.ShowMessageAsync(e.Message, "Invalid search", MessageIcon.Warning);
                 return;
+            }
+
+            if (request.FileType != null)
+            {
+                results.RemoveAll(entry => !entry.TypeName.Equals(request.FileType, StringComparison.OrdinalIgnoreCase));
             }
 
             if (request.FilterKey != null && assetSearchData != null)

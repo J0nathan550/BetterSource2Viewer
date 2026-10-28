@@ -28,14 +28,18 @@ namespace GUI.Forms
 
         private readonly TextBox findTextBox;
         private readonly ComboBox searchTypeComboBox;
+        private readonly ComboBox fileTypeComboBox;
         private readonly ComboBox filterKeyComboBox;
         private readonly ComboBox filterValueComboBox;
         private Dictionary<string, SortedSet<string>>? filterKeys;
+        private string[] fileTypes = [];
         private int filterLoadVersion;
 
         public string SearchText => findTextBox.Text ?? string.Empty;
 
         public SearchType SelectedSearchType => SearchTypes[Math.Max(0, searchTypeComboBox.SelectedIndex)].Type;
+
+        public string? SelectedFileType => fileTypeComboBox.SelectedIndex > 0 ? fileTypes[fileTypeComboBox.SelectedIndex - 1] : null;
 
         public string? SelectedFilterKey => filterKeys != null && filterKeyComboBox.SelectedIndex > 0 ? filterKeyComboBox.SelectedItem as string : null;
 
@@ -60,6 +64,8 @@ namespace GUI.Forms
                 HorizontalAlignment = HorizontalAlignment.Stretch,
             };
 
+            fileTypeComboBox = new ComboBox { HorizontalAlignment = HorizontalAlignment.Stretch, MaxDropDownHeight = 400 };
+
             filterKeyComboBox = new ComboBox { HorizontalAlignment = HorizontalAlignment.Stretch, IsEnabled = false };
             filterKeyComboBox.SelectionChanged += (_, _) => OnFilterKeyChanged();
 
@@ -79,6 +85,8 @@ namespace GUI.Forms
                 {
                     findTextBox,
                     searchTypeComboBox,
+                    new TextBlock { Text = "File type:" },
+                    fileTypeComboBox,
                     new TextBlock { Text = "Asset info filter:" },
                     filterKeyComboBox,
                     filterValueComboBox,
@@ -106,6 +114,22 @@ namespace GUI.Forms
                     Close(false);
                 }
             };
+        }
+
+        /// <summary>
+        /// Sets the file types that can be filtered on, keeping the current selection if the type is still available.
+        /// </summary>
+        public void SetFileTypes(IEnumerable<KeyValuePair<string, int>> types)
+        {
+            var selectedType = SelectedFileType;
+            var sorted = types.OrderBy(static type => type.Key, StringComparer.OrdinalIgnoreCase).ToArray();
+
+            fileTypes = [.. sorted.Select(static type => type.Key)];
+            fileTypeComboBox.ItemsSource = sorted
+                .Select(static type => string.Create(CultureInfo.InvariantCulture, $".{type.Key} ({type.Value})"))
+                .Prepend("(Any type)")
+                .ToArray();
+            fileTypeComboBox.SelectedIndex = selectedType != null ? Array.IndexOf(fileTypes, selectedType) + 1 : 0;
         }
 
         /// <summary>

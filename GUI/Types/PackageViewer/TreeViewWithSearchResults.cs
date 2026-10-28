@@ -1236,11 +1236,12 @@ namespace GUI.Types.PackageViewer
         /// </summary>
         /// <param name="searchText">Value to search for in the TreeView. Matching on this value is based on the search type.</param>
         /// <param name="selectedSearchType">Determines the matching of the value. For example, full/partial text search or full path search.</param>
+        /// <param name="fileType">Optional file type (such as "vmat_c") that matching files must have.</param>
         /// <param name="filterKey">Optional <see cref="ValveResourceFormat.ToolsAssetInfo.ToolsAssetInfo.File.SearchableUserData"/> key that matching files must contain.</param>
         /// <param name="filterValue">Optional value the filter key must equal; when <see langword="null"/>, any value for the key matches.</param>
-        internal void SearchAndFillResults(string searchText, SearchType selectedSearchType, string? filterKey = null, string? filterValue = null)
+        internal void SearchAndFillResults(string searchText, SearchType selectedSearchType, string? fileType = null, string? filterKey = null, string? filterValue = null)
         {
-            var request = new SearchRequest(searchText, selectedSearchType, filterKey, filterValue);
+            var request = new SearchRequest(searchText, selectedSearchType, fileType, filterKey, filterValue);
 
             suppressHistoryRecording = true;
 
@@ -1258,7 +1259,15 @@ namespace GUI.Types.PackageViewer
 
         private void PerformSearch(SearchRequest request)
         {
-            var results = mainTreeView.Search(request.Text, request.Type);
+            // No text lists every file, so the filters alone can narrow it down
+            var results = string.IsNullOrEmpty(request.Text)
+                ? mainTreeView.Search(string.Empty, SearchType.FileNamePartialMatch)
+                : mainTreeView.Search(request.Text, request.Type);
+
+            if (request.FileType != null)
+            {
+                results.RemoveAll(entry => !entry.TypeName.Equals(request.FileType, StringComparison.OrdinalIgnoreCase));
+            }
 
             if (request.FilterKey != null && AssetSearchData != null)
             {
@@ -1846,6 +1855,21 @@ namespace GUI.Types.PackageViewer
             {
                 _ = UpdateLargeImageListIconsAsync(ThumbnailRenderTokenSource!.Token);
             }
+        }
+
+        /// <summary>
+        /// Returns the file types in the package along with how many files of each type there are.
+        /// </summary>
+        internal IEnumerable<KeyValuePair<string, int>> GetFileTypes()
+        {
+            var entries = mainTreeView.VrfGuiContext?.CurrentPackage?.Entries;
+
+            if (entries == null)
+            {
+                return [];
+            }
+
+            return entries.Select(static type => KeyValuePair.Create(type.Key, type.Value.Count));
         }
 
         /// <summary>

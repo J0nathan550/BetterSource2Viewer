@@ -103,7 +103,7 @@ public sealed class TextureExtract
     public bool LatLongCombineCubemap { get; set; } = true;
 
     /// <summary>
-    /// Should the vtex file be ignored. Defaults to true for files flagged as child resources.
+    /// Should the vtex file be ignored. Defaults to true for files flagged as child resources and raw images.
     /// </summary>
     public bool IgnoreVtexFile { get; set; }
 
@@ -115,7 +115,7 @@ public sealed class TextureExtract
     /// <summary>
     /// Gets the output file extension for the texture.
     /// </summary>
-    public string ImageOutputExtension => ExportExr ? ".exr" : ".png";
+    public string ImageOutputExtension => ExportExr ? ".exr" : texture.IsRawAnyImage ? "." + GetImageOutputExtension(texture) : ".png";
 
     /// <summary>
     /// Initializes a new instance of the <see cref="TextureExtract"/> class.
@@ -124,7 +124,7 @@ public sealed class TextureExtract
     {
         texture = (Texture)resource.DataBlock!;
         fileName = resource.FileName!;
-        IgnoreVtexFile = FileExtract.IsChildResource(resource);
+        IgnoreVtexFile = FileExtract.IsChildResource(resource) || texture.IsRawAnyImage;
         isSpriteSheet = texture.ExtraData?.ContainsKey(VTexExtraData.SHEET) ?? false;
         isCubeMap = texture.Flags.HasFlag(VTexFlags.CUBE_TEXTURE);
         isArray = texture.Depth > 1;
@@ -138,7 +138,20 @@ public sealed class TextureExtract
         var rawImage = texture.ReadRawImageData();
         if (rawImage != null)
         {
-            return new ContentFile() { Data = rawImage };
+            if (IgnoreVtexFile)
+            {
+                return new ContentFile() { Data = rawImage };
+            }
+
+            // The embedded image is the original input, so it is written out untouched next to the vtex
+            var rawVtex = new ContentFile()
+            {
+                Data = Encoding.UTF8.GetBytes(ToValveTexture()),
+                FileName = fileName,
+            };
+
+            rawVtex.AddSubFile(Path.GetFileName(GetImageFileName()), () => rawImage);
+            return rawVtex;
         }
 
         Func<SKBitmap, byte[]> ImageEncode = ExportExr ? ToExrImage : ToPngImage;
@@ -925,7 +938,13 @@ public sealed class TextureExtract
     public string ToValveTexture()
     {
         var inputTextureFileName = GetInputFileNameForVtex();
-        var outputFormat = texture.Format.ToString();
+        // Raw image formats are how the compiler stores an input image, the vtex asks for the plain format
+        var outputFormat = texture.Format switch
+        {
+            VTexFormat.PNG_RGBA8888 or VTexFormat.JPEG_RGBA8888 or VTexFormat.WEBP_RGBA8888 => nameof(VTexFormat.RGBA8888),
+            VTexFormat.PNG_DXT5 or VTexFormat.JPEG_DXT5 or VTexFormat.WEBP_DXT5 => nameof(VTexFormat.DXT5),
+            var format => format.ToString(),
+        };
 
         using var datamodel = new Datamodel.Datamodel("vtex", 1);
         datamodel.Root = CDmeVtex.CreateTexture2D([(inputTextureFileName, "rgba", "Box")], outputFormat);
