@@ -60,6 +60,10 @@ namespace GUI.Types.PackageViewer
         private RadioButton? gridRadioButton;
         private bool isGridMode;
         private Avalonia.Controls.Slider? gridSizeSlider;
+        private SearchableComboBox? fileTypeComboBox;
+        private string? fileTypeFilter;
+        private VirtualPackageNode? displayedNode;
+        private bool displayedWithPath;
         private Border? toolbar;
         private Panel? contentHost;
         private PackageListView? fileList;
@@ -289,16 +293,29 @@ namespace GUI.Types.PackageViewer
                 RefreshItems();
             };
 
-            var toolbarGrid = new Grid { ColumnDefinitions = new ColumnDefinitions("36,36,60,60,170") };
+            // Typing in it narrows the types down, packages can hold dozens of them
+            fileTypeComboBox = new SearchableComboBox
+            {
+                Width = 180,
+                VerticalAlignment = VerticalAlignment.Center,
+            };
+            ToolTip.SetTip(fileTypeComboBox, "Show only files of this type");
+            PopulateFileTypes();
+            fileTypeComboBox.SelectionChanged += (_, _) =>
+                SetFileTypeFilter(fileTypeComboBox.SelectedIndex > 0 ? fileTypeComboBox.SelectedItem as string : null);
+
+            var toolbarGrid = new Grid { ColumnDefinitions = new ColumnDefinitions("36,36,60,60,170,Auto") };
             Grid.SetColumn(forwardButton, 1);
             Grid.SetColumn(listRadioButton, 2);
             Grid.SetColumn(gridRadioButton, 3);
             Grid.SetColumn(gridSizeSlider, 4);
+            Grid.SetColumn(fileTypeComboBox, 5);
             toolbarGrid.Children.Add(backButton);
             toolbarGrid.Children.Add(forwardButton);
             toolbarGrid.Children.Add(listRadioButton);
             toolbarGrid.Children.Add(gridRadioButton);
             toolbarGrid.Children.Add(gridSizeSlider);
+            toolbarGrid.Children.Add(fileTypeComboBox);
 
             toolbar = new Border
             {
@@ -471,8 +488,71 @@ namespace GUI.Types.PackageViewer
 
         private bool IsShowingPreview => previewTabs?.IsVisible == true;
 
+        /// <summary>Lists the file types of the package to filter on, keeping the chosen one while it is still there.</summary>
+        private void PopulateFileTypes()
+        {
+            if (fileTypeComboBox == null)
+            {
+                return;
+            }
+
+            var types = vrfGuiContext.CurrentPackage?.Entries?.Keys.Order(SearchWindow.NumericComparer).ToList() ?? [];
+
+            if (fileTypeFilter != null && !types.Contains(fileTypeFilter))
+            {
+                fileTypeFilter = null;
+
+                if (rootNode != null)
+                {
+                    rootNode.FileTypeFilter = null;
+                }
+            }
+
+            fileTypeComboBox.ItemsSource = types.Prepend("All file types").ToList();
+            fileTypeComboBox.SelectedIndex = fileTypeFilter != null ? types.IndexOf(fileTypeFilter) + 1 : 0;
+        }
+
+        /// <summary>Shows only the files of <paramref name="fileType"/> in the tree and the list, or every file when null.</summary>
+        private void SetFileTypeFilter(string? fileType)
+        {
+            if (fileType == fileTypeFilter || rootNode == null)
+            {
+                return;
+            }
+
+            fileTypeFilter = fileType;
+            rootNode.FileTypeFilter = fileType;
+            rootNode.Invalidate();
+            rootNode.IsExpanded = true;
+
+            if (displayedNode == null)
+            {
+                return;
+            }
+
+            // Shows the same folder or search results again, which is not a new place to go back to
+            suppressHistoryRecording = true;
+
+            try
+            {
+                if (displayedWithPath)
+                {
+                    SelectInTree(displayedNode, null);
+                }
+
+                DisplayNodes(displayedNode, displayedWithPath);
+            }
+            finally
+            {
+                suppressHistoryRecording = false;
+            }
+        }
+
         private void DisplayNodes(VirtualPackageNode pkgNode, bool updatePath = true)
         {
+            displayedNode = pkgNode;
+            displayedWithPath = updatePath;
+
             var rows = new List<ListRow>(pkgNode.Folders.Count + pkgNode.Files.Count + 1);
 
             if (pkgNode.Parent != null)
@@ -488,7 +568,11 @@ namespace GUI.Types.PackageViewer
                 });
             }
 
-            foreach (var folder in pkgNode.Folders.Values.OrderBy(static f => f.Name, StringComparer.OrdinalIgnoreCase))
+            var fileType = fileTypeFilter;
+            var folders = pkgNode.Folders.Values.Where(folder => fileType == null || BetterTreeNode.ContainsFileType(folder, fileType));
+            var files = pkgNode.Files.Where(file => fileType == null || file.TypeName == fileType);
+
+            foreach (var folder in folders.OrderBy(static f => f.Name, StringComparer.OrdinalIgnoreCase))
             {
                 rows.Add(new ListRow
                 {
@@ -500,7 +584,7 @@ namespace GUI.Types.PackageViewer
                 });
             }
 
-            foreach (var file in pkgNode.Files.OrderBy(static f => f.GetFileName(), StringComparer.OrdinalIgnoreCase))
+            foreach (var file in files.OrderBy(static f => f.GetFileName(), StringComparer.OrdinalIgnoreCase))
             {
                 rows.Add(new ListRow
                 {
@@ -1517,6 +1601,8 @@ namespace GUI.Types.PackageViewer
                 return;
             }
 
+            // Edits can add or remove whole file types
+            PopulateFileTypes();
             rootNode.Invalidate();
             rootNode.IsExpanded = true;
 

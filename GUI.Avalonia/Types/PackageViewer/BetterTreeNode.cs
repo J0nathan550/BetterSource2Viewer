@@ -69,6 +69,17 @@ namespace GUI.Types.PackageViewer
         public IEnumerable<BetterTreeNode> ChildNodes => Items.OfType<BetterTreeNode>();
 
         /// <summary>
+        /// The file type (such as "vmat_c") that the children are limited to, or null for every file. Folders that hold no
+        /// such file are left out. Children created from here on take it over.
+        /// </summary>
+        public string? FileTypeFilter { get; set; }
+
+        /// <summary>Whether <paramref name="folder"/> or any folder below it holds a file of <paramref name="fileType"/>.</summary>
+        internal static bool ContainsFileType(VirtualPackageNode folder, string fileType)
+            => folder.Files.Exists(file => file.TypeName == fileType)
+                || folder.Folders.Values.Any(subFolder => ContainsFileType(subFolder, fileType));
+
+        /// <summary>
         /// Laid out like the WinForms tree: the top level has no expander, the levels below it have one in front of
         /// their icon, and only the icon and name are highlighted when selected.
         /// </summary>
@@ -163,15 +174,21 @@ namespace GUI.Types.PackageViewer
             Items.Clear();
             PkgNode.CreatedNode = this;
 
-            var folders = new List<VirtualPackageNode>(PkgNode.Folders.Values);
+            var fileType = FileTypeFilter;
+
+            var folders = fileType == null
+                ? new List<VirtualPackageNode>(PkgNode.Folders.Values)
+                : [.. PkgNode.Folders.Values.Where(folder => ContainsFileType(folder, fileType))];
             folders.Sort(static (a, b) => string.Compare(a.Name, b.Name, StringComparison.OrdinalIgnoreCase));
 
             foreach (var folder in folders)
             {
-                Items.Add(new BetterTreeNode(folder.Name, folder));
+                Items.Add(new BetterTreeNode(folder.Name, folder) { FileTypeFilter = fileType });
             }
 
-            var files = new List<PackageEntry>(PkgNode.Files);
+            var files = fileType == null
+                ? new List<PackageEntry>(PkgNode.Files)
+                : PkgNode.Files.FindAll(file => file.TypeName == fileType);
             files.Sort(static (a, b) => string.Compare(a.GetFileName(), b.GetFileName(), StringComparison.OrdinalIgnoreCase));
 
             foreach (var file in files)
