@@ -1304,56 +1304,5 @@ namespace GUI
         {
             ShowVpcfCompilerDialog();
         }
-        private void OnD2PfxItemClick(object? sender, EventArgs e)
-        {
-            ShowD2PfxTab();
-        }
-
-        /// <summary>
-        /// Открывает сайт dota2pornfx во вкладке главного окна или переключается на неё.
-        /// </summary>
-        private int d2pfxImageIndex = -1;
-
-        public void ShowD2PfxTab()
-        {
-            // Если вкладка уже есть — переключаемся
-            foreach (TabPage existingTab in mainTabs.TabPages)
-            {
-                if (existingTab.Text == "dota2prnfx")
-                {
-                    mainTabs.SelectedTab = existingTab;
-                    return;
-                }
-            }
-
-            // Добавляем иконку в ImageList по безопасному индексу (без глючного ContainsKey)
-            if (d2pfxImageIndex == -1 && mainTabs.ImageList != null)
-            {
-                var iconBitmap = GUI.Controls.D2PfxBrowserControl.GetTabIcon(mainTabs.ImageList.ImageSize.Width, mainTabs.ImageList.ImageSize.Height);
-                if (iconBitmap != null)
-                {
-                    mainTabs.ImageList.Images.Add(iconBitmap);
-                    d2pfxImageIndex = mainTabs.ImageList.Images.Count - 1;
-                }
-            }
-
-            // Создаем вкладку с привязанным индексом иконки
-            var newTab = new TabPage("dota2prnfx")
-            {
-                UseVisualStyleBackColor = true,
-                Padding = Padding.Empty,
-                Margin = Padding.Empty,
-                ImageIndex = d2pfxImageIndex // <-- Безопасная установка по индексу
-            };
-
-            var browser = new GUI.Controls.D2PfxBrowserControl
-            {
-                Dock = DockStyle.Fill
-            };
-            newTab.Controls.Add(browser);
-
-            mainTabs.TabPages.Add(newTab);
-            mainTabs.SelectedTab = newTab;
-        }
     }
 }
