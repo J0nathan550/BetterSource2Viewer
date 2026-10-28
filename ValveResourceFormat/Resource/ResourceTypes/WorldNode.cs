@@ -23,33 +23,25 @@ namespace ValveResourceFormat.ResourceTypes
         /// Value may be null if the node has no layer system.
         /// </summary>
         public IReadOnlyList<long>? SceneObjectLayerIndices
-            => Data.ContainsKey("m_sceneObjectLayerIndices")
-                ? Data.GetIntegerArray("m_sceneObjectLayerIndices")
-                : null;
+            => Data.GetArray<long>("m_sceneObjectLayerIndices");
 
         /// <summary>
         /// Gets the aggregate scene objects.
         /// </summary>
         public IReadOnlyList<KVObject> AggregateSceneObjects
-            => Data.ContainsKey("m_aggregateSceneObjects")
-                ? Data.GetArray("m_aggregateSceneObjects")
-                : [];
+            => Data.GetArray("m_aggregateSceneObjects") ?? [];
 
         /// <summary>
         /// Gets the decals placed with the map, each a box that projects a material onto what is inside it.
         /// </summary>
         public IReadOnlyList<KVObject> InfoOverlays
-            => Data.ContainsKey("m_infoOverlays")
-                ? Data.GetArray("m_infoOverlays")
-                : [];
+            => Data.GetArray("m_infoOverlays") ?? [];
 
         /// <summary>
         /// Gets the clutter scene objects.
         /// </summary>
         public IReadOnlyList<KVObject> ClutterSceneObjects
-            => Data.ContainsKey("m_clutterSceneObjects")
-                ? Data.GetArray("m_clutterSceneObjects")
-                : [];
+            => Data.GetArray("m_clutterSceneObjects") ?? [];
 
         /// <summary>
         /// One entry of <see cref="ClutterSceneObjects"/>: a model drawn at many compiled instance
@@ -117,7 +109,7 @@ namespace ValveResourceFormat.ResourceTypes
 
                 InstancePositions = [.. data.GetArray("m_instancePositions").Select(static position => position.ToVector3())];
                 InstanceScales = data.GetFloatArray("m_instanceScales");
-                InstanceOrientations = [.. data.GetIntegerArray("m_InstanceOrientations32").Select(static packed => UnpackQuaternion32(unchecked((uint)packed)))];
+                InstanceOrientations = [.. data.GetUnsignedIntegerArray<uint>("m_InstanceOrientations32").Select(UnpackQuaternion32)];
                 InstanceTints = [.. data.GetArray("m_instanceTintSrgb").Select(static tint => tint.ToVector3())];
                 Tiles = [.. data.GetArray("m_tiles").Select(static tile => new Tile(tile.GetInt32Property("m_nFirstInstance"), tile.GetInt32Property("m_nLastInstance")))];
             }
@@ -150,19 +142,19 @@ namespace ValveResourceFormat.ResourceTypes
         /// </summary>
         /// <param name="SceneObjectIndex">Index into <see cref="SceneObjects"/>.</param>
         /// <param name="SubSceneObject">Index of the mesh within the scene object's model.</param>
-        /// <param name="DrawCallIndex">Index of the draw call within the mesh.</param>
+        /// <param name="DrawCallIndex">Index of the draw call within the mesh; an index the mesh does not have binds nothing.</param>
         /// <param name="BufferIndex">Index into <see cref="GetExtraVertexStreams"/>.</param>
         /// <seealso href="https://s2v.app/SchemaExplorer/cs2/worldrenderer/ExtraVertexStreamOverride_t">ExtraVertexStreamOverride_t</seealso>
-        public readonly record struct ExtraVertexStreamOverride(int SceneObjectIndex, int SubSceneObject, int DrawCallIndex, int BufferIndex);
+        public readonly record struct ExtraVertexStreamOverride(uint SceneObjectIndex, uint SubSceneObject, uint DrawCallIndex, int BufferIndex);
 
         /// <summary>
         /// Gets the extra vertex streams bound to single draw calls of <see cref="SceneObjects"/>.
         /// </summary>
         public IEnumerable<ExtraVertexStreamOverride> ExtraVertexStreamOverrides
             => (Data.GetArray("m_extraVertexStreamOverrides") ?? []).Select(static streamOverride => new ExtraVertexStreamOverride(
-                streamOverride.GetInt32Property("m_nSceneObjectIndex"),
-                streamOverride.GetInt32Property("m_nSubSceneObject"),
-                streamOverride.GetInt32Property("m_nDrawCallIndex"),
+                streamOverride.GetUInt32Property("m_nSceneObjectIndex"),
+                streamOverride.GetUInt32Property("m_nSubSceneObject"),
+                streamOverride.GetUInt32Property("m_nDrawCallIndex"),
                 streamOverride.GetSubCollection("m_extraBufferBinding").GetInt32Property("m_hBuffer")));
 
         /// <summary>
@@ -177,35 +169,79 @@ namespace ValveResourceFormat.ResourceTypes
         }
 
         /// <summary>
-        /// A material that replaces the one of a single draw call of one of <see cref="SceneObjects"/>.
+        /// A material that replaces the one of a single draw call of one of <see cref="SceneObjects"/>,
+        /// or of all its draw calls when <see cref="DrawCallIndex"/> is <see cref="AllDrawCalls"/>.
         /// </summary>
         /// <param name="SceneObjectIndex">Index into <see cref="SceneObjects"/>.</param>
-        /// <param name="SubSceneObject">Index of the mesh within the scene object's model.</param>
-        /// <param name="DrawCallIndex">Index of the draw call within the mesh.</param>
+        /// <param name="SubSceneObject">Index of the mesh within the scene object's model, ignored for <see cref="AllDrawCalls"/>.</param>
+        /// <param name="DrawCallIndex">Index of the draw call within the mesh, or <see cref="AllDrawCalls"/>.</param>
         /// <param name="Material">Name of the replacement material.</param>
         /// <seealso href="https://s2v.app/SchemaExplorer/cs2/worldrenderer/MaterialOverride_t">MaterialOverride_t</seealso>
-        public readonly record struct MaterialOverride(int SceneObjectIndex, int SubSceneObject, int DrawCallIndex, string Material);
+        public readonly record struct MaterialOverride(uint SceneObjectIndex, uint SubSceneObject, uint DrawCallIndex, string Material)
+        {
+            /// <summary>
+            /// The <see cref="DrawCallIndex"/> that replaces the material of every draw call of every mesh of the model.
+            /// The first such override of a scene object wins and its single draw call overrides are not applied.
+            /// </summary>
+            public const uint AllDrawCalls = uint.MaxValue;
+
+            /// <summary>
+            /// Gets whether this override replaces the material of every draw call of the model.
+            /// </summary>
+            public bool IsWholeModel => DrawCallIndex == AllDrawCalls;
+
+            /// <summary>
+            /// Gets the material that replaces one draw call of a scene object's model, or <see langword="null"/> when it keeps its own.
+            /// </summary>
+            /// <param name="materialOverrides">The overrides of the scene object.</param>
+            /// <param name="meshIndex">Index of the mesh within the model.</param>
+            /// <param name="drawCallIndex">Index of the draw call within the mesh, counted over all its scene objects.</param>
+            public static string? Find(IReadOnlyList<MaterialOverride> materialOverrides, int meshIndex, int drawCallIndex)
+            {
+                ArgumentNullException.ThrowIfNull(materialOverrides);
+
+                string? material = null;
+
+                foreach (var materialOverride in materialOverrides)
+                {
+                    if (string.IsNullOrEmpty(materialOverride.Material))
+                    {
+                        continue;
+                    }
+
+                    if (materialOverride.IsWholeModel)
+                    {
+                        return materialOverride.Material;
+                    }
+
+                    if (materialOverride.SubSceneObject == meshIndex && materialOverride.DrawCallIndex == drawCallIndex)
+                    {
+                        material = materialOverride.Material;
+                    }
+                }
+
+                return material;
+            }
+        }
 
         /// <summary>
-        /// Gets the materials that replace those of single draw calls of <see cref="SceneObjects"/>.
+        /// Gets the materials that replace those of draw calls of <see cref="SceneObjects"/>.
         /// </summary>
         public IEnumerable<MaterialOverride> MaterialOverrides
             => (Data.GetArray("m_materialOverrides") ?? []).Select(static materialOverride => new MaterialOverride(
-                materialOverride.GetInt32Property("m_nSceneObjectIndex"),
-                materialOverride.GetInt32Property("m_nSubSceneObject"),
-                materialOverride.GetInt32Property("m_nDrawCallIndex"),
+                materialOverride.GetUInt32Property("m_nSceneObjectIndex"),
+                materialOverride.GetUInt32Property("m_nSubSceneObject"),
+                materialOverride.GetUInt32Property("m_nDrawCallIndex"),
                 materialOverride.GetStringProperty("m_pMaterial")));
 
         /// <summary>
         /// Gets the visibility cluster ids that scene objects and aggregate fragments with precomputed
         /// cluster membership index into.
         /// </summary>
-        public IReadOnlyList<long> VisClusterMembership
-            => visClusterMembership ??= Data.ContainsKey("m_visClusterMembership")
-                ? Data.GetIntegerArray("m_visClusterMembership")
-                : [];
+        public IReadOnlyList<ushort> VisClusterMembership
+            => visClusterMembership ??= Data.GetArray<ushort>("m_visClusterMembership") ?? [];
 
-        private long[]? visClusterMembership;
+        private ushort[]? visClusterMembership;
 
         /// <summary>
         /// Gets the visibility clusters the compiler assigned to one of <see cref="SceneObjects"/>, or
@@ -261,7 +297,7 @@ namespace ValveResourceFormat.ResourceTypes
 
             for (var i = 0; i < clusters.Length; i++)
             {
-                clusters[i] = (ushort)membership[offset + i];
+                clusters[i] = membership[offset + i];
             }
 
             return clusters;
@@ -271,8 +307,6 @@ namespace ValveResourceFormat.ResourceTypes
         /// Gets the layer names.
         /// </summary>
         public IReadOnlyList<string> LayerNames
-            => Data.ContainsKey("m_layerNames")
-                ? Data.GetArray<string>("m_layerNames")
-                : [];
+            => Data.GetArray<string>("m_layerNames") ?? [];
     }
 }

@@ -1873,7 +1873,7 @@ namespace GUI.Forms
                 if (package.FindEntry(path) is { } entry)
                 {
                     using var resource = new Resource { FileName = path };
-                    resource.Read(GameFileLoader.GetPackageEntryStream(package, entry));
+                    resource.Read(package.GetMemoryMappedStreamIfPossible(entry));
 
                     if (resource.DataBlock is Model modelData)
                     {
@@ -2816,7 +2816,7 @@ namespace GUI.Forms
                 }
 
                 using var resource = new Resource { FileName = path };
-                resource.Read(GameFileLoader.GetPackageEntryStream(package, entry));
+                resource.Read(package.GetMemoryMappedStreamIfPossible(entry));
 
                 if (resource.DataBlock is not Texture texture)
                 {
@@ -2868,7 +2868,7 @@ namespace GUI.Forms
                 if (package.FindEntry(path) is { } entry)
                 {
                     using var resource = new Resource { FileName = path };
-                    resource.Read(GameFileLoader.GetPackageEntryStream(package, entry));
+                    resource.Read(package.GetMemoryMappedStreamIfPossible(entry));
 
                     if (resource.DataBlock is Texture texture)
                     {

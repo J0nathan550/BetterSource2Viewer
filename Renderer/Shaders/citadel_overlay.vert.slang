@@ -18,7 +18,7 @@ in vec2 vTEXCOORD;
 
 #if D_BAKED_LIGHTING_FROM_LIGHTMAP == 1
     in vec2 vLightmapUV;
-    out vec3 vLightmapUVScaled;
+    out vec4 vLightmapUVScaled;
 #elif D_BAKED_LIGHTING_FROM_VERTEX_STREAM == 1
     in vec4 vPerVertexLighting; // COLOR1
     out vec3 vPerVertexLightingOut;
@@ -26,8 +26,7 @@ in vec2 vTEXCOORD;
 
 out vec3 vFragPosition;
 out vec3 vNormalOut;
-out vec3 vTangentOut;
-out vec3 vBitangentOut;
+out vec4 vTangentOut;
 centroid out vec3 vCentroidNormalOut;
 out vec2 vTexCoordOut;
 centroid out vec4 vVertexColorOut;
@@ -44,11 +43,11 @@ void main()
     gl_Position = g_matWorldToProjection * vec4(fragPosition, 1.0);
     vFragPosition = fragPosition;
 
-    ComputeWorldTangentFrame(skinTransform, vNormalOut, vTangentOut, vBitangentOut);
+    ComputeWorldTangentFrame(skinTransform, vNormalOut, vTangentOut);
     vCentroidNormalOut = vNormalOut;
 
     #if D_BAKED_LIGHTING_FROM_LIGHTMAP == 1
-        vLightmapUVScaled = vec3(vLightmapUV * g_vLightmapUvScale.xy, 0);
+        vLightmapUVScaled = GetLightmapCoordinates(vLightmapUV);
     #elif D_BAKED_LIGHTING_FROM_VERTEX_STREAM == 1
         vec3 Light = vPerVertexLighting.rgb * 6.0 * vPerVertexLighting.a;
         vPerVertexLightingOut = pow2(Light);

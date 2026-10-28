@@ -280,16 +280,14 @@ namespace ValveResourceFormat.ResourceTypes
                 return false;
             }
 
-            var split = input.Split(' ');
+            Span<float> components = stackalloc float[2];
 
-            if (split.Length != 2
-                || !float.TryParse(split[0], NumberStyles.Float, CultureInfo.InvariantCulture, out var x)
-                || !float.TryParse(split[1], NumberStyles.Float, CultureInfo.InvariantCulture, out var y))
+            if (!TryParseComponents(input, components))
             {
                 return false;
             }
 
-            value = new Vector2(x, y);
+            value = new Vector2(components[0], components[1]);
             return true;
         }
 
@@ -297,12 +295,13 @@ namespace ValveResourceFormat.ResourceTypes
         /// Parses a string representation of a Vector3.
         /// </summary>
         /// <param name="input">The input string.</param>
-        /// <returns>The parsed vector, or zero if the input is not three numbers.</returns>
+        /// <returns>The parsed vector, or zero if the input does not start with three numbers.</returns>
         public static Vector3 ParseVector3(string input)
             => TryParseVector3(input, out var value) ? value : default;
 
         /// <summary>
-        /// Parses a string representation of a Vector3, reporting whether it was one.
+        /// Parses a string representation of a Vector3, reporting whether it was one. Numbers after the third
+        /// are ignored, so a color with its alpha, such as "255 128 0 255", reads as its color.
         /// </summary>
         /// <remarks>
         /// Callers with a meaningful default need this rather than <see cref="ParseVector3"/>, whose zero
@@ -310,7 +309,7 @@ namespace ValveResourceFormat.ResourceTypes
         /// than to one collapses the thing being scaled.
         /// </remarks>
         /// <param name="input">The input string.</param>
-        /// <param name="value">The parsed vector, or zero if the input is not three numbers.</param>
+        /// <param name="value">The parsed vector, or zero if the input does not start with three numbers.</param>
         /// <returns>Whether the input parsed.</returns>
         public static bool TryParseVector3(string input, out Vector3 value)
         {
@@ -321,18 +320,39 @@ namespace ValveResourceFormat.ResourceTypes
                 return false;
             }
 
-            var split = input.Split(' ');
+            Span<float> components = stackalloc float[3];
 
-            if (split.Length != 3
-                || !float.TryParse(split[0], NumberStyles.Float, CultureInfo.InvariantCulture, out var x)
-                || !float.TryParse(split[1], NumberStyles.Float, CultureInfo.InvariantCulture, out var y)
-                || !float.TryParse(split[2], NumberStyles.Float, CultureInfo.InvariantCulture, out var z))
+            if (!TryParseComponents(input, components, ignoreTrailing: true))
             {
                 return false;
             }
 
-            value = new Vector3(x, y, z);
+            value = new Vector3(components[0], components[1], components[2]);
             return true;
+        }
+
+        // With ignoreTrailing, whatever follows the components is not read
+        private static bool TryParseComponents(ReadOnlySpan<char> input, Span<float> components, bool ignoreTrailing = false)
+        {
+            var count = 0;
+
+            foreach (var range in input.Split(' '))
+            {
+                if (count == components.Length && ignoreTrailing)
+                {
+                    break;
+                }
+
+                if (count == components.Length
+                    || !float.TryParse(input[range], NumberStyles.Float, CultureInfo.InvariantCulture, out components[count]))
+                {
+                    return false;
+                }
+
+                count++;
+            }
+
+            return count == components.Length;
         }
     }
 }

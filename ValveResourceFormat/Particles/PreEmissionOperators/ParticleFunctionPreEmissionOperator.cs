@@ -1,34 +1,26 @@
 namespace ValveResourceFormat.Particles.PreEmissionOperators
 {
     /// <summary>
-    /// Base class for pre-emission operators, which run once per frame before particles are emitted
+    /// Base class for pre-emission operators, which run once per step before particles are emitted
     /// and are used to modify particle system state such as control point positions and orientations.
     /// </summary>
     /// <seealso href="https://s2v.app/SchemaExplorer/cs2/particles/CParticleFunctionPreEmission">CParticleFunctionPreEmission</seealso>
     abstract class ParticleFunctionPreEmissionOperator : ParticleFunction
     {
         /// <summary>
-        /// Whether this operator only runs on the system's first simulated step instead of every frame.
+        /// Whether this operator runs only in the system's first frame, before the initial particles,
+        /// and never in the steps after it.
         /// </summary>
-        public virtual bool RunOnce { get; }
-
-        /// <summary>
-        /// Whether this operator has already run. Only consulted when <see cref="RunOnce"/> is set,
-        /// and cleared when the system restarts.
-        /// </summary>
-        public bool HasRun { get; set; }
+        public bool RunOnce { get; }
 
         protected ParticleFunctionPreEmissionOperator(ParticleDefinitionParser parse) : base(parse)
         {
             RunOnce = parse.Boolean("m_bRunOnce", false);
         }
 
-        // "remap average scalar value to cp" requires knowing particles as well as system status...s
-        public abstract void Operate(ref ParticleSystemState particleSystemState, float frameTime);
-
-        /// <summary>Rebuilds any per-instance running state when the system starts or restarts.</summary>
-        public virtual void Reset()
-        {
-        }
+        /// <summary>
+        /// Runs the operator on the system state, before any particles are emitted or simulated this step.
+        /// </summary>
+        public abstract void Operate(ParticleSystemState particleSystemState, float frameTime, float strength);
     }
 }

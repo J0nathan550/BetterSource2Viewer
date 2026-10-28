@@ -12,8 +12,8 @@ namespace ValveResourceFormat.Renderer.Particles.Renderers
     /// share the decal system's room with every other decal and make way for newer ones like them.
     /// </summary>
     /// <remarks>
-    /// Material variables, sheet animation and the world, water and character projection switches are not
-    /// applied: the decals project onto whatever the scene depth holds.
+    /// Material variables and sheet animation are not applied. The decals project onto whatever the scene
+    /// depth holds, and nothing at all when they do not project onto the world.
     /// </remarks>
     /// <seealso href="https://s2v.app/SchemaExplorer/cs2/particles/C_OP_RenderProjected">C_OP_RenderProjected</seealso>
     internal class RenderProjected : ParticleFunctionRenderer
@@ -26,14 +26,21 @@ namespace ValveResourceFormat.Renderer.Particles.Renderers
         private readonly float minProjectionDepth = -128f;
         private readonly float maxProjectionDepth = 128f;
         private readonly INumberProvider materialSelection = new LiteralNumberProvider(0f);
-        private readonly INumberProvider rollScale = new LiteralNumberProvider(1f);
-        private readonly ParticleField alpha2Field = ParticleField.AlphaAlternate;
 
-        private readonly PlacedPerParticle<(ProjectedDecalHandle Handle, int Material)> placed = new();
+        /// <summary>
+        /// Whether the decals project onto the world. The scene's decal pass cannot tell the world from the
+        /// other surfaces it projects onto, so without it nothing is projected.
+        /// </summary>
+        private readonly bool projectWorld = true;
+
+        /// <summary>The decal of each particle with a handle, at the slot its handle names less one.</summary>
+        private readonly ParticleHandlePool<(ProjectedDecalHandle Handle, int Material)> pool = new();
+        private readonly Action<(ProjectedDecalHandle Handle, int Material)> removeDecal;
 
         public RenderProjected(ParticleDefinitionParser parse, Scene scene) : base(parse, scene)
         {
             decals = scene.ProjectedDecals;
+            removeDecal = entry => decals.Remove(entry.Handle);
 
             var registered = new List<int>();
 
@@ -52,8 +59,11 @@ namespace ValveResourceFormat.Renderer.Particles.Renderers
             minProjectionDepth = parse.Float("m_flMinProjectionDepth", minProjectionDepth);
             maxProjectionDepth = parse.Float("m_flMaxProjectionDepth", maxProjectionDepth);
             materialSelection = parse.NumberProvider("m_flMaterialSelection", materialSelection);
-            rollScale = parse.NumberProvider("m_flRollScale", rollScale);
-            alpha2Field = parse.ParticleField("m_nAlpha2Field", alpha2Field);
+            projectWorld = parse.Boolean("m_bProjectWorld", projectWorld);
+
+            // Projecting onto characters (m_bProjectCharacter) and water (m_bProjectWater) is left to the host.
+            // The decals have no sheet animation for m_flAnimationTimeScale to speed up, and m_MaterialVars
+            // name dynamic material attributes, which the decal materials do not take per decal.
         }
 
         /// <inheritdoc/>
@@ -62,43 +72,60 @@ namespace ValveResourceFormat.Renderer.Particles.Renderers
         /// <inheritdoc/>
         public override void Act(ParticleCollection particles, ParticleSystemState systemState)
         {
-            if (materials.Length == 0)
+            if (materials.Length == 0 || !projectWorld)
             {
                 return;
             }
 
-            var radiusScale = RadiusScale.NextNumber(systemState);
-            var alphaScale = AlphaScale.NextNumber(systemState);
-            var colorScale = ColorScale.NextVector(systemState);
-            var roll = rollScale.NextNumber(systemState);
+            var column = pool.Claim(particles);
+            pool.ReleaseDead(particles, column, removeDecal);
 
-            placed.BeginFrame();
+            var scales = EvaluateScales(systemState);
+            var current = particles.Current;
+            var handles = particles.Handles(column);
+            var positions = current.ReadVectors(ParticleField.Position);
+            var normals = current.ReadVectors(ParticleField.Normal);
+            var colors = current.ReadVectors(ParticleField.Color);
+            var radii = current.ReadFloats(ParticleField.Radius);
+            var rolls = current.ReadFloats(ParticleField.Roll);
+            var alphas = current.ReadFloats(ParticleField.Alpha);
+            var alpha2s = ReadAlpha2(current);
+            var materialSelections = materialSelection.Fill(current, systemState);
 
-            foreach (ref var particle in particles.Current)
+            for (var i = 0; i < current.Length; i++)
             {
-                var width = particle.Radius * radiusScale * 2f;
+                var slot = handles[i] - 1;
+                var width = radii[i] * scales.Radius * 2f;
 
                 if (width <= 0f)
                 {
+                    if (slot >= 0)
+                    {
+                        FreeSlot(slot);
+                        handles[i] = 0;
+                    }
+
                     continue;
                 }
 
-                var material = materials[Math.Clamp((int)materialSelection.NextNumber(ref particle, systemState), 0, materials.Length - 1)];
+                var material = materials[Math.Clamp((int)materialSelections[i], 0, materials.Length - 1)];
 
                 if (material < 0)
                 {
-                    placed.Keep(particle.UniqueParticleId);
                     continue;
                 }
 
-                var box = DecalBox(ref particle, width, roll);
-                var tint = new Vector4(particle.Color * colorScale, particle.Alpha * particle.GetScalar(alpha2Field) * alphaScale);
+                var box = DecalBox(positions[i], normals[i], width, scales.Roll * rolls[i]);
+                // The colour and alpha are truncated to bytes without a clamp, so a value past 1 wraps around
+                var alphaByte = (byte)(int)(alphas[i] * alpha2s[i] * 255f);
+                var tint = ParticleColorBlend.Apply(ColorBlendType, ParticleColorBlend.ToWrappedBytes(colors[i], alphaByte), scales.Color) / 255f;
 
-                if (placed.TryGetValue(particle.UniqueParticleId, out var entry))
+                if (slot >= 0)
                 {
+                    var entry = pool[slot];
+
                     if (entry.Material == material && decals.Move(entry.Handle, box, tint))
                     {
-                        placed.Keep(particle.UniqueParticleId);
                         continue;
                     }
 
@@ -107,32 +134,73 @@ namespace ValveResourceFormat.Renderer.Particles.Renderers
 
                 var handle = decals.AddFollowing(material, box, tint, flipHorizontal);
 
-                if (handle.IsValid)
+                if (!handle.IsValid)
                 {
-                    placed.Keep(particle.UniqueParticleId, (handle, material));
-                }
-            }
+                    if (slot >= 0)
+                    {
+                        FreeSlot(slot);
+                        handles[i] = 0;
+                    }
 
-            foreach (var (handle, _) in placed.Sweep())
-            {
-                decals.Remove(handle);
+                    continue;
+                }
+
+                if (slot < 0)
+                {
+                    handles[i] = pool.Allocate((handle, material)) + 1;
+                }
+                else
+                {
+                    pool[slot] = (handle, material);
+                }
             }
         }
 
+        /// <summary>Removes the decal at a slot and makes the slot available again.</summary>
+        private void FreeSlot(int slot)
+        {
+            decals.Remove(pool[slot].Handle);
+            pool.Free(slot);
+        }
+
         /// <inheritdoc/>
-        public override void Hide() => Delete();
+        public override void Hide(ParticleCollection particles)
+        {
+            if (pool.Column is { } column)
+            {
+                pool.ReleaseDead(particles, column, removeDecal);
+            }
+
+            RemoveDecals();
+        }
+
+        /// <summary>Removes every decal, keeping the slots with their particles.</summary>
+        private void RemoveDecals()
+        {
+            for (var i = 0; i < pool.Count; i++)
+            {
+                decals.Remove(pool[i].Handle);
+                pool[i] = default;
+            }
+        }
 
         /// <summary>
-        /// The box the particle's decal projects through: as wide as the particle, turned by its roll,
-        /// projecting along its normal when authored to and straight down otherwise. The depth range,
-        /// when enabled, places the box along the projection axis instead of centring it on the particle.
+        /// The box the particle's decal projects through: as wide as the particle, projecting along its
+        /// normal when authored to and straight down otherwise. The texture's top runs along the normal
+        /// crossed with world Y, or world X for a normal close to Y, or along -X when projecting down,
+        /// turned back about the projection axis by the particle's roll. The depth range, when enabled,
+        /// places the box along the projection axis instead of centring it on the particle.
         /// </summary>
-        private Matrix4x4 DecalBox(ref Particle particle, float width, float roll)
+        private Matrix4x4 DecalBox(Vector3 position, Vector3 particleNormal, float width, float roll)
         {
-            var normal = orientToNormal ? particle.Normal : Vector3.UnitZ;
+            var normal = orientToNormal ? particleNormal : Vector3.UnitZ;
+            var top = orientToNormal
+                ? Vector3.Cross(normal.Y > 0.99f ? Vector3.UnitX : Vector3.UnitY, normal)
+                : -Vector3.UnitX;
+
             normal = normal.LengthSquared() > 1e-8f ? Vector3.Normalize(normal) : Vector3.UnitZ;
 
-            var center = particle.Position;
+            var center = position;
             var depth = width;
 
             if (depthControls)
@@ -141,8 +209,7 @@ namespace ValveResourceFormat.Renderer.Particles.Renderers
                 depth = MathF.Max(maxProjectionDepth - minProjectionDepth, 1f);
             }
 
-            var reference = MathF.Abs(normal.Z) < 0.9f ? Vector3.UnitZ : Vector3.UnitX;
-            var up = Vector3.Transform(Vector3.Normalize(Vector3.Cross(normal, reference)), Quaternion.CreateFromAxisAngle(normal, particle.Rotation.Z * roll));
+            var up = Vector3.Transform(top, Quaternion.CreateFromAxisAngle(normal, -roll));
 
             return ProjectedDecalSystem.CreateBoxTransform(center, normal, up, new Vector3(width, width, depth));
         }
@@ -156,12 +223,8 @@ namespace ValveResourceFormat.Renderer.Particles.Renderers
         /// <inheritdoc/>
         public override void Delete()
         {
-            foreach (var (handle, _) in placed.Values)
-            {
-                decals.Remove(handle);
-            }
-
-            placed.Clear();
+            RemoveDecals();
+            pool.Clear();
         }
     }
 }

@@ -1,3 +1,5 @@
+using System.Numerics.Tensors;
+
 namespace ValveResourceFormat.Particles.Operators
 {
     /// <summary>
@@ -19,29 +21,67 @@ namespace ValveResourceFormat.Particles.Operators
             fadeEndTime = parse.Float("m_flFadeEndTime", fadeEndTime);
             fieldOutput = parse.ParticleField("m_nFieldOutput", fieldOutput);
             easeInOut = parse.Boolean("m_bEaseInOut", easeInOut);
+
+            parse.AddInitialRead(fieldOutput);
         }
+
+        /// <inheritdoc/>
+        public override ulong StoredFields => fieldOutput.Mask();
 
         public override void Operate(ParticleCollection particles, float frameTime, ParticleSystemState particleSystemState, float strength)
         {
-            foreach (ref var particle in particles.Current)
+            if (fadeEndTime == fadeStartTime)
             {
-                var time = particle.NormalizedAge;
+                return;
+            }
 
-                if (time >= fadeStartTime && time <= fadeEndTime)
+            if (!ParticleBuffer.IsVector(fieldOutput))
+            {
+                return;
+            }
+
+            var current = particles.Current;
+            var lifetimes = current.ReadFloats(ParticleField.LifeDuration);
+            var colors = current.Vectors(fieldOutput);
+            var initialColors = particles.Initial.ReadVectors(fieldOutput);
+
+            // Each age is replaced by its fade fraction, which particles without a lifetime never use
+            var fractions = current.ReadAges();
+            TensorPrimitives.Divide(fractions, lifetimes, fractions);
+            TensorPrimitives.Subtract(fractions, fadeStartTime, fractions);
+            TensorPrimitives.Divide(fractions, fadeEndTime - fadeStartTime, fractions);
+            TensorPrimitives.Clamp(fractions, 0f, 1f, fractions);
+
+            if (easeInOut)
+            {
+                var easing = ParticleScratch.Floats(fractions.Length);
+                TensorPrimitives.Multiply(fractions, -2f, easing);
+                TensorPrimitives.Add(easing, 3f, easing);
+                TensorPrimitives.Multiply(easing, fractions, easing);
+                TensorPrimitives.Multiply(easing, fractions, fractions);
+            }
+
+            for (var i = 0; i < colors.Length; i++)
+            {
+                var initialColor = initialColors[i];
+                var color = colors[i];
+
+                if (lifetimes[i] > 0f)
                 {
-                    var t = MathUtils.Remap(time, fadeStartTime, fadeEndTime);
-                    if (easeInOut)
-                    {
-                        t = MathUtils.Smoothstep(0f, 1f, t);
-                    }
-
-                    // Interpolate from constant color to fade color; strength blends from the initial color
-                    var initialColor = particle.GetInitialVector(particles, ParticleField.Color);
-                    var faded = Vector3.Lerp(initialColor, colorFade, t);
-
-                    particle.SetVector(fieldOutput, Vector3.Lerp(initialColor, faded, strength));
+                    color = MathUtils.Lerp(initialColor, colorFade, fractions[i]);
                 }
+
+                colors[i] = BlendByStrength(initialColor, color, strength);
             }
         }
+
+        /// <summary>
+        /// How far into the fade from <paramref name="start"/> to <paramref name="end"/> a normalized age
+        /// is, eased along a smoothstep when asked to.
+        /// </summary>
+        internal static float FadeFraction(float normalizedAge, float start, float end, bool easeInOut)
+            => easeInOut
+                ? MathUtils.Smoothstep(start, end, normalizedAge)
+                : MathUtils.Saturate(MathUtils.Remap(normalizedAge, start, end));
     }
 }

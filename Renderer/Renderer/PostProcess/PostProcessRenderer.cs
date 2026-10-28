@@ -21,11 +21,16 @@ namespace ValveResourceFormat.Renderer.PostProcess
         private RenderTexture? combinedLut;
         private static readonly string[] LutSamplerNames =
             ["g_tColorCorrection0", "g_tColorCorrection1", "g_tColorCorrection2", "g_tColorCorrection3"];
-        private readonly OutlineRenderer Outline;
 
         /// <summary>Gets or sets the blue noise texture used for dithering in the tonemap pass.</summary>
         public RenderTexture? BlueNoise { get; set; }
         private readonly Random random = new();
+
+        /// <summary>
+        /// Gets or sets whether the dither pattern moves every frame. When off it holds still, so two
+        /// renders of the same scene produce the same pixels.
+        /// </summary>
+        internal bool AnimateDither { get; set; } = true;
 
         /// <summary>Gets or sets the scene average luminance used for auto-exposure calculations.</summary>
         public float AverageLuminance { get; set; }
@@ -35,12 +40,6 @@ namespace ValveResourceFormat.Renderer.PostProcess
         public bool Enabled { get; set; } = true;
         /// <summary>Gets or sets a value indicating whether color correction LUT application is active.</summary>
         public bool ColorCorrectionEnabled { get; set; } = true;
-        /// <summary>Gets or sets a value indicating whether any scene objects require outline rendering this frame.</summary>
-        public bool HasOutlineObjects { get; set; }
-
-        /// <summary>Gets or sets the multisampled coverage mask produced by the outline geometry pass.</summary>
-        public RenderTexture? OutlineMask { get; set; }
-
         /// <summary>Gets the per-frame raw exposure scalar history used for temporal smoothing.</summary>
         public List<float> ExposureHistory { get; } = new(10);
 
@@ -57,18 +56,15 @@ namespace ValveResourceFormat.Renderer.PostProcess
         /// </summary>
         public float ExposureCompensation { get; set; }
 
-        /// <summary>The displayed luminance that auto-exposure places the scene's log-average on.</summary>
+        /// <summary>The pre-tonemap luminance that auto-exposure places the scene's log-average on.</summary>
         private const float MiddleGrey = 0.18f;
 
-        /// <summary>
-        /// Gets the pre-tonemap scene luminance auto-exposure aims for: the value the active tonemap
-        /// curve displays as <see cref="MiddleGrey"/>.
-        /// </summary>
-        public float ExposureTargetLuminance { get; private set; } = MiddleGrey;
+        /// <summary>Gets the pre-tonemap scene luminance auto-exposure aims for.</summary>
+        public static float ExposureTargetLuminance => MiddleGrey;
         /// <summary>Gets the smoothed exposure value applied in the current frame.</summary>
         public float CurrentExposure { get; private set; } = 1.0f;
         /// <summary>Gets the target exposure value that <see cref="CurrentExposure"/> is adapting towards.</summary>
-        public float TargetExposure { get; private set; }
+        public float TargetExposure { get; private set; } = 1.0f;
         /// <summary>Gets or sets the final linear tonemap scalar passed to the post-process shader.</summary>
         public float TonemapScalar { get; set; }
         /// <summary>
@@ -95,7 +91,6 @@ namespace ValveResourceFormat.Renderer.PostProcess
             RendererContext = rendererContext;
             Bloom = new BloomRenderer(rendererContext, this);
             DOF = new DOFRenderer(rendererContext);
-            Outline = new OutlineRenderer(rendererContext);
         }
 
         /// <summary>
@@ -113,7 +108,6 @@ namespace ValveResourceFormat.Renderer.PostProcess
 
             DOF.MsaaSamples = msaa;
             Bloom.Load();
-            Outline.Load();
         }
 
         /// <summary>
@@ -225,7 +219,7 @@ namespace ValveResourceFormat.Renderer.PostProcess
         private void SetPostProcessUniforms(Shader shader, TonemapSettings TonemapSettings)
         {
             // Randomize dither offset every frame
-            var ditherOffset = new Vector2(random.NextSingle(), random.NextSingle());
+            var ditherOffset = AnimateDither ? new Vector2(random.NextSingle(), random.NextSingle()) : new Vector2(0.5f);
 
             // Dither by one 255th of frame color originally. Modified to be twice that, because it looks better.
             shader.SetUniform("g_vBlueNoiseDitherParams", new Vector4(ditherOffset, 1.0f / 256.0f, 2.0f / 255.0f));
@@ -313,12 +307,21 @@ namespace ValveResourceFormat.Renderer.PostProcess
                 if (runBloom)
                 {
                     postProcessShader.SetTexture(4, "g_tBloom", Bloom.AccumulationResult);
-                    // these seem to all be needed at once due to transitions between post process volumes, we don't do that yet
-                    // NormalizedBloomStrengths seems to act as a blending factor "how much of each bloom mode do we have right now"
                     var bloomStrengths = new Vector3(bloomSettings.AddBloomStrength, bloomSettings.ScreenBloomStrength, bloomSettings.BlurBloomStrength);
-                    var normalizedStrenghts = Vector3.Normalize(bloomStrengths);
-                    postProcessShader.SetUniform("g_vNormalizedBloomStrengths", normalizedStrenghts);
-                    postProcessShader.SetUniform("g_vUnNormalizedBloomStrengths", bloomStrengths);
+                    var unnormalizedStrengths = Vector3.UnitX;
+                    var normalizedStrengths = Vector3.UnitX;
+
+                    // The strongest mode is scaled to 1, so blended volumes keep the ratio between modes
+                    var maxStrength = bloomStrengths.MaxComponent();
+                    if (maxStrength >= 1e-5f)
+                    {
+                        unnormalizedStrengths = bloomStrengths;
+                        normalizedStrengths = bloomStrengths / maxStrength;
+                    }
+
+                    postProcessShader.SetUniform("g_vNormalizedBloomStrengths", normalizedStrengths);
+                    postProcessShader.SetUniform("g_vUnNormalizedBloomStrengths", unnormalizedStrengths);
+                    postProcessShader.SetUniform("g_bBloomExposed", Bloom.ThresholdsExposedScene);
                 }
                 postProcessShader.SetUniform("g_bFlipY", flipY);
 
@@ -334,13 +337,6 @@ namespace ValveResourceFormat.Renderer.PostProcess
 
                 GL.BindVertexArray(RendererContext.MeshBufferCache.EmptyVAO);
                 GL.DrawArrays(PrimitiveType.Triangles, 0, 3);
-            }
-
-            if (HasOutlineObjects)
-            {
-                using var outlineGroup = new GLDebugGroup("Outline Edge");
-                Debug.Assert(OutlineMask != null);
-                Outline.Render(OutlineMask, colorBufferRead.NumSamples, flipY);
             }
         }
 
@@ -362,7 +358,7 @@ namespace ValveResourceFormat.Renderer.PostProcess
 
             exposure = AutoAdjustExposure(exposure, deltaTime);
 
-            exposure *= MathF.Pow(2.0f, State.ExposureSettings.ExposureCompensation + ExposureCompensation);
+            exposure *= MathF.Pow(2.0f, ExposureCompensation);
             TonemapScalar = exposure;
 
             ReportTonemapStats();
@@ -390,13 +386,17 @@ namespace ValveResourceFormat.Renderer.PostProcess
                 return exposure;
             }
 
-            var curveInput = State.TonemapSettings.InvertTonemapping(MiddleGrey);
-            ExposureTargetLuminance = float.IsNaN(curveInput) ? MiddleGrey : curveInput;
+            // A frame that advances no time, such as one drawn while paused, leaves the exposure and its
+            // history as they are, so how many of them were drawn does not change the result
+            if (deltaTime <= 0f)
+            {
+                return CurrentExposure;
+            }
 
-            var rawScalar = ExposureTargetLuminance / AverageLuminance;
+            var rawScalar = MiddleGrey / AverageLuminance;
             if (!float.IsFinite(rawScalar))
             {
-                return exposure;
+                return CurrentExposure;
             }
 
             if (ExposureHistory.Count >= 10)
@@ -409,10 +409,7 @@ namespace ValveResourceFormat.Renderer.PostProcess
             var settings = State.ExposureSettings;
             // CurrentExposure is persistent between frames
 
-            // Sequential min-then-max clamp: authored data contains locked (min == max) and even
-            // inverted ranges
-            var (min, max) = (settings.ExposureMin, settings.ExposureMax);
-            var clampedScalar = MathF.Max(MathF.Min(rawScalar, max), min);
+            var averagedScalar = rawScalar;
             if (ExposureHistory.Count == 10)
             {
                 var weightedSum = 0.0f;
@@ -420,23 +417,26 @@ namespace ValveResourceFormat.Renderer.PostProcess
 
                 for (var i = 0; i < 10; i++)
                 {
-                    var weight = Math.Abs(5 - i) * 0.2f; // might be (5 - Math.Abs(5 - i))
+                    var weight = Math.Abs(5 - i) * 0.2f;
                     weightTotal += weight;
                     weightedSum += weight * ExposureHistory[i];
                 }
 
-                clampedScalar = MathF.Max(MathF.Min(weightedSum * (1.0f / weightTotal), max), min);
+                averagedScalar = weightedSum * (1.0f / weightTotal);
             }
 
-            if (!float.IsFinite(clampedScalar))
+            // Authored data contains locked (min == max) and even inverted ranges; an inverted range
+            // gives the minimum below it and the maximum above it
+            var clampedScalar = averagedScalar < settings.ExposureMin
+                ? settings.ExposureMin
+                : MathF.Min(settings.ExposureMax, averagedScalar);
+
+            // A non-finite average keeps the previous target and still adapts towards it
+            if (float.IsFinite(clampedScalar))
             {
-                return CurrentExposure;
+                // Compensation moves the target, so the exposure adapts to it at the authored speed
+                TargetExposure = clampedScalar * MathF.Pow(2.0f, settings.ExposureCompensation);
             }
-
-            TargetExposure = clampedScalar;
-
-            //if (Unknown > 0.0)
-            //    TargetExposure *= Unknown;
 
             if (settings.ExposureSpeedUp == 0.0)
             {

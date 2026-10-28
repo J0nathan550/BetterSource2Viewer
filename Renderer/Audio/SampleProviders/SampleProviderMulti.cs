@@ -1,3 +1,5 @@
+using System.Numerics.Tensors;
+
 namespace ValveResourceFormat.Renderer.Audio.SampleProviders;
 
 /// <summary>
@@ -149,13 +151,16 @@ public class SampleProviderMulti : AudioSampleProvider
         var startGain = evaluate(startSeconds);
         var endGain = evaluate(endSeconds);
 
-        // The last sample must land exactly on endGain so consecutive chunks join without a step
-        var lastIndex = Math.Max(count - 1, 1);
+        // The last sample must land exactly on endGain so consecutive chunks join without a step,
+        // so it is scaled directly: the lerp at 1 can round off the end value
+        var lastIndex = count - 1;
 
-        for (var i = 0; i < count; i++)
+        for (var i = 0; i < lastIndex; i++)
         {
-            buffer[offset + i] *= float.Lerp(startGain, endGain, (float)i / lastIndex);
+            buffer[offset + i] *= MathUtils.Lerp(startGain, endGain, (float)i / lastIndex);
         }
+
+        buffer[offset + lastIndex] *= endGain;
 
         elapsedFrames += count / 2.0;
         return endSeconds >= duration;
@@ -220,18 +225,13 @@ public class SampleProviderMulti : AudioSampleProvider
                         var next = node.Next;
 
                         var read = node.Value.Read(readBuffer, 0, count);
-                        var index = offset;
-                        for (var i = 0; i < read; i++)
-                        {
-                            if (i >= maxRead)
-                            {
-                                buffer[index++] = readBuffer[i];
-                            }
-                            else
-                            {
-                                buffer[index++] += readBuffer[i];
-                            }
-                        }
+
+                        // Sum over what earlier providers wrote, copy past it
+                        var overlap = Math.Min(read, maxRead);
+                        var mixed = buffer.AsSpan(offset, overlap);
+                        var incoming = readBuffer.AsSpan(0, overlap);
+                        TensorPrimitives.Add(mixed, incoming, mixed);
+                        readBuffer.AsSpan(overlap, read - overlap).CopyTo(buffer.AsSpan(offset + overlap));
 
                         if (read < count && node.List == providers)
                         {
@@ -265,21 +265,22 @@ public class SampleProviderMulti : AudioSampleProvider
 
             if (maxRead > 0 && appliedLiveVolume != liveTarget)
             {
-                // The last sample must land exactly on the target so consecutive chunks join without a step
-                var lastIndex = Math.Max(maxRead - 1, 1);
+                // The last sample must land exactly on the target so consecutive chunks join without a step,
+                // so it is scaled directly: the lerp at 1 can round off the end value
+                var lastIndex = maxRead - 1;
 
-                for (var i = 0; i < maxRead; i++)
+                for (var i = 0; i < lastIndex; i++)
                 {
-                    buffer[offset + i] *= float.Lerp(appliedLiveVolume, liveTarget, (float)i / lastIndex);
+                    buffer[offset + i] *= MathUtils.Lerp(appliedLiveVolume, liveTarget, (float)i / lastIndex);
                 }
+
+                buffer[offset + lastIndex] *= liveTarget;
             }
             else if (maxRead > 0 && liveTarget != 1f)
             {
                 // Steady gain is a plain scale; the ramp is only for the chunk the gain changed in
-                for (var i = 0; i < maxRead; i++)
-                {
-                    buffer[offset + i] *= liveTarget;
-                }
+                var mixed = buffer.AsSpan(offset, maxRead);
+                TensorPrimitives.Multiply(mixed, liveTarget, mixed);
             }
 
             appliedLiveVolume = liveTarget;

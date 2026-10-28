@@ -1,11 +1,9 @@
-using ValveResourceFormat.Particles.Utils;
-using ValveResourceFormat.ResourceTypes;
-
 namespace ValveResourceFormat.Particles.Operators
 {
     /// <summary>
     /// Places a run of control points on each child of a group, one per particle of this system,
-    /// optionally turned to match the particle. Each child gets the same points, on its own copy.
+    /// optionally turned to match the particle. Each child gets the same points, on its own copy and
+    /// those of the systems below it.
     /// </summary>
     /// <seealso href="https://s2v.app/SchemaExplorer/cs2/particles/C_OP_SetChildControlPoints">C_OP_SetChildControlPoints</seealso>
     class SetChildControlPoints : ParticleFunctionOperator
@@ -23,8 +21,9 @@ namespace ValveResourceFormat.Particles.Operators
         public SetChildControlPoints(ParticleDefinitionParser parse) : base(parse)
         {
             childGroupId = parse.Int32("m_nChildGroupID", childGroupId);
-            firstControlPoint = parse.Int32("m_nFirstControlPoint", firstControlPoint);
-            numControlPoints = parse.Int32("m_nNumControlPoints", numControlPoints);
+            var authoredFirstControlPoint = parse.Int32("m_nFirstControlPoint", firstControlPoint);
+            firstControlPoint = Math.Clamp(authoredFirstControlPoint, 0, ParticleSystemState.MaxControlPoint);
+            numControlPoints = Math.Min(parse.Int32("m_nNumControlPoints", numControlPoints), ParticleSystemState.ControlPointCount - Math.Max(authoredFirstControlPoint, 0));
             firstSourcePoint = parse.NumberProvider("m_nFirstSourcePoint", firstSourcePoint);
             reverse = parse.Boolean("m_bReverse", reverse);
             setOrientation = parse.Boolean("m_bSetOrientation", setOrientation);
@@ -48,58 +47,52 @@ namespace ValveResourceFormat.Particles.Operators
 
             var live = particles.Current;
             var first = (int)firstSourcePoint.NextNumber(particleSystemState);
+            var count = Math.Min(live.Length - first, numControlPoints);
 
-            // Points past the live particles are left where they were
-            for (var i = 0; i < numControlPoints; i++)
+            foreach (var child in matchingChildren)
             {
-                var index = reverse ? live.Length - 1 - (first + i) : first + i;
-
-                if ((uint)index >= (uint)live.Length)
+                for (var i = 0; i < count; i++)
                 {
-                    break;
-                }
+                    var index = first + i;
 
-                ref var particle = ref live[index];
-                var rotation = setOrientation ? ParticleRotation(ref particle) : null;
-
-                foreach (var child in matchingChildren)
-                {
-                    var controlPoint = child.OverrideControlPoint(firstControlPoint + i);
-                    controlPoint.Position = particle.Position;
-
-                    if (rotation is { } turned)
+                    if (reverse)
                     {
-                        controlPoint.Rotation = turned;
-                        controlPoint.Orientation = Vector3.Transform(Vector3.UnitX, turned);
+                        index = Math.Max(live.Length - index - 1, 0);
+                    }
+
+                    // An index out of range ends the loop rather than reading past the particles
+                    if ((uint)index >= (uint)live.Length)
+                    {
+                        break;
+                    }
+
+                    var controlPoint = child.GetControlPoint(firstControlPoint + i);
+                    controlPoint.Position = live.ReadVector(ParticleField.Position, index);
+
+                    if (setOrientation)
+                    {
+                        SetParticleOrientation(controlPoint, live, index);
                     }
                 }
             }
         }
 
-        /// <summary>The turn the authored method takes from a particle, or null when it gives none.</summary>
-        private Quaternion? ParticleRotation(ref Particle particle)
+        /// <summary>Turns the control point the way the authored method takes from a particle, when it gives a way.</summary>
+        private void SetParticleOrientation(ControlPoint controlPoint, ParticleSpan live, int index)
         {
             switch (orientationType)
             {
                 case ParticleOrientationType.PARTICLE_ORIENTATION_VELOCITY:
-                    var velocity = particle.Position - particle.PositionPrevious;
-                    return velocity.LengthSquared() > ParticleMath.MinimumLengthSquared
-                        ? EntityTransformHelper.ForwardDirectionToQuaternion(Vector3.Normalize(velocity))
-                        : null;
+                    SetControlPointsToParticle.OrientToVelocity(controlPoint, live, index);
+                    break;
 
                 case ParticleOrientationType.PARTICLE_ORIENTATION_NORMAL:
-                    return particle.Normal.LengthSquared() > ParticleMath.MinimumLengthSquared
-                        ? EntityTransformHelper.ForwardDirectionToQuaternion(Vector3.Normalize(particle.Normal))
-                        : null;
+                    SetControlPointsToParticle.OrientToDirection(controlPoint, live.ReadVector(ParticleField.Normal, index));
+                    break;
 
                 case ParticleOrientationType.PARTICLE_ORIENTATION_ROTATION:
-                    // The particle holds yaw, pitch and roll in radians
-                    var angles = particle.Rotation;
-                    return EntityTransformHelper.EulerAnglesToQuaternion(new Vector3(
-                        float.RadiansToDegrees(angles.Y), float.RadiansToDegrees(angles.X), float.RadiansToDegrees(angles.Z)));
-
-                default:
-                    return null;
+                    SetControlPointsToParticle.OrientToRotations(controlPoint, live, index);
+                    break;
             }
         }
     }

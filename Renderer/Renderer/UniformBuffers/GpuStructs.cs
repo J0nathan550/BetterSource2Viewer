@@ -78,7 +78,7 @@ public struct InstanceDataStandard
     public uint TintAlpha;
     /// <summary>Index into the transform buffer.</summary>
     public uint TransformIndex;
-    /// <summary>The scene node drawn, used in selection and highlighting, and the index of its <see cref="ObjectDataStandard"/>.</summary>
+    /// <summary>The scene node drawn, which replacement shaders can tell draws apart by, and the index of its <see cref="ObjectDataStandard"/>.</summary>
     public uint Identification;
     /// <summary>Skinning of the mesh drawn: bit 31: enabled, bits 16-30: bone count, bits 0-15: mesh bone offset.</summary>
     public uint MeshBoneData;
@@ -103,8 +103,7 @@ public struct ObjectDataStandard
 {
     /// <summary>
     /// Light probe volume index in the low 16 bits, env map index in the high 16. Both arrays cap far
-    /// below 65535, so they share a word. Only the legacy per batch cube map path reads the env map half;
-    /// the array path culls probes per screen tile instead.
+    /// below 65535, so they share a word.
     /// </summary>
     public uint VisibleLPV;
     private readonly uint padding0;

@@ -5,7 +5,9 @@ using System.Windows.Forms;
 using GUI.Forms;
 using GUI.Utils;
 using SkiaSharp;
+using ValveResourceFormat.IO.Fgd;
 using ValveResourceFormat.Renderer.Editor.Entities;
+using ValveResourceFormat.Renderer.Editor.Helpers;
 using ValveResourceFormat.ResourceTypes;
 using ValveResourceFormat.Serialization.KeyValues;
 using static ValveResourceFormat.ResourceTypes.EntityLump;
@@ -148,6 +150,9 @@ namespace GUI.Types.Viewers
         {
             var filteredEntities = new List<(Entity Entity, string Classname, string Targetname)>(Entities.Count);
 
+            var isKeyEmpty = string.IsNullOrEmpty(SearchData.Key);
+            var isValueEmpty = string.IsNullOrEmpty(SearchData.Value);
+
             foreach (var entity in Entities)
             {
                 var classname = entity.GetStringProperty("classname", string.Empty);
@@ -179,9 +184,6 @@ namespace GUI.Types.Viewers
                         }
                         break;
                 }
-
-                var isKeyEmpty = string.IsNullOrEmpty(SearchData.Key);
-                var isValueEmpty = string.IsNullOrEmpty(SearchData.Value);
 
                 // match key and value together
                 if (!isKeyEmpty && !isValueEmpty)
@@ -585,24 +587,24 @@ namespace GUI.Types.Viewers
         {
             EntityIconLoadAttempted.Add(classname);
 
-            var hammerEntity = HammerEntities.Get(classname);
-
-            if (hammerEntity?.Icons != null)
+            if (EntityClassCatalog.Get(GuiContext, VrfGuiContext.Logger).FindClass(classname) is not { } entityClass)
             {
-                foreach (var iconPath in hammerEntity.Icons)
-                {
-                    if (!iconPath.EndsWith(".vmat", StringComparison.Ordinal))
-                    {
-                        continue;
-                    }
+                return -1;
+            }
 
-                    using var bitmap = LoadIconBitmap(iconPath);
-                    if (bitmap != null)
-                    {
-                        var index = AddBitmapToImageList(bitmap);
-                        EntityIconCache[classname] = index;
-                        return index;
-                    }
+            foreach (var helper in entityClass.Helpers)
+            {
+                if (!helper.Name.Equals("iconsprite", StringComparison.OrdinalIgnoreCase) || IconHelper.GetDeclaredMaterialName(helper) is not { } iconPath)
+                {
+                    continue;
+                }
+
+                using var bitmap = LoadIconBitmap(iconPath);
+                if (bitmap != null)
+                {
+                    var index = AddBitmapToImageList(bitmap);
+                    EntityIconCache[classname] = index;
+                    return index;
                 }
             }
 

@@ -1,4 +1,5 @@
 using System.Diagnostics;
+using System.Linq;
 using OpenTK.Graphics.OpenGL;
 using ValveResourceFormat.Renderer.SceneEnvironment;
 using ValveResourceFormat.Renderer.SceneNodes;
@@ -6,25 +7,25 @@ using ValveResourceFormat.Renderer.SceneNodes;
 namespace ValveResourceFormat.Renderer;
 
 /// <summary>Culling results and draw lists for drawing a scene through one view.</summary>
-public sealed class SceneViewState : IDisposable
+public sealed class SceneViewState
 {
     /// <summary>Gets the scene this state draws.</summary>
     public Scene Scene { get; }
 
     /// <summary>Gets the tile and depth bin cull passes for this view of the scene.</summary>
-    public LightBinner LightBinner { get; }
+    public LightBinner LightBinner => lightBinner ?? throw new InvalidOperationException("A shadow caster view has no light binner.");
 
-    /// <summary>Gets or sets the PVS bitfield for the cluster this view looks from, empty to cull nothing.</summary>
+    /// <summary>Gets or sets the PVS bitfield this view culls with, empty to cull nothing.</summary>
     public ReadOnlyMemory<byte> Pvs { get; set; }
 
-    /// <summary>Gets whether any material drawn after the framebuffer grab samples the scene color.</summary>
+    /// <summary>Gets the <c>info_visibility_box</c> volumes this view culls with, split for its eye.</summary>
+    public VisibilityBoxCuller VisibilityBoxes { get; } = new();
+
+    /// <summary>Gets whether anything drawn after the framebuffer grab samples the scene color.</summary>
     public bool WantsSceneColor { get; private set; }
 
     /// <summary>Gets whether anything drawn after the framebuffer grab samples the scene depth.</summary>
     public bool WantsSceneDepth { get; private set; }
-
-    /// <summary>Gets whether there are any selected nodes queued for outline rendering.</summary>
-    public bool HasOutlineObjects => renderLists[RenderPass.Outline].Count > 0;
 
     /// <summary>Gets whether anything is queued to draw into the water effects map this frame.</summary>
     public bool HasWaterEffects => waterEffectsRenderList.Count > 0;
@@ -32,8 +33,14 @@ public sealed class SceneViewState : IDisposable
     /// <summary>Gets whether anything is queued to draw into the effects bloom map this frame.</summary>
     public bool HasEffectsBloom => effectsBloomRenderList.Count > 0;
 
+    /// <summary>Gets whether anything is queued to draw in the screen-space layer this frame.</summary>
+    public bool HasScreenSpaceEffects => screenSpaceRenderList.Count > 0;
+
     /// <summary>Gets whether any water surface is queued to draw this frame.</summary>
     public bool HasWater => renderLists[RenderPass.Water].Count > 0;
+
+    /// <summary>Gets whether the translucent layer has shapes for <see cref="RenderOrderIndependentFills"/> this frame.</summary>
+    internal bool HasOrderIndependentFills => orderIndependentFills.Count > 0;
 
     internal RenderTexture? DepthPyramid { get; set; }
 
@@ -41,20 +48,27 @@ public sealed class SceneViewState : IDisposable
 
     internal bool DepthPyramidValid { get; set; }
 
+    private readonly LightBinner? lightBinner;
+
+    private readonly bool collectsShadowCasters;
+
     private StorageBuffer? indirectDraws;
     private StorageBuffer? compactedDraws;
     private StorageBuffer? compactedCounts;
     private int indirectLayoutVersion = -1;
 
-    private StorageBuffer? pvsHiddenGpu;
-    private bool cpuHiddenActive;
-    private uint[] pvsHiddenBits = [];
+    private StorageBuffer? cpuVisibleGpu;
+    private bool cpuVisibleActive;
+    private uint[] cpuVisibleBits = [];
 
     private readonly List<SceneNode> cullResults = [];
     private int staticCullCount;
     private readonly Plane[] lastFrustumPlanes = new Plane[6];
     private bool hasLastFrustum;
+    private bool lastIncludedStatic;
     private int lastOctreeVersion = -1;
+    private readonly List<(VisibilityBox Box, int Placement, bool Inside)> lastBoxSplit = [];
+    private ReadOnlyMemory<byte> lastPvs;
 
     private readonly Dictionary<RenderPass, List<MeshBatchRenderer.Request>> renderLists = new()
     {
@@ -65,7 +79,6 @@ public sealed class SceneViewState : IDisposable
         [RenderPass.OpaqueRefract] = [],
         [RenderPass.Water] = [],
         [RenderPass.Translucent] = [],
-        [RenderPass.Outline] = [],
     };
 
     private readonly Dictionary<RenderPass, List<MeshBatchRenderer.Request>> viewmodelRenderLists = new()
@@ -77,6 +90,19 @@ public sealed class SceneViewState : IDisposable
     /// <summary>Translucent draws that go to the water effects map instead of the scene.</summary>
     private readonly List<MeshBatchRenderer.Request> waterEffectsRenderList = [];
     private readonly List<MeshBatchRenderer.Request> effectsBloomRenderList = [];
+    private readonly List<MeshBatchRenderer.Request> toolsRenderList = [];
+
+    /// <summary>
+    /// Gets the nodes the last culling found that draw in the tools pass, which the editor draws
+    /// over the final image.
+    /// </summary>
+    public IReadOnlyList<MeshBatchRenderer.Request> ToolsRenderList => toolsRenderList;
+
+    /// <summary>Draws that go over the finished scene through the screen-space view.</summary>
+    private readonly List<MeshBatchRenderer.Request> screenSpaceRenderList = [];
+
+    /// <summary>Translucent shapes whose fills skip the sorted translucent layer when it draws them order independently.</summary>
+    private readonly List<ShapeSceneNode> orderIndependentFills = [];
 
     /// <summary>Visible nodes that draw themselves, listed once each however many passes they draw in.</summary>
     private readonly List<SceneNode> customBufferNodes = [];
@@ -85,7 +111,45 @@ public sealed class SceneViewState : IDisposable
 
     private readonly Predicate<MeshBatchRenderer.Request> hasNoVisibleFragments;
 
-    private readonly Dictionary<DepthOnlyBucket, List<MeshBatchRenderer.Request>> depthOnlyDraws = Scene.CreateDepthOnlyDrawCallCollection();
+    private readonly Dictionary<DepthOnlyBucket, List<MeshBatchRenderer.Request>> depthOnlyDraws = CreateDepthOnlyBuckets();
+
+    // A bit per node ID instead of draw lists, as there can be hundreds of barn light faces
+    private uint[] visibleBits = [];
+    private int visibleWords;
+
+    private VisibleNodeEnumerator EnumerateVisibleNodes() => new(Scene, visibleBits.AsSpan(0, visibleWords));
+
+    private ref struct VisibleNodeEnumerator(Scene scene, ReadOnlySpan<uint> bits)
+    {
+        private readonly ReadOnlySpan<uint> bits = bits;
+        private int word = -1;
+        private uint remaining;
+
+        public SceneNode Current { get; private set; } = null!;
+
+        public readonly VisibleNodeEnumerator GetEnumerator() => this;
+
+        public bool MoveNext()
+        {
+            while (remaining == 0)
+            {
+                if (++word >= bits.Length)
+                {
+                    return false;
+                }
+
+                remaining = bits[word];
+            }
+
+            var id = word * MathUtils.BitsPerWord + BitOperations.TrailingZeroCount(remaining);
+            remaining &= remaining - 1;
+
+            Current = scene.GetNodeById((uint)id);
+            return true;
+        }
+    }
+
+    private readonly List<RenderableMesh> singleMesh = [null!];
 
     /// <summary>Alpha tested draws, held out of the opaque passes for <see cref="RenderAlphaTestGeometry"/>.</summary>
     private readonly List<MeshBatchRenderer.Request> alphaTestAggregateDraws = [];
@@ -96,6 +160,9 @@ public sealed class SceneViewState : IDisposable
     /// <summary>Surfaces drawn over the resolved opaque scene, for <see cref="RenderTranslucentDepthLayer"/>.</summary>
     private readonly List<MeshBatchRenderer.Request> translucentDepthDraws = [];
 
+    /// <summary>The draws of the nodes given to <see cref="RenderNodes"/>.</summary>
+    private readonly List<MeshBatchRenderer.Request> nodeDraws = [];
+
     /// <summary>Gets whether any surface is queued for <see cref="RenderTranslucentDepthLayer"/> this frame.</summary>
     public bool HasTranslucentDepthDraws => translucentDepthDraws.Count > 0;
 
@@ -103,15 +170,26 @@ public sealed class SceneViewState : IDisposable
     private static bool WritesTranslucentDepth(RenderMaterial material)
         => material is { IsCs2Water: false, CanPrimeDepth: true, IsAdditive: false };
 
-    /// <summary>Initializes a view of an already initialized <paramref name="scene"/>.</summary>
-    public SceneViewState(Scene scene)
+    /// <summary>Initializes a camera view of an already initialized <paramref name="scene"/>.</summary>
+    public SceneViewState(Scene scene) : this(scene, shadowCasters: false)
+    {
+    }
+
+    internal SceneViewState(Scene scene, bool shadowCasters)
     {
         ArgumentNullException.ThrowIfNull(scene);
 
         Scene = scene;
         hasNoVisibleFragments = request => request.Node is SceneAggregate aggregate && !aggregatesWithVisibleFragments.Contains(aggregate);
-        LightBinner = new LightBinner(this);
-        LightBinner.LoadShaders();
+        collectsShadowCasters = shadowCasters;
+
+        if (shadowCasters)
+        {
+            return;
+        }
+
+        lightBinner = new LightBinner(this);
+        lightBinner.LoadShaders();
 
         // Presizes the lists so the first frames do not grow them
         CollectSceneDrawCalls(new Camera(), Frustum.CreateEmpty());
@@ -121,20 +199,44 @@ public sealed class SceneViewState : IDisposable
     /// Returns all scene nodes whose bounding boxes intersect the given frustum, caching static results across frames when the frustum is unchanged.
     /// </summary>
     /// <param name="frustum">The view frustum to test against.</param>
+    /// <param name="includeStatic">Whether to include static nodes.</param>
+    /// <param name="boxes">Visibility boxes that leave out whole cells of static nodes, or <see langword="null"/>. <see cref="Pvs"/> leaves out cells too.</param>
     /// <returns>A list of visible scene nodes (valid until the next call to this method).</returns>
-    public List<SceneNode> GetFrustumCullResults(Frustum frustum)
+    public List<SceneNode> GetFrustumCullResults(Frustum frustum, bool includeStatic = true, VisibilityBoxCuller? boxes = null)
     {
         // Optimization: Do not clear static culled results from last frame if the frustum did not change
-        if (!hasLastFrustum || !frustum.Planes.AsSpan().SequenceEqual(lastFrustumPlanes) || lastOctreeVersion != Scene.OctreeVersion)
+        if (!hasLastFrustum || lastIncludedStatic != includeStatic || !frustum.Planes.AsSpan().SequenceEqual(lastFrustumPlanes)
+            || lastOctreeVersion != Scene.OctreeVersion || !(boxes?.MatchesSplit(lastBoxSplit) ?? lastBoxSplit.Count == 0)
+            || !lastPvs.Equals(Pvs))
         {
             frustum.Planes.CopyTo(lastFrustumPlanes, 0);
             hasLastFrustum = true;
+            lastIncludedStatic = includeStatic;
             lastOctreeVersion = Scene.OctreeVersion;
+            lastPvs = Pvs;
+
+            if (boxes != null)
+            {
+                boxes.CopySplitTo(lastBoxSplit);
+            }
+            else
+            {
+                lastBoxSplit.Clear();
+            }
 
             cullResults.Clear();
-            cullResults.Capacity = Math.Max(cullResults.Capacity, Scene.NodeCount + 100);
 
-            Scene.StaticOctree.Query(frustum, cullResults);
+            // Only camera views see enough of the scene to size for all of it
+            if (!collectsShadowCasters)
+            {
+                cullResults.Capacity = Math.Max(cullResults.Capacity, Scene.NodeCount + 100);
+            }
+
+            if (includeStatic)
+            {
+                Scene.StaticOctree.Query(frustum, boxes, Pvs.Span, cullResults);
+            }
+
             staticCullCount = cullResults.Count;
         }
         else
@@ -146,33 +248,63 @@ public sealed class SceneViewState : IDisposable
         return cullResults;
     }
 
-    private void ResetPvsHiddenBits()
+    private enum NodeCull
+    {
+        None,
+        Hidden,
+        Pvs,
+        VisibilityBox,
+    }
+
+    private NodeCull TestNodeCull(SceneNode node, ReadOnlySpan<byte> pvs, VisibilityBoxCuller? boxes)
+    {
+        if (!node.Visible)
+        {
+            return NodeCull.Hidden;
+        }
+
+        if (!Scene.IsNodeInPvs(node, pvs))
+        {
+            return NodeCull.Pvs;
+        }
+
+        if (boxes != null && boxes.IsCulled(node.BoundingBox))
+        {
+            return NodeCull.VisibilityBox;
+        }
+
+        return NodeCull.None;
+    }
+
+    // While PVS or visibility boxes cull, the GPU only draws the fragments marked here. The query leaves out
+    // whole cells they hide, so a fragment it never reaches has to stay hidden rather than be drawn.
+    private void ResetCpuVisibleBits()
     {
         var objectEntryCount = Scene.ObjectEntryCount;
 
         var pvsCullActive = !Pvs.IsEmpty && Scene.VoxelVisibility != null;
-        cpuHiddenActive = (pvsCullActive || Scene.VisibilityBoxes.View.IsActive) && objectEntryCount > 0;
+        cpuVisibleActive = (pvsCullActive || VisibilityBoxes.IsActive) && objectEntryCount > 0;
 
-        if (!cpuHiddenActive)
+        if (!cpuVisibleActive)
         {
             return;
         }
 
         var bitWords = MathUtils.DivideRoundUp(objectEntryCount, 32);
 
-        if (pvsHiddenBits.Length < bitWords)
+        if (cpuVisibleBits.Length < bitWords)
         {
-            pvsHiddenBits = new uint[bitWords];
+            cpuVisibleBits = new uint[bitWords];
         }
 
-        Array.Clear(pvsHiddenBits, 0, bitWords);
+        Array.Clear(cpuVisibleBits, 0, bitWords);
     }
 
-    private void MarkNodeHiddenGpu(SceneNode node)
+    private void MarkFragmentVisibleGpu(SceneNode node)
     {
-        if (cpuHiddenActive && node is SceneAggregate.Fragment && node.Id < (uint)Scene.ObjectEntryCount)
+        if (cpuVisibleActive && node is SceneAggregate.Fragment && node.Id < (uint)Scene.ObjectEntryCount)
         {
-            MathUtils.SetBit(pvsHiddenBits, (int)node.Id);
+            MathUtils.SetBit(cpuVisibleBits, (int)node.Id);
         }
     }
 
@@ -180,14 +312,9 @@ public sealed class SceneViewState : IDisposable
     {
         Debug.Assert(request.Call is not null);
 
-        if (!Scene.ShowToolsMaterials && request.Call.Material.IsToolsMaterial)
+        if (!Scene.IsDrawn(request.Call.Material, request.Node))
         {
             return;
-        }
-
-        if (renderPass > RenderPass.DepthOnly && request.Node.IsSelected)
-        {
-            renderLists[RenderPass.Outline].Add(request);
         }
 
         // Aggregated geometry is opaque world detail that never samples the scene color, and the refract
@@ -210,19 +337,19 @@ public sealed class SceneViewState : IDisposable
                     alphaTestAggregateDraws.Add(request);
                     return;
                 }
-                else if (Scene.EnableDepthPrepass && material.CanPrimeDepth)
+                else if (Scene.Settings.EnableDepthPrepass && material.CanPrimeDepth)
                 {
-                    var bucket = Scene.GetDepthOnlyBucket(request.Call);
-                    depthOnlyDraws[bucket].Add(request);
+                    depthOnlyDraws[GetDepthOnlyBucket(request.Call)].Add(request);
                 }
             }
         }
 
         if (renderPass == RenderPass.OpaqueFragments)
         {
-            if (Scene.DrawMeshletsIndirect && request.Node is SceneAggregate.Fragment { Parent.CanDrawIndirect: true })
+            // Skip individual fragment draws if aggregate can be drawn with indirect draw
+            if (IsDrawnByAggregate(request.Node))
             {
-                return; // Skip individual fragment draws if aggregate can be drawn with indirect draw
+                return;
             }
 
             renderPass = RenderPass.Opaque;
@@ -289,6 +416,9 @@ public sealed class SceneViewState : IDisposable
 
         waterEffectsRenderList.Clear();
         effectsBloomRenderList.Clear();
+        screenSpaceRenderList.Clear();
+        orderIndependentFills.Clear();
+        toolsRenderList.Clear();
         customBufferNodes.Clear();
         alphaTestAggregateDraws.Clear();
         alphaTestOpaqueDraws.Clear();
@@ -302,10 +432,10 @@ public sealed class SceneViewState : IDisposable
         WantsSceneColor = false;
         WantsSceneDepth = Scene.ProjectedDecals.Count > 0;
 
-        ResetPvsHiddenBits();
+        ResetCpuVisibleBits();
 
         var frustum = cullFrustum ?? camera.ViewFrustum;
-        var visibleNodes = GetFrustumCullResults(frustum);
+        var visibleNodes = GetFrustumCullResults(frustum, boxes: VisibilityBoxes);
         var pvs = Pvs.Span;
 
         PerfStats.Active.Count(Counter.SceneObjectInView, visibleNodes.Count);
@@ -315,27 +445,24 @@ public sealed class SceneViewState : IDisposable
         // Collect mesh calls
         foreach (var node in visibleNodes)
         {
-            if (!node.Visible)
-            {
-                continue;
-            }
-
-            if (!Scene.IsNodeInPvs(node, pvs))
-            {
-                PerfStats.Active.Count(Counter.SceneObjectCulledByPvs, 1);
-                MarkNodeHiddenGpu(node);
-                continue;
-            }
-
             // The viewmodel is drawn at the eye, not where it is placed
-            var isViewmodel = (node.RenderPasses & CustomRenderPasses.Viewmodel) != 0;
+            var boxes = (node.RenderPasses & CustomRenderPasses.Viewmodel) != 0 ? null : VisibilityBoxes;
 
-            if (!isViewmodel && Scene.VisibilityBoxes.View.IsCulled(node.BoundingBox))
+            switch (TestNodeCull(node, pvs, boxes))
             {
-                PerfStats.Active.Count(Counter.SceneObjectCulledByVisibilityBox, 1);
-                MarkNodeHiddenGpu(node);
-                continue;
+                case NodeCull.Hidden:
+                    continue;
+
+                case NodeCull.Pvs:
+                    PerfStats.Active.Count(Counter.SceneObjectCulledByPvs, 1);
+                    continue;
+
+                case NodeCull.VisibilityBox:
+                    PerfStats.Active.Count(Counter.SceneObjectCulledByVisibilityBox, 1);
+                    continue;
             }
+
+            MarkFragmentVisibleGpu(node);
 
             if (node is MeshCollectionNode meshCollection)
             {
@@ -418,6 +545,11 @@ public sealed class SceneViewState : IDisposable
                     }, RenderPass.OpaqueAggregate);
                 }
             }
+            else if (node is ShapeSceneNode { ToolsMaterial: { } toolsMaterial } && !Scene.IsDrawn(toolsMaterial, node))
+            {
+                // A shape standing for a tools material is shown as the material would be
+                continue;
+            }
             else
             {
                 if (node is SceneLight light)
@@ -427,13 +559,15 @@ public sealed class SceneViewState : IDisposable
 
                 var customRender = new MeshBatchRenderer.Request
                 {
-                    DistanceFromCamera = node is PhysSceneNode
+                    // Volumes that span the map, which no sort draws correctly, keep the order they are given
+                    DistanceFromCamera = node is ShapeSceneNode { HasOrderIndependentFill: true }
                         ? 100000f - node.OverlayRenderOrder * 10f
                         : node.GetCameraDistance(camera),
                     Node = node,
                 };
 
                 WantsSceneDepth |= node is ParticleSceneNode { WantsSceneDepth: true };
+                WantsSceneColor |= node is ParticleSceneNode { WantsSceneColor: true };
 
                 var customPasses = node.RenderPasses;
 
@@ -454,6 +588,11 @@ public sealed class SceneViewState : IDisposable
                 if ((customPasses & CustomRenderPasses.Translucent) != 0)
                 {
                     customLists[RenderPass.Translucent].Add(customRender);
+
+                    if (node is ShapeSceneNode { HasOrderIndependentFill: true } shape)
+                    {
+                        orderIndependentFills.Add(shape);
+                    }
                 }
 
                 if ((customPasses & CustomRenderPasses.WaterEffects) != 0)
@@ -466,9 +605,14 @@ public sealed class SceneViewState : IDisposable
                     effectsBloomRenderList.Add(customRender);
                 }
 
-                if (node.IsSelected)
+                if ((customPasses & CustomRenderPasses.ScreenSpace) != 0)
                 {
-                    renderLists[RenderPass.Outline].Add(customRender);
+                    screenSpaceRenderList.Add(customRender);
+                }
+
+                if ((customPasses & CustomRenderPasses.Tools) != 0)
+                {
+                    toolsRenderList.Add(customRender);
                 }
             }
         }
@@ -514,6 +658,133 @@ public sealed class SceneViewState : IDisposable
         compactedCounts = new StorageBuffer(ReservedBufferSlots.CompactedCounts, nameof(ReservedBufferSlots.CompactedCounts));
         compactedCounts.Create(counts, BufferUsage.GpuOnly);
     }
+
+    internal static Dictionary<DepthOnlyBucket, List<MeshBatchRenderer.Request>> CreateDepthOnlyBuckets()
+        => Enum.GetValues<DepthOnlyBucket>().ToDictionary(static bucket => bucket, static _ => new List<MeshBatchRenderer.Request>());
+
+    internal (float Min, float Max) CollectShadowCasters(Frustum frustum, bool includeStatic, ObjectTypeFlags skipFlags, VisibilityBoxCuller boxes, Vector3 depthFitAxis)
+    {
+        var depthMin = float.MaxValue;
+        var depthMax = float.MinValue;
+
+        void AccumulateDepthFit(SceneNode casterNode)
+        {
+            if (depthFitAxis == Vector3.Zero)
+            {
+                return;
+            }
+
+            var bounds = casterNode.BoundingBox;
+            var center = Vector3.Dot(bounds.Center, depthFitAxis);
+            var extent = Vector3.Dot(bounds.Size, Vector3.Abs(depthFitAxis)) * 0.5f;
+
+            depthMin = Math.Min(depthMin, center - extent);
+            depthMax = Math.Max(depthMax, center + extent);
+        }
+
+        // IDs start at 1
+        visibleWords = MathUtils.DivideRoundUp(Scene.NodeCount + 1, 32);
+
+        if (visibleBits.Length < visibleWords)
+        {
+            visibleBits = new uint[visibleWords];
+        }
+        else
+        {
+            Array.Clear(visibleBits, 0, visibleWords);
+        }
+
+        var pvs = Pvs.Span;
+
+        foreach (var node in GetFrustumCullResults(frustum, includeStatic, boxes))
+        {
+            switch (TestNodeCull(node, pvs, boxes))
+            {
+                case NodeCull.Hidden:
+                    continue;
+
+                case NodeCull.Pvs:
+                    PerfStats.Active.Count(Counter.ShadowCasterCulledByPvs, 1);
+                    continue;
+
+                case NodeCull.VisibilityBox:
+                    PerfStats.Active.Count(Counter.ShadowCasterCulledByVisibilityBox, 1);
+                    continue;
+            }
+
+            var casts = node switch
+            {
+                MeshCollectionNode => (node.Flags & skipFlags) == 0,
+                SceneAggregate.Fragment fragment => (fragment.Flags & skipFlags) == 0 && fragment.Parent.IsFragmentInActiveLod(fragment),
+                SceneAggregate aggregate => (aggregate.AllFlags & skipFlags) == 0 && aggregate.InstanceTransforms.Count > 0,
+                _ => (node.Flags & skipFlags) == 0 && (node.RenderPasses & CustomRenderPasses.DepthOnly) != 0,
+            };
+
+            if (!casts)
+            {
+                continue;
+            }
+
+            AccumulateDepthFit(node);
+            MathUtils.SetBit(visibleBits, (int)node.Id);
+        }
+
+        return (depthMin, depthMax);
+    }
+
+    private void AddShadowCasterDraws(SceneNode node, Dictionary<DepthOnlyBucket, List<MeshBatchRenderer.Request>> draws)
+    {
+        List<RenderableMesh> meshes;
+
+        switch (node)
+        {
+            case MeshCollectionNode meshCollection:
+                meshes = meshCollection.RenderableMeshes;
+                break;
+
+            case SceneAggregate.Fragment fragment:
+                AddShadowCasterDraw(fragment.RenderMesh, fragment.DrawCall, node, draws);
+                return;
+
+            case SceneAggregate aggregate:
+                singleMesh[0] = aggregate.RenderMesh;
+                meshes = singleMesh;
+                break;
+
+            default:
+                draws[DepthOnlyBucket.MaterialDepthMode].Add(new MeshBatchRenderer.Request { Node = node });
+                return;
+        }
+
+        foreach (var mesh in meshes)
+        {
+            foreach (var opaqueCall in mesh.DrawCallsOpaque)
+            {
+                AddShadowCasterDraw(mesh, opaqueCall, node, draws);
+            }
+        }
+    }
+
+    private void AddShadowCasterDraw(RenderableMesh mesh, DrawCall opaqueCall, SceneNode node, Dictionary<DepthOnlyBucket, List<MeshBatchRenderer.Request>> draws)
+    {
+        if (!Scene.CastsShadows(opaqueCall.Material, node))
+        {
+            return;
+        }
+
+        draws[GetDepthOnlyBucket(opaqueCall)].Add(new MeshBatchRenderer.Request
+        {
+            Mesh = mesh,
+            Call = opaqueCall,
+            Node = node,
+        });
+    }
+
+    // The skinning variant is picked per draw, so the bucket only says which shader draws it
+    private static DepthOnlyBucket GetDepthOnlyBucket(DrawCall opaqueCall)
+        => opaqueCall.Material.VertexAnimation ? DepthOnlyBucket.MaterialDepthMode
+            : opaqueCall.Material.IsAlphaTest ? DepthOnlyBucket.AlphaTest
+            : DepthOnlyBucket.Specialized;
 
     internal void BindIndirectDrawBuffers()
     {
@@ -611,20 +882,20 @@ public sealed class SceneViewState : IDisposable
         scene.ObjectLodGpu.BindBufferBase();
         scene.ActiveLodBitsGpu.BindBufferBase();
 
-        var pvsWords = cpuHiddenActive ? MathUtils.DivideRoundUp(Math.Max(scene.ObjectEntryCount, 1), 32) : 1;
+        var visibleWords = cpuVisibleActive ? MathUtils.DivideRoundUp(Math.Max(scene.ObjectEntryCount, 1), 32) : 1;
 
-        if (pvsHiddenBits.Length < pvsWords)
+        if (cpuVisibleBits.Length < visibleWords)
         {
-            pvsHiddenBits = new uint[pvsWords];
+            cpuVisibleBits = new uint[visibleWords];
         }
 
-        pvsHiddenGpu = Scene.Upload<uint>(pvsHiddenGpu, pvsHiddenBits.AsSpan(0, pvsWords),
-            ReservedBufferSlots.BufferSlot10, "PvsHidden");
-        pvsHiddenGpu.BindBufferBase();
+        cpuVisibleGpu = Scene.Upload<uint>(cpuVisibleGpu, cpuVisibleBits.AsSpan(0, visibleWords),
+            ReservedBufferSlots.BufferSlot10, "CpuVisible");
+        cpuVisibleGpu.BindBufferBase();
 
-        cullShader.SetUniform("g_bCpuHiddenEnabled", cpuHiddenActive);
+        cullShader.SetUniform("g_bCpuVisibleEnabled", cpuVisibleActive);
 
-        var occlusionDebugEnabled = scene.OcclusionDebugEnabled && scene.OcclusionDebug != null;
+        var occlusionDebugEnabled = scene.Settings.OcclusionDebugEnabled && scene.OcclusionDebug != null;
 
         // Bind debug buffer for occluded bounds visualization
         if (occlusionDebugEnabled)
@@ -685,7 +956,7 @@ public sealed class SceneViewState : IDisposable
         using var passScope = GraphicsContext.RenderState.Scope();
 
         var drawIndirect = Scene.DrawMeshletsIndirect;
-        var depthPrepass = depthOnlyShader != null && Scene.EnableDepthPrepass;
+        var depthPrepass = depthOnlyShader != null && Scene.Settings.EnableDepthPrepass;
 
         if (drawIndirect)
         {
@@ -732,19 +1003,25 @@ public sealed class SceneViewState : IDisposable
             MeshBatchRenderer.Render(renderLists[renderContext.RenderPass], renderContext);
         }
 
-        using (new GLDebugGroup("Opaque Render"))
+        if (renderLists[RenderPass.Opaque].Count > 0)
         {
+            using var opaqueGroup = new GLDebugGroup("Opaque Render");
+
             renderContext.RenderPass = RenderPass.Opaque;
             MeshBatchRenderer.Render(renderLists[renderContext.RenderPass], renderContext);
         }
 
         RenderAlphaTestGeometry(renderContext, depthOnlyShader);
 
-        using (new GLDebugGroup("StaticOverlay Render"))
+        if (renderLists[RenderPass.StaticOverlay].Count == 0)
         {
-            renderContext.RenderPass = RenderPass.StaticOverlay;
-            MeshBatchRenderer.Render(renderLists[renderContext.RenderPass], renderContext);
+            return;
         }
+
+        using var overlayGroup = new GLDebugGroup("StaticOverlay Render");
+
+        renderContext.RenderPass = RenderPass.StaticOverlay;
+        MeshBatchRenderer.Render(renderLists[renderContext.RenderPass], renderContext);
     }
 
     /// <summary>Prepasses the alpha tested geometry and then draws it, both after the opaque geometry.</summary>
@@ -800,9 +1077,30 @@ public sealed class SceneViewState : IDisposable
     public void RenderTranslucentLayer(Scene.RenderContext renderContext)
     {
         using (new GLDebugGroup("Translucent Render"))
+        using (GraphicsContext.RenderState.Scope(depthFunc: RsComparison.CloserEqual))
         {
             renderContext.RenderPass = RenderPass.Translucent;
             MeshBatchRenderer.Render(renderLists[RenderPass.Translucent], renderContext);
+        }
+    }
+
+    /// <summary>
+    /// Draws the fills of the translucent layer's shapes with <see cref="ShapeSceneNode.HasOrderIndependentFill"/>
+    /// into the order independent layers, in any order.
+    /// </summary>
+    internal void RenderOrderIndependentFills()
+    {
+        foreach (var shape in orderIndependentFills)
+        {
+            shape.RenderOrderIndependentFill();
+        }
+    }
+
+    internal void RenderOrderIndependentLines()
+    {
+        foreach (var shape in orderIndependentFills)
+        {
+            shape.RenderOrderIndependentLines();
         }
     }
 
@@ -824,6 +1122,39 @@ public sealed class SceneViewState : IDisposable
         renderContext.DepthOnlyShader = depthOnlyShader;
         MeshBatchRenderer.Render(translucentDepthDraws, renderContext);
         renderContext.DepthOnlyShader = null;
+
+        PerfStats.Active.ResumeTriangleCounter();
+    }
+
+    internal void RenderShadowCasters(Scene.RenderContext renderContext, Shader depthOnlyShader, Dictionary<DepthOnlyBucket, List<MeshBatchRenderer.Request>> draws)
+    {
+        foreach (var node in EnumerateVisibleNodes())
+        {
+            AddShadowCasterDraws(node, draws);
+        }
+
+        renderContext.RenderPass = RenderPass.DepthOnly;
+        renderContext.DepthOnlyShader = depthOnlyShader;
+
+        PerfStats.Active.SuspendTriangleCounter();
+
+        foreach (var (bucket, calls) in draws)
+        {
+            if (calls.Count == 0)
+            {
+                continue;
+            }
+
+            renderContext.ReplacementShader = bucket switch
+            {
+                DepthOnlyBucket.AlphaTest => depthOnlyShader.WithCombo(Shader.AlphaTestCombo, 1),
+                DepthOnlyBucket.MaterialDepthMode => null,
+                _ => depthOnlyShader,
+            };
+
+            MeshBatchRenderer.Render(calls, renderContext);
+            calls.Clear();
+        }
 
         PerfStats.Active.ResumeTriangleCounter();
     }
@@ -894,6 +1225,15 @@ public sealed class SceneViewState : IDisposable
         MeshBatchRenderer.Render(effectsBloomRenderList, renderContext);
     }
 
+    /// <summary>Renders the draw calls of the screen-space layer; the caller binds the screen-space view.</summary>
+    /// <param name="renderContext">The render context for this pass.</param>
+    public void RenderScreenSpaceLayer(Scene.RenderContext renderContext)
+    {
+        renderContext.RenderPass = RenderPass.Translucent;
+        renderContext.Layer = RenderLayer.ScreenSpace;
+        MeshBatchRenderer.Render(screenSpaceRenderList, renderContext);
+    }
+
     /// <summary>Renders water draw calls collected during <see cref="CollectSceneDrawCalls"/>.</summary>
     /// <param name="renderContext">The render context for this pass.</param>
     public void RenderWaterLayer(Scene.RenderContext renderContext)
@@ -913,37 +1253,95 @@ public sealed class SceneViewState : IDisposable
         }
     }
 
-    /// <summary>Renders all selected nodes using the outline shader to produce selection highlights.</summary>
-    /// <param name="renderContext">The render context for this pass.</param>
-    public void RenderOutlineLayer(Scene.RenderContext renderContext)
+    /// <summary>
+    /// Draws what the last collection queued for some nodes again, each node all at once, with the replacement
+    /// shader of the context. Nodes the collection left out, such as those out of view, are not drawn.
+    /// </summary>
+    /// <param name="renderContext">The render context, with the shader to draw with.</param>
+    /// <param name="nodes">The nodes to draw.</param>
+    /// <returns>Whether anything was drawn.</returns>
+    public bool RenderNodes(Scene.RenderContext renderContext, IReadOnlySet<SceneNode> nodes)
     {
-        var passShader = renderContext.ReplacementShader;
+        ArgumentNullException.ThrowIfNull(nodes);
+        Debug.Assert(renderContext.ReplacementShader != null);
 
-        renderContext.RenderPass = RenderPass.Outline;
-        renderContext.ReplacementShader = Scene.OutlineShader;
+        nodeDraws.Clear();
 
-        MeshBatchRenderer.Render(renderLists[RenderPass.Outline], renderContext);
+        foreach (var requests in renderLists.Values)
+        {
+            AddNodeDraws(requests, nodes);
+        }
 
-        renderContext.ReplacementShader = passShader;
+        foreach (var requests in viewmodelRenderLists.Values)
+        {
+            AddNodeDraws(requests, nodes);
+        }
+
+        AddNodeDraws(alphaTestAggregateDraws, nodes);
+        AddNodeDraws(alphaTestOpaqueDraws, nodes);
+
+        // Listed once each, unlike their requests, which are queued in every pass they draw in
+        foreach (var node in customBufferNodes)
+        {
+            if (nodes.Contains(node))
+            {
+                nodeDraws.Add(new MeshBatchRenderer.Request { Node = node });
+            }
+        }
+
+        // Fragments drawn by their aggregate have no draws of their own queued
+        foreach (var node in nodes)
+        {
+            if (IsDrawnByAggregate(node) && node is SceneAggregate.Fragment fragment
+                && aggregatesWithVisibleFragments.Contains(fragment.Parent) && fragment.Parent.IsFragmentInActiveLod(fragment)
+                && Scene.IsDrawn(fragment.DrawCall.Material, fragment))
+            {
+                nodeDraws.Add(new MeshBatchRenderer.Request { Mesh = fragment.RenderMesh, Call = fragment.DrawCall, Node = fragment });
+            }
+        }
+
+        if (nodeDraws.Count == 0)
+        {
+            return false;
+        }
+
+        renderContext.RenderPass = RenderPass.All;
+        MeshBatchRenderer.Render(nodeDraws, renderContext);
+
+        return true;
     }
 
-    /// <inheritdoc/>
-    public void Dispose()
+    private void AddNodeDraws(List<MeshBatchRenderer.Request> requests, IReadOnlySet<SceneNode> nodes)
     {
-        if (Scene.ShadingLightBinner == LightBinner)
+        foreach (var request in requests)
+        {
+            if (request.Call != null && nodes.Contains(request.Node))
+            {
+                nodeDraws.Add(request);
+            }
+        }
+    }
+
+    private bool IsDrawnByAggregate(SceneNode node)
+        => Scene.DrawMeshletsIndirect && node is SceneAggregate.Fragment { Parent.CanDrawIndirect: true };
+
+    /// <summary>Deletes the GPU buffers of this view.</summary>
+    public void Delete()
+    {
+        if (lightBinner != null && Scene.ShadingLightBinner == lightBinner)
         {
             Scene.ShadingLightBinner = null;
         }
 
-        LightBinner.Dispose();
+        lightBinner?.Delete();
         indirectDraws?.Delete();
         compactedDraws?.Delete();
         compactedCounts?.Delete();
-        pvsHiddenGpu?.Delete();
+        cpuVisibleGpu?.Delete();
 
         indirectDraws = null;
         compactedDraws = null;
         compactedCounts = null;
-        pvsHiddenGpu = null;
+        cpuVisibleGpu = null;
     }
 }

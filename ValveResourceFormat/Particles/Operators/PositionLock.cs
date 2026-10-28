@@ -37,15 +37,17 @@ namespace ValveResourceFormat.Particles.Operators
             previousTransform = Matrix4x4.Identity;
         }
 
+        public override void Restart(ParticleSystemState particleSystemState) => Reset();
+
         public PositionLock(ParticleDefinitionParser parse) : base(parse)
         {
             transformInput = parse.TransformInput("m_TransformInput", transformInput);
             startTimeMin = parse.Float("m_flStartTime_min", startTimeMin);
             startTimeMax = parse.Float("m_flStartTime_max", startTimeMax);
-            startTimeExp = Math.Clamp(parse.Float("m_flStartTime_exp", startTimeExp), -255f, 255f);
+            startTimeExp = ParticleMath.TruncateToQuarterSteps(parse.Float("m_flStartTime_exp", startTimeExp));
             endTimeMin = parse.Float("m_flEndTime_min", endTimeMin);
             endTimeMax = parse.Float("m_flEndTime_max", endTimeMax);
-            endTimeExp = Math.Clamp(parse.Float("m_flEndTime_exp", endTimeExp), -255f, 255f);
+            endTimeExp = ParticleMath.TruncateToQuarterSteps(parse.Float("m_flEndTime_exp", endTimeExp));
             fadeRange = parse.Float("m_flRange", fadeRange);
             rangeBias = parse.NumberProvider("m_flRangeBias", rangeBias);
 
@@ -60,6 +62,9 @@ namespace ValveResourceFormat.Particles.Operators
             outputFieldPrev = parse.ParticleField("m_nFieldOutputPrev", outputFieldPrev);
         }
 
+        /// <inheritdoc/>
+        public override ulong StoredFields => outputField.Mask() | outputFieldPrev.Mask();
+
         public override void Operate(ParticleCollection particles, float frameTime, ParticleSystemState particleSystemState, float strength)
         {
             // Compute the transform delta once per frame; per particle, only the first would see it move
@@ -67,13 +72,10 @@ namespace ValveResourceFormat.Particles.Operators
             var transformPosition = transform.Translation;
             var scale = componentScale.NextVector(particleSystemState);
 
-            // Also per frame: the transform does not vary per particle, so neither does its direction
-            var hasOrientation = transformInput.TryGetOrientation(ref Particle.Default, particleSystemState, out var lockedNormal);
-
             if (previousTransformPosition.X == float.MaxValue)
             {
-                previousTransformPosition = transformPosition;
-                previousTransform = transform;
+                previousTransform = transformInput.NextTransformAtTime(particleSystemState, particleSystemState.StepStartAge);
+                previousTransformPosition = previousTransform.Translation;
             }
 
             var delta = transformPosition - previousTransformPosition;
@@ -93,95 +95,148 @@ namespace ValveResourceFormat.Particles.Operators
             // Both sides of the test are squared distances, the threshold having been squared at load
             var instantJump = instantJumpThreshold != 0f && delta.LengthSquared() > instantJumpThreshold;
 
-            if (delta == Vector3.Zero && !lockRotation)
-            {
-                return;
-            }
-
             // A start fadeout of 1 (the default) means the lock never fades and is applied every frame
             var alwaysLocked = startTimeMin >= 1f;
 
             // The range bias is a collection-scope input, evaluated once for the whole frame
             var bias = rangeBias.NextNumber(particleSystemState);
 
-            foreach (ref var particle in particles.Current)
+            if (!ParticleBuffer.IsVector(outputField))
             {
-                var timeFade = 1f;
+                return;
+            }
+
+            var current = particles.Current;
+            var ages = current.ReadAges();
+
+            var lifetimes = current.ReadFloats(ParticleField.LifeDuration);
+            var positions = current.Vectors(outputField);
+            var movesPrevious = prevPosScale != 0f && ParticleBuffer.IsVector(outputFieldPrev);
+            var previousPositions = movesPrevious ? current.Vectors(outputFieldPrev) : default;
+
+            var windows = alwaysLocked ? default : FillWindows(particleSystemState.ThreadRandom, ages, lifetimes, instantJump);
+            var rotatesWholeBlocks = fadeRange != 0f && lockRotation;
+
+            for (var i = 0; i < positions.Length; i++)
+            {
+                var window = 1f;
 
                 if (!alwaysLocked)
                 {
-                    // Redrawn every frame from the running counter rather than fixed by the particle,
-                    // so the window a particle unlocks over moves under it while it is alive
-                    var startTime = particleSystemState.Random.NextWithExponentBetween(startTimeExp, startTimeMin, startTimeMax);
-                    var endTime = particleSystemState.Random.NextWithExponentBetween(endTimeExp, endTimeMin, endTimeMax);
+                    window = windows[i];
 
-                    // Fully locked until startTime, fading the lock out until endTime, using normalized lifetime
-                    timeFade = particle.NormalizedAge <= startTime
-                        ? 1f
-                        : 1f - MathUtils.Saturate(MathUtils.Remap(particle.NormalizedAge, startTime, endTime));
-
-                    if (instantJump)
+                    if (IsUnlocked(windows, i, rotatesWholeBlocks))
                     {
-                        timeFade = 1f;
+                        continue;
                     }
                 }
 
-                var lockStrength = strength * timeFade;
+                var currentPosition = positions[i];
 
-                if (lockStrength <= 0f)
+                var creationFraction = MathF.Min(ages[i], frameTime) / frameTime;
+
+                var move = delta * (strength * creationFraction * window);
+                var rotationWeight = alwaysLocked ? strength : window;
+
+                if (fadeRange != 0f)
                 {
-                    continue;
-                }
+                    // Distance is measured against the position the particle is about to occupy: the scaled
+                    // destination for a windowed lock, the unscaled one for an always-on lock
+                    var probe = alwaysLocked ? move : move * scale;
+                    var distance = Vector3.Distance(transformPosition, currentPosition + probe);
+                    var fade = ParticleMath.Bias(MathF.Min(1f, distance / fadeRange), bias);
 
-                var currentPosition = particle.GetVector(outputField);
-
-                // A particle born partway through the step only travelled with the transform for the
-                // part of the step it existed for
-                var creationFraction = frameTime > 0f
-                    ? MathF.Min(particle.Age, frameTime) / frameTime
-                    : 1f;
-
-                var scaledDelta = delta * scale * (creationFraction * lockStrength);
-
-                // Always-locked particles weight rotation by strength, others by time fade alone
-                var rotationLockStrength = alwaysLocked ? strength : timeFade;
-
-                if (fadeRange > 0f)
-                {
-                    // Distance is measured against the position the particle is about to occupy
-                    var distance = Vector3.Distance(transformPosition, currentPosition + scaledDelta);
-                    var normalizedDistance = MathUtils.Saturate(distance / fadeRange);
-                    var fade = ParticleMath.Bias(normalizedDistance, bias);
-
-                    scaledDelta *= 1f - fade;
-                    rotationLockStrength = 1f - (fade * rotationLockStrength);
+                    move *= 1f - fade;
+                    rotationWeight = 1f - (fade * rotationWeight);
                 }
 
                 if (lockRotation)
                 {
                     // Move both positions by the transform delta so particles follow the control point's rotation
-                    var currentPrevious = particle.GetVector(outputFieldPrev);
-                    var rotatedPosition = Vector3.Transform(currentPosition, rotationLock);
-                    var rotatedPrevious = Vector3.Transform(currentPrevious, rotationLock);
+                    var weight = scale * (rotationWeight * creationFraction);
 
-                    var rotationStrength = rotationLockStrength * creationFraction;
+                    positions[i] = currentPosition + ((Vector3.Transform(currentPosition, rotationLock) - currentPosition) * weight);
 
-                    particle.SetVector(outputFieldPrev, currentPrevious + (rotatedPrevious - currentPrevious) * (rotationStrength * prevPosScale));
-                    particle.SetVector(outputField, currentPosition + (rotatedPosition - currentPosition) * rotationStrength);
-                    // A transform with no orientation of its own has no direction to hand the normal,
-                    // so the particle keeps the one it had
-                    if (hasOrientation)
+                    if (movesPrevious)
                     {
-                        particle.Normal = lockedNormal;
+                        var currentPrevious = previousPositions[i];
+                        previousPositions[i] = currentPrevious + ((Vector3.Transform(currentPrevious, rotationLock) - currentPrevious) * weight * prevPosScale);
                     }
                 }
                 else
                 {
                     // Translate the particle with the transform, preserving its offset from it
-                    particle.SetVector(outputFieldPrev, particle.GetVector(outputFieldPrev) + (scaledDelta * prevPosScale));
-                    particle.SetVector(outputField, currentPosition + scaledDelta);
+                    var scaledMove = move * scale;
+
+                    positions[i] = currentPosition + scaledMove;
+
+                    if (movesPrevious)
+                    {
+                        previousPositions[i] += scaledMove * prevPosScale;
+                    }
                 }
             }
+        }
+
+        /// <summary>
+        /// Works out how strongly each particle is still locked, 1 before its unlock window and 0 after
+        /// it. The window's start and end are redrawn every step from the thread generator, one pair per
+        /// block of four particles with a value per particle, so the window moves under a particle while
+        /// it is alive. An instant jump locks every particle fully, though the draws are still taken.
+        /// </summary>
+        private Span<float> FillWindows(ThreadRandom generator, ReadOnlySpan<float> ages, ReadOnlySpan<float> lifetimes, bool instantJump)
+        {
+            var windows = ParticleScratch.Floats(ages.Length);
+
+            for (var blockStart = 0; blockStart < windows.Length; blockStart += 4)
+            {
+                var startDraws = generator.Next();
+                var endDraws = generator.Next();
+                var blockEnd = Math.Min(blockStart + 4, windows.Length);
+
+                for (var i = blockStart; i < blockEnd; i++)
+                {
+                    var lane = i - blockStart;
+                    var startTime = MathUtils.Lerp(startTimeMin, startTimeMax, MathF.Pow(startDraws[lane], startTimeExp));
+                    var endTime = MathUtils.Lerp(endTimeMin, endTimeMax, MathF.Pow(endDraws[lane], endTimeExp));
+
+                    var lifeFraction = ParticleMath.ClampToUnit(ages[i] / lifetimes[i]);
+                    windows[i] = instantJump ? 1f : 1f - ParticleMath.ClampToUnit((lifeFraction - startTime) / (endTime - startTime));
+                }
+            }
+
+            return windows;
+        }
+
+        /// <summary>
+        /// Whether the particle at <paramref name="index"/> is left alone because its window has closed.
+        /// When <paramref name="rotatesWholeBlocks"/>, it is still rotated at full weight while another
+        /// particle of its block of four is locked.
+        /// </summary>
+        private static bool IsUnlocked(ReadOnlySpan<float> windows, int index, bool rotatesWholeBlocks)
+        {
+            if (windows[index] > 0f)
+            {
+                return false;
+            }
+
+            if (!rotatesWholeBlocks)
+            {
+                return true;
+            }
+
+            var blockStart = index & ~3;
+            var blockEnd = Math.Min(blockStart + 4, windows.Length);
+
+            for (var i = blockStart; i < blockEnd; i++)
+            {
+                if (windows[i] > 0f)
+                {
+                    return false;
+                }
+            }
+
+            return true;
         }
     }
 }

@@ -218,7 +218,7 @@ internal static class DmxMeshBuilder
                 }
 
                 var vectorWeights = VBIB.GetBlendWeightsArray(vertexBuffer, attribute);
-                var flatWeights = MemoryMarshal.Cast<Vector4, float>(vectorWeights).ToArray();
+                var flatWeights = MemoryMarshal.Cast<Vector4, float>(vectorWeights);
 
                 var compactWeights = new float[flatWeights.Length / boneArrayComponents * boneWeightCount];
                 for (var i = 0; i < flatWeights.Length; i += boneArrayComponents)
@@ -405,7 +405,7 @@ internal static class DmxMeshBuilder
 
                 if (material == null && Mesh.IsOccluder(drawCall))
                 {
-                    material = "materials/tools/toolsoccluder.vmat";
+                    material = ToolsMaterials.Occluder;
                 }
 
                 material ??= "materials/default.vmat";
@@ -509,6 +509,13 @@ internal static class DmxMeshBuilder
 
         var combination = new DmeCombinationOperator { Name = "combinationOperator" };
 
+        var positions = new List<Vector3>();
+        var positionIndices = new List<int>();
+        var normals = new List<Vector3>();
+        var normalIndices = new List<int>();
+        var wrinkles = new List<float>();
+        var wrinkleIndices = new List<int>();
+
         foreach (var (dmeMesh, baseVertex, vertexCount) in targets)
         {
             foreach (var flexName in flexNames)
@@ -520,12 +527,12 @@ internal static class DmxMeshBuilder
                 normalData.TryGetValue(flexName, out var normalDeltas);
                 coverage.TryGetValue(flexName, out var covered);
 
-                var positions = new List<Vector3>();
-                var positionIndices = new List<int>();
-                var normals = new List<Vector3>();
-                var normalIndices = new List<int>();
-                var wrinkles = new List<float>();
-                var wrinkleIndices = new List<int>();
+                positions.Clear();
+                positionIndices.Clear();
+                normals.Clear();
+                normalIndices.Clear();
+                wrinkles.Clear();
+                wrinkleIndices.Clear();
 
                 for (var i = 0; i < vertexCount; i++)
                 {

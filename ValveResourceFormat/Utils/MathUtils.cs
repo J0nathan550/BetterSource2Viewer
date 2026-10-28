@@ -79,6 +79,22 @@ namespace ValveResourceFormat.Utils
         }
 
         /// <summary>
+        /// Interpolates as <c>from + (to - from) * amount</c>. Unlike <see cref="float.Lerp(float, float, float)"/>,
+        /// which weights the two ends, it gives <paramref name="from"/> exactly when both ends are equal, so a
+        /// collapsed range keeps its value through a later truncation.
+        /// </summary>
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        public static float Lerp(float from, float to, float amount) => ((to - from) * amount) + from;
+
+        /// <inheritdoc cref="Lerp(float, float, float)"/>
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        public static Vector3 Lerp(Vector3 from, Vector3 to, float amount) => ((to - from) * amount) + from;
+
+        /// <inheritdoc cref="Lerp(float, float, float)"/>
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        public static Vector3 Lerp(Vector3 from, Vector3 to, Vector3 amount) => ((to - from) * amount) + from;
+
+        /// <summary>
         /// Scales <paramref name="value"/> to unit length, returning <see cref="Vector3.Zero"/> for a
         /// vector with no length rather than the NaN a plain divide would give.
         /// </summary>
@@ -113,6 +129,17 @@ namespace ValveResourceFormat.Utils
         }
 
         /// <summary>
+        /// A unit vector perpendicular to the unit vector <paramref name="direction"/>, picked by a fixed rule,
+        /// so the same direction always gives the same perpendicular: +X for +Z and +Y, -Z for +X.
+        /// </summary>
+        public static Vector3 Perpendicular(Vector3 direction)
+        {
+            var guess = new Vector3(((1f - direction.Z) * direction.Y * direction.Y) + direction.Z, 0f, -direction.X);
+
+            return SafeNormalize(ProjectOntoPlane(SafeNormalize(guess), direction));
+        }
+
+        /// <summary>
         /// The cross product of a triangle's two edges leaving <paramref name="a"/>: its face normal, with
         /// a length of twice the triangle's area.
         /// </summary>
@@ -121,6 +148,17 @@ namespace ValveResourceFormat.Utils
         {
             return Vector3.Cross(b - a, c - a);
         }
+
+        /// <summary>
+        /// The rotation matrix with <paramref name="x"/>, <paramref name="y"/> and <paramref name="z"/> as its
+        /// rows, which carries +X, +Y and +Z onto those axes.
+        /// </summary>
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        public static Matrix4x4 CreateBasis(Vector3 x, Vector3 y, Vector3 z) => new(
+            x.X, x.Y, x.Z, 0f,
+            y.X, y.Y, y.Z, 0f,
+            z.X, z.Y, z.Z, 0f,
+            0f, 0f, 0f, 1f);
 
         /// <summary>
         /// The largest of the given values, compared with <see cref="MathF.Max(float, float)"/>.
@@ -197,7 +235,11 @@ namespace ValveResourceFormat.Utils
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
         public static float AngleBetween(Quaternion a, Quaternion b)
         {
-            return 2f * SafeAcos(MathF.Abs(Quaternion.Dot(a, b)));
+            // An arc cosine of the dot product cannot resolve angles below about 0.03 degrees in single
+            // precision, as their cosine rounds to one; the sine of the difference rotation can.
+            var difference = Quaternion.Conjugate(a) * b;
+            var sine = new Vector3(difference.X, difference.Y, difference.Z).Length();
+            return 2f * MathF.Atan2(sine, MathF.Abs(difference.W));
         }
 
         /// <summary>
@@ -263,6 +305,14 @@ namespace ValveResourceFormat.Utils
         {
             return Math.Clamp(x, 0.0f, 1.0f);
         }
+
+        /// <summary>The Rec. 709 weights of the red, green and blue channels in a color's luminance.</summary>
+        public static readonly Vector3 LuminanceWeights = new(0.2126f, 0.7152f, 0.0722f);
+
+        /// <summary>
+        /// Rec. 709 luminance of a linear RGB color.
+        /// </summary>
+        public static float Luminance(Vector3 color) => Vector3.Dot(color, LuminanceWeights);
 
         /// <summary>
         /// Clamps a value between two bounds given in either order, unlike <see cref="Math.Clamp(float, float, float)"/>
@@ -385,5 +435,137 @@ namespace ValveResourceFormat.Utils
         /// </summary>
         public static float MaxAxisScale(this Matrix4x4 m)
             => Max(m.AxisScale(0), m.AxisScale(1), m.AxisScale(2));
+
+        /// <summary>
+        /// Wraps <paramref name="index"/> into [0, <paramref name="count"/>), so a negative index counts
+        /// back from the end.
+        /// </summary>
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        public static int WrapIndex(int index, int count)
+        {
+            return ((index % count) + count) % count;
+        }
+
+        /// <summary>
+        /// Scales <paramref name="value"/> down to a non-negative <paramref name="maxLength"/> when it is
+        /// longer, and returns it unchanged otherwise.
+        /// </summary>
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        public static Vector3 ClampLength(Vector3 value, float maxLength)
+        {
+            var lengthSquared = value.LengthSquared();
+
+            return lengthSquared > maxLength * maxLength ? value * (maxLength / MathF.Sqrt(lengthSquared)) : value;
+        }
+
+        /// <summary>
+        /// The area of the triangle with corners <paramref name="a"/>, <paramref name="b"/> and <paramref name="c"/>.
+        /// </summary>
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        public static float TriangleArea(Vector3 a, Vector3 b, Vector3 c)
+        {
+            return TriangleCross(a, b, c).Length() * 0.5f;
+        }
+
+        /// <summary>
+        /// Diagonalizes a symmetric 3x3 matrix with Jacobi rotations accumulated in a quaternion. Each
+        /// iteration rotates away the largest off-diagonal entry, for at most 24 iterations.
+        /// </summary>
+        /// <param name="matrix">The symmetric matrix in its upper-left 3x3 block.</param>
+        /// <param name="eigenvalues">The diagonal of the rotated matrix, unsorted.</param>
+        /// <returns>
+        /// The rotation whose matrix (<see cref="Matrix4x4.CreateFromQuaternion"/>) has the eigenvectors as its
+        /// rows, in the order of <paramref name="eigenvalues"/>.
+        /// </returns>
+        public static Quaternion DiagonalizeSymmetric(Matrix4x4 matrix, out Vector3 eigenvalues)
+        {
+            const int MaxIterations = 24;
+
+            var rotation = Quaternion.Identity;
+            eigenvalues = new Vector3(matrix.M11, matrix.M22, matrix.M33);
+
+            for (var iteration = 0; iteration < MaxIterations; iteration++)
+            {
+                var frame = Matrix4x4.CreateFromQuaternion(rotation);
+                var diagonal = frame * matrix * Matrix4x4.Transpose(frame);
+
+                eigenvalues = new Vector3(diagonal.M11, diagonal.M22, diagonal.M33);
+
+                // Entry k is the one coupling the two axes other than k
+                var offDiagonal = new Vector3(diagonal.M23, diagonal.M13, diagonal.M12);
+                var magnitude = Vector3.Abs(offDiagonal);
+
+                int pivot;
+
+                if (magnitude.X > magnitude.Y && magnitude.X > magnitude.Z)
+                {
+                    pivot = 0;
+                }
+                else if (magnitude.Y > magnitude.Z)
+                {
+                    pivot = 1;
+                }
+                else
+                {
+                    pivot = 2;
+                }
+
+                var pivotValue = offDiagonal[pivot];
+
+                if (pivotValue == 0f)
+                {
+                    break;
+                }
+
+                var theta = (eigenvalues[(pivot + 2) % 3] - eigenvalues[(pivot + 1) % 3]) / (2f * pivotValue);
+                var sign = theta > 0f ? 1f : -1f;
+                theta *= sign;
+
+                // Past 1e6 the square root is theta to float precision, and squaring theta could overflow
+                var root = theta < 1e6f ? MathF.Sqrt((theta * theta) + 1f) : theta;
+                var tangent = sign / (theta + root);
+                var cosine = 1f / MathF.Sqrt((tangent * tangent) + 1f);
+
+                if (cosine == 1f)
+                {
+                    break;
+                }
+
+                var axis = Vector3.Zero;
+                axis[pivot] = -sign * MathF.Sqrt((1f - cosine) * 0.5f);
+
+                var w = MathF.Sqrt(1f - (axis[pivot] * axis[pivot]));
+
+                if (w == 1f)
+                {
+                    break;
+                }
+
+                rotation = Quaternion.Normalize(rotation * new Quaternion(axis, w));
+            }
+
+            return rotation;
+        }
+
+        /// <summary>
+        /// The radical inverse of a non-negative <paramref name="index"/> in base <paramref name="radix"/>: its
+        /// digits mirrored about the radix point, giving a value in [0, 1). Successive indices in bases 2, 3 and
+        /// 5 give the coordinates of a Halton sequence.
+        /// </summary>
+        public static float RadicalInverse(int index, int radix)
+        {
+            var inverseRadix = 1f / radix;
+            var digitScale = inverseRadix;
+            var result = 0f;
+
+            while (index > 0)
+            {
+                result += index % radix * digitScale;
+                index /= radix;
+                digitScale *= inverseRadix;
+            }
+
+            return result;
+        }
     }
 }

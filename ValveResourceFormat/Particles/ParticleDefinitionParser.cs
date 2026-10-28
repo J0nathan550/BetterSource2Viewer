@@ -1,7 +1,8 @@
 using System.Globalization;
-using System.Linq;
+using System.Runtime.CompilerServices;
 using Microsoft.Extensions.Logging;
 using ValveKeyValue;
+using ValveResourceFormat.Particles.Upgrade;
 using ValveResourceFormat.ResourceTypes;
 using ValveResourceFormat.Serialization.KeyValues;
 
@@ -12,30 +13,36 @@ namespace ValveResourceFormat.Particles;
 /// </summary>
 /// <param name="Data">The block being read.</param>
 /// <param name="Logger">Where parse warnings go.</param>
-/// <param name="InputOrdinal">
-/// Numbers the inputs of one particle function as they are parsed, shared by every nested block of
-/// that function. Held in a cell because the parser is copied by value.
+/// <param name="InitialReads">
+/// Collects the bit mask over <see cref="Particles.ParticleField"/> of the attributes whose initial value the
+/// inputs of the definition read.
 /// </param>
 /// <param name="BehaviorVersion">
 /// The <c>m_nBehaviorVersion</c> of the definition this block belongs to, for parse-time version gates.
 /// </param>
-internal record struct ParticleDefinitionParser(KVObject Data, ILogger Logger, int[] InputOrdinal, int BehaviorVersion = 0)
+/// <param name="RandomInputs">
+/// Set when the particle function being read declares a random float input, or null outside a function.
+/// </param>
+internal record struct ParticleDefinitionParser(KVObject Data, ILogger Logger, StrongBox<ulong> InitialReads, int BehaviorVersion = 0,
+    StrongBox<bool>? RandomInputs = null)
 {
-    /// <summary>Reads a particle function, starting its input numbering over.</summary>
-    public ParticleDefinitionParser(KVObject data, ILogger logger, int behaviorVersion = 0) : this(data, logger, new int[1], behaviorVersion)
+    /// <summary>Reads a block nested in this one.</summary>
+    public readonly ParticleDefinitionParser Nested(KVObject data) => new(data, Logger, InitialReads, BehaviorVersion, RandomInputs);
+
+    /// <summary>Reads the block of a particle function, tracking its random inputs apart from other functions.</summary>
+    public readonly ParticleDefinitionParser Function(KVObject data) => Nested(data) with { RandomInputs = new() };
+
+    /// <summary>Records that an input of the definition reads the initial value of <paramref name="field"/>.</summary>
+    public readonly void AddInitialRead(ParticleField field) => InitialReads.Value |= field.Mask();
+
+    /// <summary>Records that the function being read declares a random float input.</summary>
+    public readonly void AddRandomInput()
     {
+        if (RandomInputs is not null)
+        {
+            RandomInputs.Value = true;
+        }
     }
-
-    /// <summary>Reads a block nested in this one, continuing its input numbering.</summary>
-    public readonly ParticleDefinitionParser Nested(KVObject data) => new(data, Logger, InputOrdinal, BehaviorVersion);
-
-    /// <summary>
-    /// Claims the next displacement for an input whose draw is constant per particle, so that two
-    /// inputs of one function reading the same particle land on different slots of the shared random
-    /// table. Different functions are already separated by
-    /// <see cref="Utils.ParticleRandom.OperatorOffset"/>.
-    /// </summary>
-    public readonly int NextInputOrdinal() => InputOrdinal[0]++;
 
     private readonly T GetValueOrDefault<T>(string key, Func<string, T?> parsingMethod, T @default)
     {
@@ -52,47 +59,81 @@ internal record struct ParticleDefinitionParser(KVObject Data, ILogger Logger, i
     /// </summary>
     public readonly ParticleDefinitionParser[] Array(string k)
     {
-        if (!Data.ContainsKey(k))
+        if (!Data.TryGetValue(k, out var value))
         {
             return [];
         }
 
-        var logger = Logger; // Copy to local variable to avoid capturing 'this' in lambda
-        var ordinal = InputOrdinal;
-        var behaviorVersion = BehaviorVersion;
-        return [.. Data.GetArray(k).Select(item => new ParticleDefinitionParser(item, logger, ordinal, behaviorVersion))];
-    }
-
-    private readonly float Float(string k)
-    {
-        // Newer content authors many scalar fields as full float-input structures; the call site
-        // should read those with NumberProvider instead. Fall back to the block's literal value so
-        // such content still loads.
-        if (Data.GetSubCollection(k) is { IsCollection: true })
+        if (!value.IsArray)
         {
-            Logger.LogWarning("Field {Key} is authored as a number provider, but is parsed as a literal float; it should be read with NumberProvider", k);
-            return NumberProvider(k)?.NextNumber() ?? 0f;
+            throw new InvalidOperationException($"Field {k} is not an array");
         }
 
-        return Data.GetFloatProperty(k);
+        var elements = value.AsArraySpan();
+        var parsers = new ParticleDefinitionParser[elements.Length];
+
+        for (var i = 0; i < parsers.Length; i++)
+        {
+            parsers[i] = Nested(elements[i]);
+        }
+
+        return parsers;
     }
 
     /// <summary>Reads a float property, returning <paramref name="default"/> if the key is absent.</summary>
-    public readonly float Float(string key, float @default = default) => GetValueOrDefault(key, Float, @default);
-
-    private readonly int Int32(string k)
+    public readonly float Float(string key, float @default = default)
     {
-        if (Data.GetSubCollection(k) is { IsCollection: true })
+        if (!Data.TryGetValue(key, out var value))
         {
-            Logger.LogWarning("Field {Key} is authored as a number provider, but is parsed as a literal int; it should be read with NumberProvider", k);
-            return (int)(NumberProvider(k)?.NextNumber() ?? 0f);
+            return @default;
         }
 
-        return Data.GetInt32Property(k);
+        // Newer content authors many scalar fields as full float-input structures; the call site
+        // should read those with NumberProvider instead. Fall back to the block's literal value so
+        // such content still loads.
+        if (value.IsCollection)
+        {
+            Logger.LogUniqueWarning("Field {Key} is authored as a number provider, but is parsed as a literal float; it should be read with NumberProvider", key);
+            return ReadNumberProvider(value)?.NextNumber(ParticleSystemState.Default) ?? 0f;
+        }
+
+        return (float)value.CoerceDouble(0f);
     }
 
     /// <summary>Reads an int property, returning <paramref name="default"/> if the key is absent.</summary>
-    public readonly int Int32(string key, int @default = default) => GetValueOrDefault(key, Int32, @default);
+    public readonly int Int32(string key, int @default = default)
+    {
+        if (!Data.TryGetValue(key, out var value))
+        {
+            return @default;
+        }
+
+        if (value.IsCollection)
+        {
+            Logger.LogUniqueWarning("Field {Key} is authored as a number provider, but is parsed as a literal int; it should be read with NumberProvider", key);
+            return (int)(ReadNumberProvider(value)?.NextNumber(ParticleSystemState.Default) ?? 0f);
+        }
+
+        return ScalarInt32(value);
+    }
+
+    /// <summary>Reads an int the way <see cref="KVObjectExtensions.GetInt32Property"/> does: a blank string is zero.</summary>
+    private static int ScalarInt32(KVObject value)
+    {
+        if (value.ValueType == KVValueType.String && string.IsNullOrWhiteSpace((string)value))
+        {
+            return 0;
+        }
+
+        return (int)value;
+    }
+
+    /// <summary>
+    /// Reads a control point index, clamped to 0 to <see cref="ParticleSystemState.MaxControlPoint"/>,
+    /// returning <paramref name="default"/> (also clamped) if the key is absent.
+    /// </summary>
+    public readonly int ControlPoint(string key, int @default = 0)
+        => Math.Clamp(Int32(key, @default), 0, ParticleSystemState.MaxControlPoint);
 
     private readonly long Long(string k) => Data.GetIntegerProperty(k);
     /// <summary>Reads a long property, returning <paramref name="default"/> if the key is absent.</summary>
@@ -102,27 +143,30 @@ internal record struct ParticleDefinitionParser(KVObject Data, ILogger Logger, i
     /// <summary>Reads a bool property, returning <paramref name="default"/> if the key is absent.</summary>
     public readonly bool Boolean(string key, bool @default = default) => GetValueOrDefault(key, Boolean, @default);
 
-    private readonly Vector3 Vector3(string k)
+    /// <summary>Reads a string property, returning <paramref name="default"/> if the key is absent.</summary>
+    public readonly string String(string key, string @default = "") => Data.GetStringProperty(key, @default);
+
+    /// <summary>Reads a <see cref="System.Numerics.Vector3"/> sub-collection property, returning <paramref name="default"/> if the key is absent.</summary>
+    public readonly Vector3 Vector3(string key, Vector3 @default = default)
+        => Data.TryGetValue(key, out var value) ? ReadVector3(key, value) : @default;
+
+    private readonly Vector3 ReadVector3(string key, KVObject value)
     {
         // Some content authors vectors as space-separated strings ("0.7 0.5 0.25").
-        if (Data.TryGetValue(k, out var value) && value.ValueType == KVValueType.String)
+        if (value.ValueType == KVValueType.String)
         {
-            return EntityTransformHelper.ParseVector3(Data.GetStringProperty(k));
+            return EntityTransformHelper.ParseVector3((string)value);
         }
-
-        var sub = Data.GetSubCollection(k);
 
         // Newer content authors some vector fields as full vector-input structures; the call site
         // must read those with VectorProvider instead of as a literal.
-        if (sub.ContainsKey("m_nType"))
+        if (value.ContainsKey("m_nType"))
         {
-            Logger.LogWarning("Field {Key} is authored as a vector provider, but is parsed as a literal vector; it should be read with VectorProvider", k);
+            Logger.LogUniqueWarning("Field {Key} is authored as a vector provider, but is parsed as a literal vector; it should be read with VectorProvider", key);
         }
 
-        return sub.ToVector3();
+        return value.ToVector3();
     }
-    /// <summary>Reads a <see cref="System.Numerics.Vector3"/> sub-collection property, returning <paramref name="default"/> if the key is absent.</summary>
-    public readonly Vector3 Vector3(string key, Vector3 @default = default) => GetValueOrDefault(key, Vector3, @default);
 
     /// <summary>Reads an enum property, returning <paramref name="default"/> if the key is absent.</summary>
     public readonly T Enum<T>(string key, T @default = default) where T : struct, Enum
@@ -188,19 +232,41 @@ internal record struct ParticleDefinitionParser(KVObject Data, ILogger Logger, i
     public readonly ParticleField ParticleField(string key, ParticleField @default = default) => GetValueOrDefault(key, ParticleField, @default);
 
     /// <summary>Reads an integer RGB color array into a normalized [0, 1] <see cref="System.Numerics.Vector3"/>, returning <paramref name="default"/> if the key is absent.</summary>
-    public readonly Vector3 Color24(string key, Vector3 @default = default) => GetValueOrDefault(key, Color24, @default);
-    private readonly Vector3 Color24(string k)
-    {
-        var vectorValues = Data.GetIntegerArray(k);
-        return new Vector3(vectorValues[0], vectorValues[1], vectorValues[2]) / 255f;
-    }
+    public readonly Vector3 Color24(string key, Vector3 @default = default)
+        => Data.TryGetValue(key, out var value) ? value.ToVector3() / 255f : @default;
 
     /// <summary>Reads and constructs an <see cref="INumberProvider"/> from the property at <paramref name="key"/>, returning <paramref name="default"/> if the key is absent.</summary>
-    public readonly INumberProvider NumberProvider(string key, INumberProvider @default) => GetValueOrDefault(key, NumberProvider, @default);
-    private readonly INumberProvider? NumberProvider(string key)
+    public readonly INumberProvider NumberProvider(string key, INumberProvider @default)
     {
-        var pfParameters = Data.GetSubCollection(key);
+        if (!Data.TryGetValue(key, out var value))
+        {
+            return @default;
+        }
 
+        return ReadNumberProvider(value) ?? @default;
+    }
+
+    /// <summary>
+    /// Reads a <c>CParticleCollectionFloatInput</c> like <see cref="NumberProvider(string, INumberProvider)"/>,
+    /// evaluated for the whole collection even where a function reads it per particle.
+    /// </summary>
+    public readonly INumberProvider CollectionNumberProvider(string key, INumberProvider @default)
+    {
+        var provider = NumberProvider(key, @default);
+        return provider is LiteralNumberProvider ? provider : new CollectionNumberInput(provider);
+    }
+
+    /// <summary>
+    /// Reads a <c>CParticleCollectionVecInput</c> like <see cref="VectorProvider(string, IVectorProvider)"/>,
+    /// evaluated for the whole collection even where a function reads it per particle.
+    /// </summary>
+    public readonly IVectorProvider CollectionVectorProvider(string key, IVectorProvider @default)
+    {
+        var provider = VectorProvider(key, @default);
+        return provider is LiteralVectorProvider or LiteralColorVectorProvider ? provider : new CollectionVectorInput(provider);
+    }
+    private readonly INumberProvider? ReadNumberProvider(KVObject pfParameters)
+    {
         if (pfParameters.IsNull)
         {
             return null;
@@ -208,7 +274,7 @@ internal record struct ParticleDefinitionParser(KVObject Data, ILogger Logger, i
 
         if (pfParameters.IsCollection)
         {
-            var type = pfParameters.GetStringProperty("m_nType");
+            var type = pfParameters.GetStringProperty("m_nType", "PF_TYPE_LITERAL");
             var parse = Nested(pfParameters);
 
             switch (type)
@@ -221,6 +287,8 @@ internal record struct ParticleDefinitionParser(KVObject Data, ILogger Logger, i
                     return new RandomNumberProvider(parse, false);
                 case "PF_TYPE_RANDOM_BIASED":
                     return new RandomNumberProvider(parse, true);
+                case "PF_TYPE_NAMED_VALUE":
+                    return new NamedValueNumberProvider(parse);
                 case "PF_TYPE_COLLECTION_AGE":
                     return new CollectionAgeNumberProvider(parse);
                 case "PF_TYPE_ENDCAP_AGE":
@@ -238,8 +306,9 @@ internal record struct ParticleDefinitionParser(KVObject Data, ILogger Logger, i
                 case "PF_TYPE_PARTICLE_INITIAL_FLOAT":
                     return new PerParticleInitialNumberProvider(parse);
                 case "PF_TYPE_PARTICLE_VECTOR_COMPONENT":
+                    return new PerParticleVectorComponentNumberProvider(parse, initial: false);
                 case "PF_TYPE_PARTICLE_INITIAL_VECTOR_COMPONENT":
-                    return new PerParticleVectorComponentNumberProvider(parse);
+                    return new PerParticleVectorComponentNumberProvider(parse, initial: true);
                 case "PF_TYPE_RENDERER_CAMERA_DISTANCE":
                     return new RendererCameraDistanceNumberProvider(parse);
                 case "PF_TYPE_PARTICLE_SPEED":
@@ -265,41 +334,39 @@ internal record struct ParticleDefinitionParser(KVObject Data, ILogger Logger, i
                 case "PF_TYPE_PARTICLE_ROPE_SEGMENT_NORMALIZED":
                     return new RopeSegmentNormalizedNumberProvider(parse);
                 // KNOWN TYPES WE DON'T SUPPORT:
-                // PF_TYPE_NAMED_VALUE (needs game VData),
                 // PF_TYPE_CLOSEST_CAMERA_DISTANCE, PF_TYPE_CONCURRENT_DEF_COUNT, PF_TYPE_RANGE
                 default:
-                    if (type == null)
-                    {
-                        // Old serialization omits every default-valued key, and the default type is the
-                        // literal one, so a block carrying a literal value is that literal.
-                        if (pfParameters.ContainsKey("m_flLiteralValue"))
-                        {
-                            return new LiteralNumberProvider(pfParameters.GetFloatProperty("m_flLiteralValue"));
-                        }
-
-                        Logger.LogWarning("Number provider has no m_nType, using the caller default");
-                        return null;
-                    }
-
-                    Logger.LogWarning("Number provider of type {Type} is not supported, using its literal value", type);
-                    return new LiteralNumberProvider(pfParameters.GetFloatProperty("m_flLiteralValue"));
+                    Logger.LogUniqueWarning("Number provider of type {Type} is not supported, using its literal value", type);
+                    return new LiteralNumberProvider(parse.Float("m_flLiteralValue"));
             }
         }
         else
         {
-            return new LiteralNumberProvider((float)pfParameters);
+            // A value that is not a block is a literal; a string that does not parse, empty included, is zero
+            return new LiteralNumberProvider((float)pfParameters.CoerceDouble(0f));
         }
     }
 
     /// <summary>Reads and constructs an <see cref="IVectorProvider"/> from the property at <paramref name="key"/>, returning <paramref name="default"/> if the key is absent.</summary>
-    public readonly IVectorProvider VectorProvider(string key, IVectorProvider @default) => GetValueOrDefault(key, VectorProvider, @default);
-    private readonly IVectorProvider VectorProvider(string key)
-    {
-        var pvecParameters = Data.GetSubCollection(key);
+    public readonly IVectorProvider VectorProvider(string key, IVectorProvider @default)
+        => Data.TryGetValue(key, out var value) ? ReadVectorProvider(key, value) : @default;
 
-        if (pvecParameters.IsCollection && pvecParameters.ContainsKey("m_nType"))
+    private readonly IVectorProvider ReadVectorProvider(string key, KVObject pvecParameters)
+    {
+        if (pvecParameters.ValueType == KVValueType.String)
         {
-            var type = pvecParameters.GetStringProperty("m_nType");
+            switch ((string)pvecParameters)
+            {
+                case "pvec_color_white":
+                    return new LiteralColorVectorProvider(new(255f, 255f, 255f));
+                case "pvec_color_black":
+                    return new LiteralColorVectorProvider(default);
+            }
+        }
+
+        if (pvecParameters.IsCollection)
+        {
+            var type = pvecParameters.GetStringProperty("m_nType", "PVEC_TYPE_LITERAL");
             var parse = Nested(pvecParameters);
 
             switch (type)
@@ -308,14 +375,16 @@ internal record struct ParticleDefinitionParser(KVObject Data, ILogger Logger, i
                     return new LiteralVectorProvider(parse.Vector3("m_vLiteralValue"));
                 case "PVEC_TYPE_LITERAL_COLOR":
                     return new LiteralColorVectorProvider(parse.Vector3("m_LiteralColor"));
-                // The INITIAL variant reads the current value, exact for attributes nothing rewrites after spawn.
+                case "PVEC_TYPE_NAMED_VALUE":
+                    return new NamedValueVectorProvider(parse);
                 case "PVEC_TYPE_PARTICLE_VECTOR":
+                    return new PerParticleVectorProvider(parse, initial: false);
                 case "PVEC_TYPE_PARTICLE_INITIAL_VECTOR":
-                    return new PerParticleVectorProvider(parse);
+                    return new PerParticleVectorProvider(parse, initial: true);
                 case "PVEC_TYPE_CLOSEST_CAMERA_POSITION":
                     return new ClosestCameraPositionVectorProvider();
                 case "PVEC_TYPE_PARTICLE_VELOCITY":
-                    return new ParticleVelocityVectorProvider();
+                    return new ParticleVelocityVectorProvider(parse);
                 case "PVEC_TYPE_CP_VALUE":
                     return new CPValueVectorProvider(parse);
                 case "PVEC_TYPE_CP_DELTA":
@@ -327,34 +396,33 @@ internal record struct ParticleDefinitionParser(KVObject Data, ILogger Logger, i
                 case "PVEC_TYPE_FLOAT_COMPONENTS":
                     return new FloatComponentsVectorProvider(parse);
                 case "PVEC_TYPE_FLOAT_INTERP_CLAMPED":
-                    return new FloatInterpolationVectorProvider(parse, true);
+                    return new FloatInterpolationVectorProvider(parse, isClamped: true, isGradient: false);
                 case "PVEC_TYPE_FLOAT_INTERP_OPEN":
-                    return new FloatInterpolationVectorProvider(parse, false);
+                    return new FloatInterpolationVectorProvider(parse, isClamped: false, isGradient: false);
                 case "PVEC_TYPE_FLOAT_INTERP_GRADIENT":
-                    return new ColorGradientVectorProvider(parse);
+                    return new FloatInterpolationVectorProvider(parse, isClamped: false, isGradient: true);
                 case "PVEC_TYPE_RANDOM_UNIFORM":
                     return new RandomUniformVectorProvider(parse);
                 case "PVEC_TYPE_RANDOM_UNIFORM_OFFSET":
                     return new RandomUniformOffsetVectorProvider(parse);
-                /* UNSUPPORTED:
-                 * PVEC_TYPE_NAMED_VALUE - needs game VData
-                 * PVEC_TYPE_CP_RELATIVE_RANDOM_DIR - new in dota. presumably relative dir but the value is random per particle?
-                 */
+                case "PVEC_TYPE_CP_RELATIVE_RANDOM_DIR":
+                    return new CPRelativeRandomDirectionProvider(parse);
+                // UNSUPPORTED: PVEC_TYPE_PARTICLE_GRAVITY - needs the game's gravity
                 default:
-                    Logger.LogWarning("Vector provider of type {Type} is not supported, using its literal value", type);
+                    Logger.LogUniqueWarning("Vector provider of type {Type} is not supported, using its literal value", type);
                     return new LiteralVectorProvider(parse.Vector3("m_vLiteralValue"));
             }
         }
 
-        return new LiteralVectorProvider(Vector3(key));
+        return new LiteralVectorProvider(ReadVector3(key, pvecParameters));
     }
 
     /// <summary>Reads and constructs an <see cref="ITransformProvider"/> from the property at <paramref name="key"/>, returning <paramref name="default"/> if the key is absent.</summary>
-    public readonly ITransformProvider TransformInput(string key, ITransformProvider @default) => GetValueOrDefault(key, TransformInput, @default);
-    private readonly ITransformProvider TransformInput(string key)
-    {
-        var transformParameters = Data.GetSubCollection(key);
+    public readonly ITransformProvider TransformInput(string key, ITransformProvider @default)
+        => Data.TryGetValue(key, out var value) ? ReadTransformInput(value) : @default;
 
+    private readonly ITransformProvider ReadTransformInput(KVObject transformParameters)
+    {
         if (transformParameters.IsCollection)
         {
             var type = transformParameters.GetStringProperty("m_nType", "PT_TYPE_CONTROL_POINT");
@@ -369,17 +437,19 @@ internal record struct ParticleDefinitionParser(KVObject Data, ILogger Logger, i
                     return new ControlPointTransformProvider(controlPoint, useOrientation);
                 }
                 case "PT_TYPE_CONTROL_POINT_RANGE":
-                    // TODO: Implement range support if needed
-                    Logger.LogWarning("PT_TYPE_CONTROL_POINT_RANGE not fully supported, using first CP only");
-                    {
-                        var controlPoint = parse.Int32("m_nControlPoint");
-                        var useOrientation = parse.Boolean("m_bUseOrientation", true);
-                        return new ControlPointTransformProvider(controlPoint, useOrientation);
-                    }
-                case "PT_TYPE_INVALID":
+                {
+                    var controlPoint = parse.Int32("m_nControlPoint");
+                    var useOrientation = parse.Boolean("m_bUseOrientation", true);
+                    var rangeMax = parse.Int32("m_nControlPointRangeMax");
+                    var endGrowthTime = parse.Float("m_flEndCPGrowthTime");
+                    return new ControlPointTransformProvider(controlPoint, useOrientation, rangeMax, endGrowthTime);
+                }
                 case "PT_TYPE_NAMED_VALUE":
+                    return new NamedValueTransformProvider(parse);
+                case "PT_TYPE_INVALID":
+                    return new IdentityTransformProvider();
                 default:
-                    Logger.LogWarning("Transform type {Type} not supported, using identity transform", type);
+                    Logger.LogUniqueWarning("Transform type {Type} not supported, using identity transform", type);
                     return new IdentityTransformProvider();
             }
         }
@@ -387,7 +457,7 @@ internal record struct ParticleDefinitionParser(KVObject Data, ILogger Logger, i
         // Fields that became transform inputs without a format bump still hold a bare control point number in older content.
         if (!transformParameters.IsNull)
         {
-            return new ControlPointTransformProvider(Data.GetInt32Property(key), true);
+            return new ControlPointTransformProvider(Math.Clamp(ScalarInt32(transformParameters), 0, ParticleSystemState.MaxControlPoint), true);
         }
 
         return new IdentityTransformProvider();

@@ -13,7 +13,7 @@ namespace GUI.Forms
     /// Modal progress dialog that runs <see cref="OnProcess"/> on a worker thread, with the same API as the WinForms one
     /// so the exporters are shared.
     /// </summary>
-    sealed class GenericProgressForm : IProgress<string>, Types.PackageViewer.IProgressBarReporter, IDisposable
+    sealed class GenericProgressForm : IProgress<string>, IProgress<int>, Types.PackageViewer.IProgressBarReporter, IDisposable
     {
         private readonly CancellationTokenSource cancellationTokenSource = new();
         private readonly DispatcherTimer updateTimer = new() { Interval = TimeSpan.FromMilliseconds(500) };
@@ -83,6 +83,8 @@ namespace GUI.Forms
         }
 
         public void Report(string value) => SetProgress(value);
+
+        public void Report(int value) => SetBarValue(value);
 
         /// <summary>
         /// Stores the latest status text. Pending values are applied on a timer and only the most recent text is shown,

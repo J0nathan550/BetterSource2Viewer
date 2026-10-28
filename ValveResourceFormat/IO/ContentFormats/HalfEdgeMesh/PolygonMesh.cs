@@ -543,8 +543,8 @@ public sealed class PolygonMesh
         new(1, 0, 0),
         new(1, 0, 0),
         new(1, 0, 0),
-        new(-1, 0, 0),
-        new(0, -1, 0),
+        new(1, 0, 0),
+        new(0, 1, 0),
         new(0, 1, 0),
     ];
 
@@ -587,10 +587,10 @@ public sealed class PolygonMesh
     }
 
     /// <summary>
-    /// Units one texel spans when a face's texture is projected at the default scale, Hammer's default when
-    /// aligning a texture to the grid, in most s2 games hammer has this set to 0.125, Sbox uses 0.25 here
+    /// Units one texel spans when a face's texture is projected at the default scale, Hammer's value when the game's
+    /// <c>gameinfo.gi</c> does not set <c>Hammer/DefaultTextureScale</c> or sets it to 0.
     /// </summary>
-    public const float DefaultTextureScale = 0.125f;
+    public const float DefaultTextureScale = 0.25f;
 
     /// <summary>
     /// Aligns the texture projection of a face to the world axes closest to its plane, Hammer's default
@@ -598,10 +598,11 @@ public sealed class PolygonMesh
     /// </summary>
     /// <param name="hFace">Face to align.</param>
     /// <param name="textureSize">Size of the face's texture in texels, the projection is in texels.</param>
-    public void TextureAlignToGrid(FaceHandle hFace, Vector2 textureSize)
+    /// <param name="textureScale">Units one texel spans, the game's Hammer default.</param>
+    public void TextureAlignToGrid(FaceHandle hFace, Vector2 textureSize, float textureScale)
     {
         TextureOffset[hFace] = Vector2.Zero;
-        TextureScale[hFace] = new Vector2(DefaultTextureScale);
+        TextureScale[hFace] = new Vector2(textureScale);
 
         ComputeFaceNormal(hFace, out var normal);
         ComputeTextureAxes(normal, out var uAxis, out var vAxis);
@@ -609,7 +610,7 @@ public sealed class PolygonMesh
         TextureUAxis[hFace] = uAxis;
         TextureVAxis[hFace] = vAxis;
 
-        ComputeFaceTextureCoordinatesFromParameters(hFace, textureSize);
+        ComputeFaceTextureCoordinatesFromParameters(hFace, textureSize, textureScale);
     }
 
     /// <summary>
@@ -850,12 +851,22 @@ public sealed class PolygonMesh
     {
         outFaces = [];
 
-        var faceSearchSet = faces.Where(f => f.IsValid).ToHashSet();
+        var faceSearchSet = new HashSet<FaceHandle>(faces.Count);
 
-        while (faceSearchSet.Count > 0)
+        foreach (var face in faces)
         {
-            var hStartFace = faceSearchSet.First();
-            faceSearchSet.Remove(hStartFace);
+            if (face.IsValid)
+            {
+                faceSearchSet.Add(face);
+            }
+        }
+
+        foreach (var hStartFace in faces)
+        {
+            if (!faceSearchSet.Remove(hStartFace))
+            {
+                continue;
+            }
 
             var island = new List<FaceHandle>(32);
             outFaces.Add(island);
@@ -1765,7 +1776,6 @@ public sealed class PolygonMesh
     public int MergeVerticesWithinDistance(float maxDistance)
     {
         var total = 0;
-        var vertexCount = Topology.VertexHandles.Count();
 
         // A pass drops every group's first vertex from its later iterations, so a pair that could only merge
         // once a neighbouring pair had merged is not retried within the pass. Run whole passes until one
@@ -1824,6 +1834,7 @@ public sealed class PolygonMesh
         var verticesSortedByGroup = new List<VertexHandle>(numOriginalVertices);
         var groupVertexCounts = new int[numOriginalVertices];
         var groupOffsets = new int[numOriginalVertices];
+        var vertexGroupAssignments = new int[numOriginalVertices];
 
         for (var iteration = 0; iteration < maxIterations; ++iteration)
         {
@@ -1834,8 +1845,7 @@ public sealed class PolygonMesh
                 break;
             }
 
-            var vertexGroupAssignments = new List<int>(numVerticesToMerge);
-            vertexGroupAssignments.AddRange(Enumerable.Repeat(-1, numVerticesToMerge));
+            Array.Fill(vertexGroupAssignments, -1, 0, numVerticesToMerge);
             verticesSortedByGroup.Clear();
 
             var numGroups = 0;
@@ -1914,7 +1924,7 @@ public sealed class PolygonMesh
                 numGroups = 1;
                 verticesSortedByGroup = new(verticesToMerge);
 
-                for (var i = 0; i < vertexGroupAssignments.Count; i++)
+                for (var i = 0; i < numVerticesToMerge; i++)
                 {
                     vertexGroupAssignments[i] = 0;
                 }

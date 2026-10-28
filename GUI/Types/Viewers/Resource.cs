@@ -81,6 +81,8 @@ namespace GUI.Types.Viewers
                 resourceTemp?.Dispose();
             }
 
+            vrfGuiContext.FindGameFromResource(resource);
+
             if (viewMode != ResourceViewMode.ResourceBlocksOnly)
             {
                 try
@@ -346,6 +348,11 @@ namespace GUI.Types.Viewers
 
             resTabs.Disposed += OnTabDisposed;
 
+            if (!isPreview)
+            {
+                resTabs.SelectedIndexChanged += (_, _) => RefreshKeybindingsIfVisible(resTabs);
+            }
+
             var loadedResource = resource;
             var blocksByType = new Dictionary<BlockType, List<(int Index, Block Block)>>();
 
@@ -579,8 +586,17 @@ namespace GUI.Types.Viewers
             loadedGraphViewers.Add(viewer);
             loadingFile.Dispose();
             tabPage.Controls.Add(viewer.InitializeUiControls(isPreview: false));
+            RefreshKeybindingsIfVisible(tabPage);
 
             return viewer;
+        }
+
+        private static void RefreshKeybindingsIfVisible(Control control)
+        {
+            if (control.Visible)
+            {
+                Program.MainForm.ShowSelectedTabKeybindings();
+            }
         }
 
         private static bool ShowEntityInGraph(EntityLump.Entity entity, Task<GLGraphViewer?> graph, TabPage tabPage)
@@ -964,13 +980,26 @@ namespace GUI.Types.Viewers
                 }
             }
 
+            void OnKeyDown(object? sender, KeyEventArgs e)
+            {
+                if (e.KeyData != (Keys.Control | Keys.C) || treeView.SelectedNode is not { } node)
+                {
+                    return;
+                }
+
+                AppClipboard.SetText(node.Tag is ResourceExtRefList.ResourceReferenceInfo refInfo ? refInfo.Name : node.Text);
+                e.SuppressKeyPress = true;
+            }
+
             void OnDisposed(object? sender, EventArgs e)
             {
                 treeView.NodeMouseDoubleClick -= OnNodeDoubleClick;
+                treeView.KeyDown -= OnKeyDown;
                 treeView.Disposed -= OnDisposed;
             }
 
             treeView.NodeMouseDoubleClick += OnNodeDoubleClick;
+            treeView.KeyDown += OnKeyDown;
             treeView.Disposed += OnDisposed;
 
             return treeView;

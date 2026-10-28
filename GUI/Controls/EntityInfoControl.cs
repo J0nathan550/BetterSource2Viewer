@@ -1,4 +1,5 @@
 using System.Windows.Forms;
+using GUI.Utils;
 using ValveKeyValue;
 using ValveResourceFormat.Serialization.KeyValues;
 using static ValveResourceFormat.ResourceTypes.EntityLump;
@@ -63,6 +64,8 @@ namespace GUI.Forms
 
             if (shouldShow && !isShown)
             {
+                // A tab hidden when the theme was applied missed it
+                Themer.ThemeControl(page);
                 tabControl.TabPages.Insert(GetInsertIndex(page), page);
             }
             else if (!shouldShow && isShown)
@@ -191,7 +194,7 @@ namespace GUI.Forms
         /// and, for a resource, its type prefix (<c>resource_name:"particles/foo.vpcf"</c>), which is
         /// neither what the grid should show nor a path anything can be looked up by.
         /// </summary>
-        private static string? BareText(KVObject value)
+        internal static string? BareText(KVObject value)
             => value.ValueType == KVValueType.String ? (string)value : null;
 
         private void AddOutputConnection(Connection connectionData, List<Entity> targets)

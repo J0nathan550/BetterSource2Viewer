@@ -30,11 +30,22 @@ namespace ValveResourceFormat.Particles.Operators
             cycleTime = parse.Float("m_flCycleTime", cycleTime);
             doNotRepeatCycle = parse.Boolean("m_bDoNotRepeatCycle", doNotRepeatCycle);
             synchronizeParticles = parse.Boolean("m_bSynchronizeParticles", synchronizeParticles);
-            cpScale = parse.Int32("m_nCPScale", cpScale);
-            cpFieldMin = parse.Int32("m_nCPFieldMin", cpFieldMin);
-            cpFieldMax = parse.Int32("m_nCPFieldMax", cpFieldMax);
-            setMethod = parse.EnumNormalized<ParticleSetMethod>("m_nSetMethod", setMethod);
+            cpScale = Math.Clamp(parse.Int32("m_nCPScale", cpScale), -1, ParticleSystemState.ControlPointCount);
+            cpFieldMin = Math.Clamp(parse.Int32("m_nCPFieldMin", cpFieldMin), -1, 2);
+            cpFieldMax = Math.Clamp(parse.Int32("m_nCPFieldMax", cpFieldMax), -1, 2);
+            setMethod = parse.Enum<ParticleSetMethod>("m_nSetMethod", setMethod);
+
+            AddInitialReadOf(parse, setMethod, destField);
         }
+
+        public override void AddControlPointDefaults(ControlPointDefaults defaults)
+        {
+            defaults.AddScale(cpScale, cpFieldMin);
+            defaults.AddScale(cpScale, cpFieldMax);
+        }
+
+        /// <inheritdoc/>
+        public override ulong StoredFields => destField.Mask();
 
         public override void Operate(ParticleCollection particles, float frameTime, ParticleSystemState particleSystemState, float strength)
         {
@@ -47,17 +58,16 @@ namespace ValveResourceFormat.Particles.Operators
 
                 if (cpFieldMin >= 0)
                 {
-                    start *= ComponentOrZero(controlPoint, cpFieldMin);
+                    start *= controlPoint.GetComponent(cpFieldMin);
                 }
 
                 if (cpFieldMax >= 0)
                 {
-                    end *= ComponentOrZero(controlPoint, cpFieldMax);
+                    end *= controlPoint.GetComponent(cpFieldMax);
                 }
             }
 
-            // The engine multiplies by a reciprocal rather than dividing, and halves the rate when the
-            // cycle does not repeat so the ramp spans the whole cycle instead of half of it.
+            // A cycle that does not repeat ramps up over the whole cycle instead of half of it
             var rate = 1f / MathF.Max(ParticleMath.FloatEpsilon, cycleTime);
             var clamp = doNotRepeatCycle ? cycleTime : float.MaxValue;
 
@@ -66,27 +76,28 @@ namespace ValveResourceFormat.Particles.Operators
                 rate *= 0.5f;
             }
 
-            foreach (ref var particle in particles.Current)
+            if (!ParticleBuffer.IsScalar(destField))
             {
-                var time = synchronizeParticles ? particleSystemState.Age : particle.Age;
+                return;
+            }
+
+            var current = particles.Current;
+            var ages = current.ReadAges();
+
+            var outputs = current.Floats(destField);
+            var initials = particles.Initial.ReadFloats(destField);
+
+            for (var i = 0; i < outputs.Length; i++)
+            {
+                var time = synchronizeParticles ? particleSystemState.Age : ages[i];
                 var phase = MathF.Min(time, clamp) * rate;
-                phase -= MathF.Floor(phase);
+                phase -= MathF.Truncate(phase);
 
                 var triangle = 2f * MathF.Min(phase, 1f - phase);
-                var value = start + ((end - start) * triangle);
+                var value = MathUtils.Lerp(start, end, triangle);
 
-                var final = particle.ModifyScalarBySetMethod(particles, destField, value, setMethod);
-
-                particle.SetScalar(destField, float.Lerp(particle.GetScalar(destField), final, strength));
+                outputs[i] = ParticleFieldExtensions.ApplySetMethod(value, initials[i], outputs[i], particleSystemState.CurrentStep, setMethod);
             }
         }
-
-        private static float ComponentOrZero(Vector3 controlPoint, int component) => component switch
-        {
-            0 => controlPoint.X,
-            1 => controlPoint.Y,
-            2 => controlPoint.Z,
-            _ => 0f,
-        };
     }
 }

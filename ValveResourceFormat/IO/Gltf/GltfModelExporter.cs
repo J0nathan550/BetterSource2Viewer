@@ -1,9 +1,11 @@
 //#define DEBUG_VALIDATE_GLTF
 
 using System.Diagnostics;
+using System.Globalization;
 using System.IO;
 using System.Linq;
 using System.Runtime.InteropServices;
+using System.Text.Json.Nodes;
 using System.Threading;
 using SharpGLTF.Memory;
 using SharpGLTF.Schema2;
@@ -74,6 +76,12 @@ namespace ValveResourceFormat.IO
         public bool ComposeAdditiveAnimations { get; set; }
 
         /// <summary>
+        /// Gets or sets a value indicating whether animation keys that linear interpolation of the
+        /// kept keys reproduces within a small tolerance are dropped. When false, every frame is written.
+        /// </summary>
+        public bool ReduceAnimationKeyframes { get; set; } = true;
+
+        /// <summary>
         /// Gets the set of animation names to filter during export. An entry matches an animation by its
         /// full name or, for animation graph clips named by resource path, by its leaf name (e.g. "idle_knife"
         /// matches "animation/anims/.../idle_knife"). Empty means export every animation.
@@ -92,7 +100,10 @@ namespace ValveResourceFormat.IO
         private string DstDir = string.Empty;
         private CancellationToken CancellationToken;
         private Vector2 LightmapUvScale = Vector2.One;
-        private readonly Dictionary<string, Mesh> ExportedMeshes = [];
+        private bool SkipToolsMaterials;
+        private readonly Dictionary<string, bool> ToolsMaterialCache = [];
+        private readonly Dictionary<(string Name, Vector4 TintColor), Mesh> ExportedMeshes = [];
+        private readonly Dictionary<Node[], Skin> ExportedSkins = [];
         private readonly List<(PhysAggregateData Phys, string? Classname, Matrix4x4 Transform)> PhysicsToExport = [];
         private bool IsExporting;
 
@@ -168,10 +179,11 @@ namespace ValveResourceFormat.IO
             {
                 matchedAnimationFilter.Clear();
                 ExportedMeshes.Clear();
+                ExportedSkins.Clear();
                 LightmapUvScale = Vector2.One;
+                SkipToolsMaterials = false;
+                ToolsMaterialCache.Clear();
                 MaterialInputSignatures.Clear();
-                ScaledLightmapUvAccessors.Clear();
-                OverlayOffsetPositionAccessors.Clear();
                 PhysicsToExport.Clear();
                 TextureExportingTasks.Clear();
                 ExportedTextures.Clear();
@@ -347,7 +359,7 @@ namespace ValveResourceFormat.IO
             var exportedModel = CreateModelRoot(resourceName, out var scene);
 
             // Add meshes and their skeletons
-            LoadModel(exportedModel, scene, model, resourceName, Matrix4x4.Identity, Vector4.One);
+            LoadModel(exportedModel, scene, model, Path.GetFileNameWithoutExtension(resourceName), Matrix4x4.Identity, Vector4.One);
 
             WriteModelFile(exportedModel, fileName);
 
@@ -416,20 +428,20 @@ namespace ValveResourceFormat.IO
                 var skeletonData = Skeleton.FromSkeletonResource(FileLoader, clip.SkeletonName)
                     ?? throw new InvalidOperationException($"Unable to load skeleton data '{clip.SkeletonName}'.");
 
-                var (skeletonNode, joints) = CreateGltfSkeleton(scene, skeletonData, clip.SkeletonName);
+                var skeletonName = Path.GetFileNameWithoutExtension(clip.SkeletonName);
+                var (skeletonNode, joints) = CreateGltfSkeleton(scene, skeletonData, skeletonName);
                 if (skeletonNode == null || joints == null)
                 {
                     throw new InvalidDataException($"Failure creating glTF skeleton for '{clip.SkeletonName}'.");
                 }
 
                 // Create a skeleton visualization mesh so importers recognize this as a proper skeleton
-                var meshNode = CreateSkeletonVisualizationMesh(exportedModel, scene, skeletonData, joints);
-                meshNode.Name = $"{clip.SkeletonName}.empty_mesh_reference";
+                CreateSkeletonVisualizationMesh(exportedModel, scene, skeletonData, joints, skeletonName);
 
                 //if (ExportAnimations)
                 {
                     var animation = new ResourceTypes.ModelAnimation.ClipAnimation(clip);
-                    var animationWriter = new AnimationWriter(skeletonData, []) { ComposeAdditive = ComposeAdditiveAnimations };
+                    var animationWriter = new AnimationWriter(skeletonData, []) { ComposeAdditive = ComposeAdditiveAnimations, ReduceKeyframes = ReduceAnimationKeyframes };
                     animationWriter.WriteAnimation(exportedModel, joints, animation, ClipAnimationName(clip.Name));
                 }
             }
@@ -454,21 +466,22 @@ namespace ValveResourceFormat.IO
         {
             var exportedModel = CreateModelRoot(resourceName, out var scene);
 
-            var (skeletonNode, joints) = CreateGltfSkeleton(scene, skeleton, resourceName);
+            var skeletonName = Path.GetFileNameWithoutExtension(resourceName);
+            var (skeletonNode, joints) = CreateGltfSkeleton(scene, skeleton, skeletonName);
             if (skeletonNode == null || joints == null)
             {
                 throw new InvalidDataException($"Failure creating glTF skeleton for '{resourceName}'.");
             }
 
             // Create a skeleton visualization mesh so importers recognize this as a proper skeleton
-            var meshNode = CreateSkeletonVisualizationMesh(exportedModel, scene, skeleton, joints);
-            meshNode.Name = $"{resourceName}.empty_mesh_reference";
+            CreateSkeletonVisualizationMesh(exportedModel, scene, skeleton, joints, skeletonName);
 
             WriteModelFile(exportedModel, fileName);
         }
 
         private void LoadModel(ModelRoot exportedModel, Scene scene, VModel model, string name,
-            Matrix4x4 transform, Vector4 tintColor, string? skinName = null, EntityLump.Entity? entity = null)
+            Matrix4x4 transform, Vector4 tintColor, string? skinName = null, EntityLump.Entity? entity = null,
+            VWorldNode.MaterialOverride[]? materialOverrides = null)
         {
 #if DEBUG
             ProgressReporter?.Report($"Loading model {name}");
@@ -511,7 +524,7 @@ namespace ValveResourceFormat.IO
                 Debug.Assert(joints != null);
 
                 var animations = model.GetAllAnimations(FileLoader);
-                var animationWriter = new AnimationWriter(model.Skeleton, model.FlexControllers) { ComposeAdditive = ComposeAdditiveAnimations };
+                var animationWriter = new AnimationWriter(model.Skeleton, model.FlexControllers) { ComposeAdditive = ComposeAdditiveAnimations, ReduceKeyframes = ReduceAnimationKeyframes };
 
                 foreach (var animation in animations)
                 {
@@ -534,6 +547,20 @@ namespace ValveResourceFormat.IO
 
             var morphedMeshNodes = new List<(Node Node, VMesh Mesh)>();
 
+            // Meshes are shared between entities using the same model, so entity properties go on the
+            // nodes that place the entity: the skeleton node, or else each mesh node.
+            JsonObject? entityExtras = null;
+
+            if (entity != null && ExportExtras)
+            {
+                entityExtras = new JsonObject();
+
+                foreach (var (key, value) in entity.Children)
+                {
+                    entityExtras[key] = KeyValueToJson(value);
+                }
+            }
+
             foreach (var m in meshes)
             {
                 var meshName = m.Name;
@@ -548,11 +575,22 @@ namespace ValveResourceFormat.IO
                     meshName = string.Concat(meshName, ".", skinName);
                 }
 
+                if (materialOverrides?.Length > 0)
+                {
+                    meshName = GetOverriddenMeshName(meshName, m.MeshIndex, materialOverrides);
+                }
+
+                var drawCallMaterials = GetDrawCallMaterials(m.Mesh, m.MeshIndex, skinMaterialTable, materialOverrides ?? []);
                 var boneRemapTable = model.GetRemapTable(m.MeshIndex);
-                var node = AddMeshNode(exportedModel, scene, meshName, tintColor, m.Mesh, m.Mesh.VBIB, joints, out var meshNode, boneRemapTable, skinMaterialTable, entity);
+                var node = AddMeshNode(exportedModel, scene, meshName, tintColor, m.Mesh, m.Mesh.VBIB, joints, out var meshNode, boneRemapTable, drawCallMaterials);
                 if (node != null)
                 {
                     node.WorldMatrix = nodeTransform;
+
+                    if (entityExtras != null && skeletonNode == null)
+                    {
+                        node.Extras = entityExtras.DeepClone();
+                    }
 
                     DebugValidateGLTF();
                 }
@@ -574,6 +612,11 @@ namespace ValveResourceFormat.IO
             // WorldMatrix should only be set after everything else.
             if (skeletonNode != null)
             {
+                if (entityExtras != null)
+                {
+                    skeletonNode.Extras = entityExtras;
+                }
+
                 skeletonNode.WorldMatrix = nodeTransform;
             }
         }
@@ -618,7 +661,7 @@ namespace ValveResourceFormat.IO
         private void ExportToFile(string resourceName, string? fileName, VMesh mesh)
         {
             var exportedModel = CreateModelRoot(resourceName, out var scene);
-            var name = Path.GetFileName(resourceName);
+            var name = Path.GetFileNameWithoutExtension(resourceName);
 
             var renderSkeleton = mesh.Data.GetSubCollection("m_skeleton");
             var skeleton = renderSkeleton != null ? Skeleton.FromRenderSkeleton(renderSkeleton) : null;
@@ -634,11 +677,11 @@ namespace ValveResourceFormat.IO
 
         private Node? AddMeshNode(ModelRoot exportedModel, Scene scene, string name, Vector4 tintColor,
             VMesh mesh, Blocks.VBIB vbib, Node[]? joints, out Node? meshNode, int[]? boneRemapTable = null,
-            Dictionary<string, string>? skinMaterialTable = null, EntityLump.Entity? entity = null)
+            Dictionary<KVObject, string>? drawCallMaterials = null)
         {
             meshNode = null;
 
-            if (mesh.Data.GetArray("m_sceneObjects").Count == 0)
+            if (!HasExportedDrawCalls(mesh, drawCallMaterials))
             {
                 return null;
             }
@@ -647,30 +690,96 @@ namespace ValveResourceFormat.IO
             meshNode = newNode;
             mesh.LoadExternalMorphData(FileLoader);
 
-            if (!ExportedMeshes.TryGetValue(name, out var exportedMesh))
+            // Tint is baked into the mesh's materials
+            if (!ExportedMeshes.TryGetValue((name, tintColor), out var exportedMesh))
             {
-                exportedMesh = CreateGltfMesh(name, mesh, vbib, exportedModel, boneRemapTable, skinMaterialTable, tintColor);
-                ExportedMeshes.Add(name, exportedMesh);
-
-                if (entity != null && ExportExtras)
-                {
-                    foreach (var (key, value) in entity.Children)
-                    {
-                        exportedMesh.Extras[key] = value.ValueType == KVValueType.String ? (string)value : value.ToString();
-                    }
-                }
+                exportedMesh = CreateGltfMesh(name, mesh, vbib, exportedModel, boneRemapTable, drawCallMaterials, tintColor);
+                ExportedMeshes.Add((name, tintColor), exportedMesh);
             }
 
             var hasVertexJoints = exportedMesh.Primitives.All(primitive => primitive.GetVertexAccessor("JOINTS_0") != null);
 
             if (joints == null || !hasVertexJoints)
             {
-                return newNode.WithMesh(exportedMesh);
+                newNode.Mesh = exportedMesh;
+                return newNode;
             }
 
-            newNode.WithSkinnedMesh(exportedMesh, Matrix4x4.Identity, joints);
+            // Inverse bind matrices are taken from the joints' current world matrices, so the skin
+            // must be bound before the skeleton node is placed.
+            if (!ExportedSkins.TryGetValue(joints, out var skin))
+            {
+                skin = exportedModel.CreateSkin();
+                skin.BindJoints(Matrix4x4.Identity, joints);
+                ExportedSkins.Add(joints, skin);
+            }
+
+            newNode.Mesh = exportedMesh;
+            newNode.Skin = skin;
+
             // WorldMatrix is set only once on skeletonNode
             return null;
+        }
+
+        /// <summary>
+        /// Converts a KeyValues value to JSON, keeping its type: tables become objects, arrays (such as vectors
+        /// and colors) become arrays, and numbers and booleans stay numbers and booleans.
+        /// </summary>
+        internal static JsonNode? KeyValueToJson(KVObject value)
+        {
+            switch (value.ValueType)
+            {
+                case KVValueType.Collection:
+                {
+                    var jsonObject = new JsonObject();
+
+                    foreach (var (key, child) in value.Children)
+                    {
+                        jsonObject[key] = KeyValueToJson(child);
+                    }
+
+                    return jsonObject;
+                }
+
+                case KVValueType.Array:
+                {
+                    var jsonArray = new JsonArray();
+
+                    foreach (var item in value.Values)
+                    {
+                        jsonArray.Add(KeyValueToJson(item));
+                    }
+
+                    return jsonArray;
+                }
+
+                case KVValueType.Null:
+                    return null;
+
+                case KVValueType.Boolean:
+                    return JsonValue.Create((bool)value);
+
+                case KVValueType.String:
+                    return JsonValue.Create((string)value);
+
+                // Entity lumps store single precision values as doubles; narrowing keeps 1.3 from printing as 1.2999999523162842.
+                case KVValueType.FloatingPoint:
+                case KVValueType.FloatingPoint64:
+                    return JsonValue.Create((float)value);
+
+                case KVValueType.Int16:
+                case KVValueType.Int32:
+                case KVValueType.Int64:
+                    return JsonValue.Create((long)value);
+
+                case KVValueType.UInt16:
+                case KVValueType.UInt32:
+                case KVValueType.UInt64:
+                    return JsonValue.Create((ulong)value);
+
+                default:
+                    return JsonValue.Create(value.ToString(CultureInfo.InvariantCulture));
+            }
         }
 
         private ModelRoot CreateModelRoot(string resourceName, out Scene scene)
@@ -682,7 +791,7 @@ namespace ValveResourceFormat.IO
             {
                 ["provenance"] = StringToken.VRF_PROVENANCE,
             };
-            scene = exportedModel.UseScene(Path.GetFileName(resourceName));
+            scene = exportedModel.UseScene(Path.GetFileNameWithoutExtension(resourceName));
 
 #if DEBUG_VALIDATE_GLTF
             debugCurrentExportedModel = exportedModel;
@@ -695,6 +804,8 @@ namespace ValveResourceFormat.IO
 
         private void WriteModelFile(ModelRoot exportedModel, string? filePath, Stream? stream = null)
         {
+            AddMissingScaleChannels(exportedModel);
+
             if (!SatelliteImages)
             {
                 WaitForTexturesToExport();

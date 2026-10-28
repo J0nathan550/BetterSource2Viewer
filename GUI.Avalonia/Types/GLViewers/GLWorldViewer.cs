@@ -1,3 +1,4 @@
+using System.Collections.Frozen;
 using System.Diagnostics;
 using System.Globalization;
 using System.IO;
@@ -10,11 +11,15 @@ using GUI.Forms;
 using GUI.Utils;
 using ValveResourceFormat.Blocks;
 using ValveResourceFormat.IO;
+using ValveResourceFormat.IO.Fgd;
 using ValveResourceFormat.Renderer;
 using ValveResourceFormat.Renderer.Editor;
+using ValveResourceFormat.Renderer.Editor.Collision;
 using ValveResourceFormat.Renderer.Editor.Entities;
 using ValveResourceFormat.Renderer.Editor.Picking;
+using ValveResourceFormat.Renderer.Entities;
 using ValveResourceFormat.Renderer.Input;
+using ValveResourceFormat.Renderer.Materials;
 using ValveResourceFormat.Renderer.SceneEnvironment;
 using ValveResourceFormat.Renderer.SceneNodes;
 using ValveResourceFormat.Renderer.Utils;
@@ -36,19 +41,20 @@ namespace GUI.Types.GLViewers
         private readonly WorldNode? worldNode;
         private readonly ResourceExtRefList? mapExternalReferences;
         private CheckedListBox? worldLayersComboBox;
-        private CheckedListBox? physicsGroupsComboBox;
+        private GLViewerTreeSelectionControl? collisionTree;
         private ComboBox? cameraComboBox;
         private SavedCameraPositionsControl? savedCameraPositionsControl;
         private EntityInfoWindow? entityInfoForm;
         private ThemedButton? playPauseButton;
         private ThemedButton? stopButton;
-        private ThemedToggleButton? toolEntitiesButton;
-        private ThemedToggleButton? toolMaterialsButton;
-        private readonly ToolsVisibility tools = new();
-        private volatile HashSet<string> chosenPhysicsGroups = [];
+        private ThemedToggleButton? toolsButton;
         private SimulationState simulationState;
+
+        // Whether tools were shown before playing hid them, which stopping shows again
+        private bool showToolsBeforePlay;
         private int simulationRequest;
         private bool ignoreLayersChangeEvents = true;
+        private string[] unlistedEnabledLayers = [];
         private List<Matrix4x4> CameraMatrices = [];
         private WorldNodeLoader? LoadedWorldNode;
         public WorldLoader? LoadedWorld;
@@ -102,7 +108,7 @@ namespace GUI.Types.GLViewers
             base.Dispose();
 
             worldLayersComboBox?.Dispose();
-            physicsGroupsComboBox?.Dispose();
+            collisionTree?.Dispose();
             cameraComboBox?.Dispose();
 
             // Only unsubscribes from the settings event, which is safe on any thread
@@ -118,8 +124,7 @@ namespace GUI.Types.GLViewers
 
             playPauseButton?.Dispose();
             stopButton?.Dispose();
-            toolEntitiesButton?.Dispose();
-            toolMaterialsButton?.Dispose();
+            toolsButton?.Dispose();
         }
 
         private void AddSceneExposureSlider()
@@ -134,7 +139,7 @@ namespace GUI.Types.GLViewers
 
             UiControl.AddControl(exposureLabel);
 
-            var exposureSlider = UiControl.AddTrackBar((exposureAmount) =>
+            var exposureSlider = UiControl.AddTrackBar("Exposure", (exposureAmount) =>
             {
                 var exposure = exposureAmount * 10;
                 UpdateExposureText(exposure);
@@ -229,7 +234,13 @@ namespace GUI.Types.GLViewers
             {
                 base.LoadDefaultLighting();
 
-                Scene.LightingInfo.CubemapType = CubemapType.None; // default envmap actually looks bad
+                // The default cubemap looks wrong on maps, so they keep the flat reflection
+                foreach (var envMap in Scene.LightingInfo.EnvMaps)
+                {
+                    envMap.EnvMapTexture.Delete();
+                }
+
+                Scene.LightingInfo.EnvMaps.Clear();
                 Scene.LightingInfo.UseSceneBoundsForSunLightFrustum = false;
                 Scene.LightingInfo.SunLightShadowCoverageScale = 2f;
 
@@ -251,6 +262,8 @@ namespace GUI.Types.GLViewers
 
             if (world != null)
             {
+                Renderer.EntitySystem.Enabled = false;
+
                 LoadedWorld = new WorldLoader(world, Scene, Renderer.EntitySystem)
                 {
                     LoadingProgress = GuiContext.LoadingProgress,
@@ -259,15 +272,13 @@ namespace GUI.Types.GLViewers
 
                 LoadedWorld.Load(mapExternalReferences);
 
-                foreach (var spawnGroup in LoadedWorld.SpawnGroups)
-                {
-                    Renderer.AddSpawnGroup(spawnGroup);
-                }
-
                 NavMeshSceneNode.AddNavNodesToScene(LoadedWorld.NavMesh, Scene, LoadedWorld.NavigationHullNames);
                 NavSpaceSceneNode.AddToScene(LoadedWorld.NavSpace, Scene);
                 NavMeshSceneNode.AddFlowMapNodesToScene(LoadedWorld.NavFlowMap, LoadedWorld.NavMesh, Scene, LoadedWorld.NavigationHullNames);
                 CS2BombDamageSceneNode.AddBakedBombDamageToScene(LoadedWorld.BombDamage, Scene);
+
+                // Prewarm draws before the sidebar picks the layers, so it starts from the same defaults
+                SetEnabledLayers(LoadedWorld.DefaultEnabledLayers);
 
                 if (LoadedWorld.CameraMatrices.Count > 0)
                 {
@@ -289,7 +300,6 @@ namespace GUI.Types.GLViewers
                 var isKzMap = kzMapPrefixes.Any(prefix => mapName.StartsWith(prefix, StringComparison.OrdinalIgnoreCase));
 
                 ShowSpeed = isKzMap;
-                Input.PlayerMovement.PrestrafeEnabled = isKzMap;
                 Input.PlayerMovement.AutoBunnyHop = isKzMap;
                 Input.PlayerMovement.AirAccelerate = isKzMap
                     ? PlayerMovement.AirAccelerateMovementMaps
@@ -297,9 +307,6 @@ namespace GUI.Types.GLViewers
 
                 Input.EntitySystem = Renderer.EntitySystem;
                 Renderer.EntitySystem.SpawnPlayer(Input.PlayerMovement, Scene);
-
-                // The world rests as it loaded until it is played
-                Renderer.EntitySystem.Enabled = false;
             }
 
             if (!cameraSet)
@@ -345,17 +352,10 @@ namespace GUI.Types.GLViewers
                     return;
                 }
 
-                SetEnabledLayers([.. worldLayers]);
+                SetEnabledLayers([.. worldLayers, .. unlistedEnabledLayers]);
             });
-            physicsGroupsComboBox = UiControl.AddMultiSelection("Physics Groups", null, (physicsGroups) =>
-            {
-                if (ignoreLayersChangeEvents)
-                {
-                    return;
-                }
-
-                SetEnabledPhysicsGroups([.. physicsGroups]);
-            });
+            AddToolBrushGroupsControl();
+            AddCollisionControl();
 
             using (UiControl.BeginGroup("Camera"))
             {
@@ -383,16 +383,20 @@ namespace GUI.Types.GLViewers
                 }
             }
 
+            if (HasToolsVisibilityControls)
+            {
+                AddToolsVisibilityToolbar();
+            }
+
             if (world != null)
             {
                 AddSimulationToolbar();
 
                 var uniqueWorldLayers = new HashSet<string>(4);
-                var uniquePhysicsGroups = new HashSet<string>();
 
                 foreach (var node in Scene.AllNodes)
                 {
-                    if (node.LayerName?.StartsWith("Internal -", StringComparison.Ordinal) == true)
+                    if (node.LayerName != null && Scene.IsInternalLayer(node.LayerName))
                     {
                         continue;
                     }
@@ -400,11 +404,6 @@ namespace GUI.Types.GLViewers
                     if (node.LayerName != null)
                     {
                         uniqueWorldLayers.Add(node.LayerName);
-                    }
-
-                    if (node is PhysSceneNode physSceneNode)
-                    {
-                        uniquePhysicsGroups.Add(physSceneNode.PhysGroupName);
                     }
                 }
 
@@ -414,7 +413,13 @@ namespace GUI.Types.GLViewers
 
                     worldLayersComboBox.BeginUpdate();
 
-                    SetAvailableLayers(uniqueWorldLayers);
+                    // Showing helpers also decides what a selected entity shows, so it can be chosen even while nothing
+                    // unselected needs it
+                    var listedLayers = uniqueWorldLayers.Append(HammerEntityVisuals.HelpersLayerName).Distinct().ToArray();
+                    SetAvailableLayers(listedLayers);
+
+                    // Layers that have no nodes yet, such as particles spawned later, are not listed and stay enabled
+                    unlistedEnabledLayers = [.. LoadedWorld.DefaultEnabledLayers.Where(layer => !listedLayers.Contains(layer))];
 
                     foreach (var worldLayer in LoadedWorld.DefaultEnabledLayers)
                     {
@@ -431,79 +436,37 @@ namespace GUI.Types.GLViewers
                     SetEnabledLayers(LoadedWorld.DefaultEnabledLayers);
                 }
 
-                if (uniquePhysicsGroups.Count > 0)
-                {
-                    Debug.Assert(physicsGroupsComboBox != null);
-
-                    physicsGroupsComboBox.BeginUpdate();
-
-                    SetAvailablePhysicsGroups(uniquePhysicsGroups);
-
-                    // Groups of tools materials start shown, it is the tools materials switch that hides them
-                    var toolsMaterialGroups = Scene.AllNodes
-                        .OfType<PhysSceneNode>()
-                        .Where(static node => node.IsToolsMaterial)
-                        .Select(static node => node.PhysGroupName)
-                        .ToHashSet();
-
-                    foreach (var group in toolsMaterialGroups)
-                    {
-                        var checkboxIndex = physicsGroupsComboBox.FindStringExact(group);
-
-                        if (checkboxIndex > -1)
-                        {
-                            physicsGroupsComboBox.SetItemCheckState(checkboxIndex, CheckState.Checked);
-                        }
-                    }
-
-                    physicsGroupsComboBox.EndUpdate();
-
-                    SetEnabledPhysicsGroups(toolsMaterialGroups);
-                }
-
                 using (UiControl.BeginGroup("World"))
                 {
-                    if (Renderer.SkyGroup != null)
+                    if (Renderer.HasSky)
                     {
-                        UiControl.AddCheckBox("Show Skybox", Renderer.ShowSkybox, (v) => Renderer.ShowSkybox = v);
+                        UiControl.AddCheckBox("Show Skybox", Renderer.Settings.ShowSkybox, (v) => Renderer.Settings.ShowSkybox = v);
                     }
 
-                    UiControl.AddCheckBox("Show Fog", Scene.FogEnabled, v => Scene.FogEnabled = v);
+                    UiControl.AddCheckBox("Show Fog", Renderer.Settings.FogEnabled, v => Renderer.Settings.FogEnabled = v);
 
                     UiControl.AddCheckBox("Color Correction", Renderer.Postprocess.ColorCorrectionEnabled, v => Renderer.Postprocess.ColorCorrectionEnabled = v);
 
                     if (Scene.VoxelVisibility != null)
                     {
-                        UiControl.AddCheckBox("PVS Culling", Scene.EnablePvsCulling, v => Scene.EnablePvsCulling = v);
+                        UiControl.AddCheckBox("PVS Culling", Renderer.Settings.EnablePvsCulling, v => Renderer.Settings.EnablePvsCulling = v);
                     }
 
                     if (Renderer.Scenes.Any(static scene => scene.VisibilityBoxes.Count > 0))
                     {
-                        UiControl.AddCheckBox("Visibility Boxes", Scene.VisibilityBoxes.Enabled, v =>
-                        {
-                            foreach (var scene in Renderer.Scenes)
-                            {
-                                scene.VisibilityBoxes.Enabled = v;
-                            }
-                        });
+                        UiControl.AddCheckBox("Visibility Boxes", Renderer.Settings.EnableVisBoxCulling, v => Renderer.Settings.EnableVisBoxCulling = v);
                     }
 
                     CheckBox? occlusionCullingCheckBox = null;
 
                     if (GLEnvironment.SlowMultiDrawIndirect)
                     {
-                        foreach (var scene in Renderer.Scenes)
-                        {
-                            scene.EnableIndirectDraws = false;
-                        }
+                        Renderer.Settings.EnableIndirectDraws = false;
                     }
 
-                    UiControl.AddCheckBox("GPU Culling", Scene.EnableIndirectDraws, v =>
+                    UiControl.AddCheckBox("GPU Culling", Renderer.Settings.EnableIndirectDraws, v =>
                     {
-                        foreach (var scene in Renderer.Scenes)
-                        {
-                            scene.EnableIndirectDraws = v;
-                        }
+                        Renderer.Settings.EnableIndirectDraws = v;
 
                         if (occlusionCullingCheckBox != null)
                         {
@@ -511,13 +474,13 @@ namespace GUI.Types.GLViewers
                         }
                     });
 
-                    occlusionCullingCheckBox = UiControl.AddCheckBox("GPU Occlusion Culling", Scene.EnableOcclusionCulling, (v) => Scene.EnableOcclusionCulling = v);
-                    occlusionCullingCheckBox.Enabled = Scene.EnableIndirectDraws;
+                    occlusionCullingCheckBox = UiControl.AddCheckBox("GPU Occlusion Culling", Renderer.Settings.EnableOcclusionCulling, (v) => Renderer.Settings.EnableOcclusionCulling = v);
+                    occlusionCullingCheckBox.Enabled = Renderer.Settings.EnableIndirectDraws;
 
-                    UiControl.AddCheckBox("Depth Prepass", Scene.EnableDepthPrepass, (v) => Scene.EnableDepthPrepass = v);
+                    UiControl.AddCheckBox("Depth Prepass", Renderer.Settings.EnableDepthPrepass, (v) => Renderer.Settings.EnableDepthPrepass = v);
 
-                    UiControl.AddCheckBox("Barn Lights", Renderer.EnableBarnLights, v => Renderer.EnableBarnLights = v);
-                    UiControl.AddCheckBox("Tiled Light Culling", Scene.EnableTiledLightCulling, v => Scene.EnableTiledLightCulling = v);
+                    UiControl.AddCheckBox("Barn Lights", Renderer.Settings.EnableBarnLights, v => Renderer.Settings.EnableBarnLights = v);
+                    UiControl.AddCheckBox("Tiled Light Culling", Renderer.Settings.EnableTiledLightCulling, v => Renderer.Settings.EnableTiledLightCulling = v);
 
                     AddSceneExposureSlider();
                 }
@@ -581,7 +544,7 @@ namespace GUI.Types.GLViewers
             controlsContainer.Children.Add(RendererControl.CreateFloatInput("Near blurry", val =>
             {
                 Renderer.Postprocess.DOF.NearBlurry = -val;
-            }, Renderer.Postprocess.DOF.NearBlurry, 0, 100));
+            }, -Renderer.Postprocess.DOF.NearBlurry, 0, 100));
 
             controlsContainer.Children.Add(RendererControl.CreateFloatInput("Near crisp", val =>
             {
@@ -682,7 +645,7 @@ namespace GUI.Types.GLViewers
             }
         }
 
-        private void SelectAndFocusNode(SceneNode node)
+        internal void SelectAndFocusNode(SceneNode node)
         {
             ArgumentNullException.ThrowIfNull(node);
 
@@ -691,28 +654,20 @@ namespace GUI.Types.GLViewers
             EnsureNodeVisible(node);
         }
 
-        private static AABB SelectionBounds(SceneNode node)
+        /// <summary>Bounds to focus on for an entity that has no scene node, at its origin.</summary>
+        internal AABB EntityOriginBounds(EntityLump.Entity entity)
         {
-            var bbox = node.BoundingBox;
-            var maxSpan = bbox.Size.MaxComponent();
+            // Try to find the entity in the system and fall back to its lump location otherwise
+            var spawned = Renderer.EntitySystem.Entities.FirstOrDefault(candidate => !candidate.IsRemoved && candidate.Data == entity);
 
-            // Empty or degenerate bounds (e.g. a particle system that finished playing)
-            // would put the camera inside the node or at a garbage position.
-            if (!float.IsFinite(maxSpan) || maxSpan < 1f)
+            if (spawned != null)
             {
-                bbox = PointBounds(node.Transform.Translation);
+                return PointBounds(Vector3.Transform(spawned.WorldOrigin, spawned.Scene.ToViewerWorld));
             }
 
-            // Bounds of a 3D sky node are mapped to where the sky appears in the world
-            return bbox.Transform(node.Scene.ToViewerWorld);
-        }
-
-        /// <summary>Bounds to focus on for an entity that has no scene node, from its authored origin.</summary>
-        private AABB EntityOriginBounds(EntityLump.Entity entity)
-        {
             var origin = entity.GetVector3Property("origin");
 
-            if (Renderer.SpawnGroups.FirstOrDefault(group => group.Entities.Contains(entity)) is { } spawnGroup)
+            if (OwnSceneSpawnGroups.FirstOrDefault(group => group.Entities.Contains(entity)) is { } spawnGroup)
             {
                 origin = spawnGroup.EntityOriginToWorld(origin);
             }
@@ -720,42 +675,12 @@ namespace GUI.Types.GLViewers
             return PointBounds(origin);
         }
 
-        private static AABB PointBounds(Vector3 point) => new(point - new Vector3(32f), point + new Vector3(32f));
-
-        private void FocusCameraOnBounds(in AABB bbox)
-        {
-            var center = bbox.Center;
-
-            var size = bbox.Size * 1.25f;
-
-            // Framed by what the bounds cover from where the camera will be: their longest axis would
-            // stand a cable or a trigger brush off by its own length. The floor keeps something player
-            // sized from filling the view with nothing around it to place it by.
-            var framing = Input.Camera.GetFramingDistance(size, -CameraPlacement.PreferredDirection(size));
-            var distance = Math.Max(framing, 192f);
-            var location = CameraPlacement.FindOrbitPosition(Renderer.EntitySystem.PhysicsWorld, center, distance, size);
-
-            Input.SaveCameraForTransition();
-            Input.Camera.SetLocation(location);
-            Input.Camera.LookAt(center);
-        }
-
         private void EnsureNodeVisible(SceneNode node)
         {
-            if (node.LayerName != null && ToolsVisibility.IsToolEntityLayer(node.LayerName) && !tools.ShowToolEntities)
+            if (node.LayerName != null && ToolsVisibility.IsToolEntityLayer(node.LayerName) && !Tools.ShowTools)
             {
-                tools.ShowToolEntities = true;
-                toolEntitiesButton?.Checked = true;
-                RequestVisibilityUpdate();
-            }
-
-            if (node is PhysSceneNode { IsToolsMaterial: true } && !(tools.ShowToolEntities && tools.ShowToolMaterials))
-            {
-                tools.ShowToolEntities = true;
-                tools.ShowToolMaterials = true;
-                toolEntitiesButton?.Checked = true;
-                toolMaterialsButton?.Checked = true;
-                toolMaterialsButton?.Enabled = toolEntitiesButton?.Enabled == true;
+                Tools.ShowTools = true;
+                toolsButton?.Checked = true;
                 RequestVisibilityUpdate();
             }
 
@@ -769,14 +694,9 @@ namespace GUI.Types.GLViewers
                 }
             }
 
-            if (node is PhysSceneNode physNode && !physNode.Enabled && physicsGroupsComboBox != null && physNode.PhysGroupName != null)
+            if (node is PhysSceneNode { Enabled: false } collision)
             {
-                var physId = physicsGroupsComboBox.Items.IndexOf(physNode.PhysGroupName);
-
-                if (physId >= 0)
-                {
-                    physicsGroupsComboBox.SetItemChecked(physId, true);
-                }
+                collisionTree?.Check(collision.CollisionLabels[0]);
             }
         }
 
@@ -905,7 +825,7 @@ namespace GUI.Types.GLViewers
                 entityInfoForm.EntityInfoControl.AddProperty("Layer", sceneNode.LayerName ?? string.Empty);
             }
 
-            if (Renderer.SpawnGroups.FirstOrDefault(group => group.Scene == sceneNode.Scene) is { } spawnGroup)
+            if (OwnSceneSpawnGroups.FirstOrDefault(group => group.Scene == sceneNode.Scene) is { } spawnGroup)
             {
                 entityInfoForm.Title += spawnGroup.WorldGroup != null ? " (in 3D skybox)" : $" (in {spawnGroup.MapName})";
             }
@@ -919,6 +839,10 @@ namespace GUI.Types.GLViewers
             using var lockedGl = MakeCurrent();
             Renderer.EntitySystem.QueueConnection(connection, Renderer.EntitySystem.Player);
         }
+
+        // Drawn as scenes of their own, such as the 3D sky, with entities the map does not list
+        internal IEnumerable<SpawnGroup> OwnSceneSpawnGroups
+            => Renderer.EntitySystem.SpawnGroupManager.Groups.Where(static group => group.HasOwnScene);
 
         private void OnEntityInfoOutputActivated(string entityName)
         {
@@ -978,8 +902,7 @@ namespace GUI.Types.GLViewers
                 return;
             }
 
-            var scenes = Renderer.Scenes;
-            var sceneNode = pixelInfo.SceneIndex < scenes.Count ? scenes[(int)pixelInfo.SceneIndex].Find(pixelInfo.ObjectId) : null;
+            var sceneNode = Renderer.FindPickedNode(result);
 
             if (sceneNode == null)
             {
@@ -1158,66 +1081,139 @@ namespace GUI.Types.GLViewers
             }
         }
 
-        private const string PhysicsRenderAsOpaque = "S2V: Render as opaque";
-
-        private void SetAvailablePhysicsGroups(IEnumerable<string> physicsGroups)
+        // Hammer's Auto Vis Groups of tools materials, those the loaded map uses nested under the groups above them,
+        // shown until unchecked and folded until opened. A group the brushes of several entity classes use lists
+        // each class below it.
+        private void AddToolBrushGroupsControl()
         {
-            Debug.Assert(physicsGroupsComboBox != null);
+            Debug.Assert(UiControl != null);
 
-            physicsGroupsComboBox.Items.Clear();
+            var nodes = Renderer.Scenes.SelectMany(static scene => scene.AllNodes).ToArray();
+            var meshDraws = nodes
+                .OfType<MeshCollectionNode>()
+                .SelectMany(static node => node.RenderableMeshes
+                    .SelectMany(static mesh => mesh.DrawCalls)
+                    .Select(drawCall => (Node: (SceneNode)node, drawCall.Material)));
+            var shapeDraws = nodes
+                .OfType<ShapeSceneNode>()
+                .Where(static node => node.ToolsMaterial != null)
+                .Select(static node => (Node: (SceneNode)node, Material: node.ToolsMaterial!));
 
-            var physicsGroupsArray = physicsGroups
-                .OrderByDescending(static s => s.StartsWith('-'))
-                .ToArray();
+            var classesByGroup = meshDraws
+                .Concat(shapeDraws)
+                .Select(static draw => (Group: ToolBrushGroups.GetGroup(draw.Material.Material.Name), EntityClass: ToolBrushGroups.GetEntityClass(draw.Node)))
+                .Where(static draw => draw.Group != null)
+                .GroupBy(static draw => draw.Group!, static draw => draw.EntityClass, StringComparer.Ordinal)
+                .ToDictionary(static group => group.Key, static group => group.Distinct(StringComparer.Ordinal).ToArray(), StringComparer.Ordinal);
 
-            if (physicsGroupsArray.Length > 0)
+            if (classesByGroup.Count == 0)
             {
-                physicsGroupsComboBox.Enabled = true;
-                physicsGroupsComboBox.Items.AddRange(physicsGroupsArray);
-                physicsGroupsComboBox.Items.Add(PhysicsRenderAsOpaque);
+                return;
             }
-            else
+
+            // What each item hides, where a group listing its classes hides nothing of its own
+            var items = new Dictionary<string, (string Group, string? EntityClass)>(StringComparer.Ordinal);
+            var paths = new List<string>();
+
+            foreach (var (group, entityClasses) in classesByGroup)
             {
-                physicsGroupsComboBox.Enabled = false;
+                foreach (var parent in ToolBrushGroups.GetGroupAndParents(group).Skip(1))
+                {
+                    items.TryAdd(parent, (parent, null));
+                }
+
+                if (entityClasses is [_])
+                {
+                    items.Add(group, (group, null));
+                    paths.Add(group);
+                    continue;
+                }
+
+                foreach (var entityClass in entityClasses)
+                {
+                    var path = $"{group}/{entityClass}";
+                    items.Add(path, (group, entityClass));
+                    paths.Add(path);
+                }
             }
+
+            paths.Sort(StringComparer.Ordinal);
+
+            UiControl.AddTreeSelection("Auto Vis Groups", paths, shown => Tools.HiddenToolBrushGroups = items
+                .ExceptBy(shown, static item => item.Key)
+                .Select(static item => item.Value)
+                .ToFrozenSet(), foldGroups: true);
         }
 
-        private void SetEnabledPhysicsGroups(HashSet<string> physicsGroups)
+        // What the loaded map collides as, hidden until checked and folded until opened, and whether it and tools materials are drawn opaque
+        private void AddCollisionControl()
         {
-            chosenPhysicsGroups = physicsGroups;
-            RequestVisibilityUpdate();
+            Debug.Assert(UiControl != null);
+
+            var labels = ToolsVisibility.GetCollisionLabels(Scene.AllNodes);
+
+            if (labels.Length > 0)
+            {
+                collisionTree = UiControl.AddTreeSelection("Collision", labels, shown =>
+                {
+                    Tools.ShownCollision = shown.ToFrozenSet(StringComparer.OrdinalIgnoreCase);
+                    RequestVisibilityUpdate();
+                }, initiallyChecked: false, foldGroups: true);
+            }
+            else if (!Scene.AllNodes.Any(static node => node is ShapeSceneNode { ToolsMaterial: not null }))
+            {
+                return;
+            }
+
+            UiControl.AddCheckBox("Opaque Collision", Tools.OpaqueCollision, v =>
+            {
+                Tools.OpaqueCollision = v;
+                RequestVisibilityUpdate();
+            });
         }
 
         protected override bool HasToolsVisibilityControls => world != null;
 
         protected override HashSet<string> FilterLayers(HashSet<string> layers)
-            => HasToolsVisibilityControls ? tools.FilterLayers(layers) : layers;
+        {
+            if (!HasToolsVisibilityControls)
+            {
+                return layers;
+            }
+
+            var filtered = Tools.FilterLayers(layers);
+
+            // While playing the game hides disabled entities itself, so they come and go with the other entities
+            if (simulationState != SimulationState.Stopped && filtered.Contains("Entities"))
+            {
+                filtered.Add(WorldLoader.DisabledEntitiesLayerName);
+            }
+
+            return filtered;
+        }
 
         protected override void ApplyVisibility()
         {
-            if (HasToolsVisibilityControls)
-            {
-                foreach (var scene in Renderer.Scenes)
-                {
-                    scene.ShowToolsMaterials = tools.ToolMaterialsVisible;
-                }
-            }
-
             base.ApplyVisibility();
 
-            var physicsGroups = chosenPhysicsGroups;
-            var renderTranslucent = !physicsGroups.Contains(PhysicsRenderAsOpaque);
-
-            foreach (var physNode in Scene.AllNodes.OfType<PhysSceneNode>())
-            {
-                var groupChosen = physicsGroups.Contains(physNode.PhysGroupName);
-
-                physNode.Enabled = HasToolsVisibilityControls ? tools.IsPhysicsVisible(physNode, groupChosen) : groupChosen;
-                physNode.IsTranslucentRenderMode = renderTranslucent;
-            }
+            Tools.ApplyCollisionVisibility(Scene.AllNodes);
         }
 
-        // Above the viewport rather than in the sidebar: how the world is run and what of the tools is drawn
+        // Above the viewport rather than in the sidebar: what of the tools is drawn
+        private void AddToolsVisibilityToolbar()
+        {
+            Debug.Assert(UiControl != null);
+
+            toolsButton = UiControl.AddToolbarToggle("Show Tools", Tools.ShowTools, v =>
+            {
+                Tools.ShowTools = v;
+                RequestVisibilityUpdate();
+            });
+
+            RequestVisibilityUpdate();
+        }
+
+        // Above the viewport rather than in the sidebar: how the world is run
         private void AddSimulationToolbar()
         {
             Debug.Assert(UiControl != null);
@@ -1225,22 +1221,7 @@ namespace GUI.Types.GLViewers
             playPauseButton = UiControl.AddToolbarButton("Play", () => RequestSimulation(SimulationRequest.PlayOrPause), centered: true);
             stopButton = UiControl.AddToolbarButton("Stop", () => RequestSimulation(SimulationRequest.Stop), centered: true);
 
-            toolEntitiesButton = UiControl.AddToolbarToggle("Tool Entities", tools.ShowToolEntities, v =>
-            {
-                tools.ShowToolEntities = v;
-
-                // Tools materials are hidden along with them
-                toolMaterialsButton?.Enabled = v;
-                RequestVisibilityUpdate();
-            });
-            toolMaterialsButton = UiControl.AddToolbarToggle("Tool Materials", tools.ShowToolMaterials, v =>
-            {
-                tools.ShowToolMaterials = v;
-                RequestVisibilityUpdate();
-            });
-
             UpdateSimulationButtons(simulationState);
-            RequestVisibilityUpdate();
         }
 
         private void RequestSimulation(SimulationRequest request)
@@ -1255,18 +1236,10 @@ namespace GUI.Types.GLViewers
         {
             var playing = state == SimulationState.Playing;
 
+            toolsButton?.Checked = Tools.ShowTools;
+
             playPauseButton?.Text = playing ? "Pause" : "Play";
             stopButton?.Enabled = state != SimulationState.Stopped;
-
-            // Both are hidden while the world is played, whatever the switches say
-            toolEntitiesButton?.Enabled = state == SimulationState.Stopped;
-            toolMaterialsButton?.Enabled = state == SimulationState.Stopped && tools.ShowToolEntities;
-        }
-
-        private void SetSimulationState(SimulationState state)
-        {
-            simulationState = state;
-            tools.IsPlaying = state != SimulationState.Stopped;
         }
 
         protected override (string Text, Color32 Color)? ModeLabel => simulationState switch
@@ -1313,28 +1286,38 @@ namespace GUI.Types.GLViewers
             switch (request, simulationState)
             {
                 case (SimulationRequest.Play, SimulationState.Stopped):
-                    SetSimulationState(SimulationState.Playing);
-                    ResetScene();
+                    simulationState = SimulationState.Playing;
+
+                    // Before the respawn, so entities spawn hidden as the game has them
                     entitySystem.Enabled = true;
+                    ResetScene();
                     entitySystem.StartRound();
                     Input.SetWalkMode(true);
+
+                    // Plays as the game looks
+                    showToolsBeforePlay = Tools.ShowTools;
+                    Tools.ShowTools = false;
+                    RequestVisibilityUpdate();
                     break;
 
                 case (SimulationRequest.Play, SimulationState.Paused):
-                    SetSimulationState(SimulationState.Playing);
+                    simulationState = SimulationState.Playing;
                     entitySystem.Enabled = true;
                     break;
 
                 case (SimulationRequest.Pause, SimulationState.Playing):
-                    SetSimulationState(SimulationState.Paused);
+                    simulationState = SimulationState.Paused;
                     entitySystem.Enabled = false;
                     break;
 
                 case (SimulationRequest.Stop, SimulationState.Playing or SimulationState.Paused):
-                    SetSimulationState(SimulationState.Stopped);
+                    simulationState = SimulationState.Stopped;
                     entitySystem.Enabled = false;
                     Input.SetWalkMode(false);
                     ResetScene();
+
+                    Tools.ShowTools = showToolsBeforePlay;
+                    RequestVisibilityUpdate();
                     break;
 
                 default:
@@ -1360,12 +1343,15 @@ namespace GUI.Types.GLViewers
             Renderer.RemoveEntities();
 
             LoadedWorld.LoadingProgress = null;
-            LoadedWorld.ReloadEntities();
+            LoadedWorld.LoadEntities();
 
-            foreach (var spawnGroup in LoadedWorld.SpawnGroups)
+            // Spawning again loaded the spawn groups with scenes of their own again
+            foreach (var scene in Renderer.Scenes)
             {
-                Renderer.AddSpawnGroup(spawnGroup);
-                spawnGroup.Scene.Initialize();
+                if (scene != Scene)
+                {
+                    scene.Initialize();
+                }
             }
 
             Scene.RebindLighting();

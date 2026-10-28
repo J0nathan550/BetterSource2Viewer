@@ -8,6 +8,7 @@
 #include "features.slang"
 #include "utils.slang"
 #include "fullbright.slang"
+#include "material_properties.slang"
 
 float GetCurvature(vec3 vNormal, vec3 vPositionWS)
 {
@@ -19,71 +20,19 @@ float CalculateGeometricRoughnessFactor(vec3 geometricNormal)
 {
     vec3 normalDerivX = dFdx(geometricNormal);
     vec3 normalDerivY = dFdy(geometricNormal);
-    float geometricRoughnessFactor = pow(saturate(max(length_squared(normalDerivX), length_squared(normalDerivY))), 0.5); // s2 uses 0.333
-    return geometricRoughnessFactor;
+    float normalChange = saturate(max(length_squared(normalDerivX), length_squared(normalDerivY)));
+
+    return pow(normalChange, 0.333);
 }
-
-// Struct full of everything needed for lighting, for easy access around the shader.
-
-struct MaterialProperties_t
-{
-    vec3 PositionWS;
-    vec3 GeometricNormal;
-    vec3 Tangent;
-    vec3 Bitangent;
-    vec3 ViewDir;
-
-    vec3 Albedo;
-    float Opacity;
-    float Metalness;
-    vec3 Normal;
-    vec3 NormalMap;
-    vec3 SoftNormal;
-    vec2 Roughness;
-    float IsometricRoughness;
-    vec2 RoughnessTex;
-    float AmbientOcclusion;
-    float Height;
-    vec3 DiffuseAO; // vec3 because Diffuse AO can be tinted
-    float SpecularAO;
-    float RetroReflectivity;
-    float SSSMask;
-    float MouthMask;
-    float WaterEdgeBlend;
-    float WaterColumnDepth;
-    float ClothMask;
-
-    // Sheen lobe, layered over the specular. Zero roughness disables it.
-    vec3 SheenColor;
-    float SheenRoughness;
-
-    vec3 DiffuseColor;
-    vec3 SpecularColor;
-    vec3 TransmissiveColor;
-    vec3 IllumColor;
-
-    vec3 LightmapUv;
-
-    vec3 AmbientGeometricNormal; // Indirect geometric normal
-    vec3 AmbientNormal; // Indirect normal
-
-#if defined(NEED_CURVATURE)
-    float Curvature;
-#endif
-
-#if defined(ANISO_ROUGHNESS)
-    vec3 AnisotropicTangent;
-    vec3 AnisotropicBitangent;
-#endif
-};
 
 void InitProperties(out MaterialProperties_t mat, vec3 GeometricNormal, vec3 PositionWS, vec3 Tangent, vec3 Bitangent)
 {
     mat.PositionWS = PositionWS;
     mat.ViewDir = normalize(g_vCameraPositionWs - PositionWS);
-    mat.GeometricNormal = normalize(GeometricNormal);
-    mat.Tangent = normalize(Tangent);
-    mat.Bitangent = normalize(Bitangent);
+    float invNormalLength = 1.0 / length(GeometricNormal);
+    mat.GeometricNormal = GeometricNormal * invNormalLength;
+    mat.Tangent = Tangent * invNormalLength;
+    mat.Bitangent = Bitangent * invNormalLength;
 
     mat.Albedo = vec3(0.0);
     mat.Opacity = 1.0;
@@ -214,6 +163,12 @@ vec3 calculateWorldNormal(vec3 normalMap, vec3 normal, vec3 tangent, vec3 bitang
 
     //Calculate the tangent normal in world space and return it
     return normalize(tangentSpace * normalMap);
+}
+
+// The inverse of calculateWorldNormal
+vec3 calculateTangentNormal(vec3 normalWs, vec3 normal, vec3 tangent, vec3 bitangent)
+{
+    return normalize(vec3(dot(normalWs, tangent), dot(normalWs, bitangent), dot(normalWs, normal)));
 }
 
 #if (F_USE_BENT_NORMALS == 1)
@@ -380,14 +335,14 @@ void applyDetailTexture(inout vec3 Albedo, inout vec3 NormalMap, vec2 detailMask
 // CS2 Decals
 #if (F_DECAL_TEXTURE == 1)
 
-    uniform sampler2D g_tDecal;
-    #if (F_SECONDARY_UV == 1) || (F_FORCE_UV2 == 1)
-        uniform bool g_bUseSecondaryUvForDecal;
+    uniform sampler2D g_tDecal; // SrgbRead(true)
+    #if defined(secondary_uv_vfx_common)
+        uniform bool g_bUseSecondaryUvForDecal = true;
     #endif
 
     vec3 ApplyDecalTexture(vec3 albedo)
     {
-    #if (F_SECONDARY_UV == 1) || (F_FORCE_UV2 == 1)
+    #if defined(secondary_uv_vfx_common)
         vec2 coords = (g_bUseSecondaryUvForDecal || (F_FORCE_UV2 == 1)) ? vTexCoord2.xy : vTexCoordOut.xy;
     #else
         vec2 coords = vTexCoordOut.xy;

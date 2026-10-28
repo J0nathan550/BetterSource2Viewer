@@ -219,7 +219,7 @@ namespace GUI.Types.GLViewers
                     LineSpacing = 4,
                 });
 
-                slowmodeTrackBar = UiControl.AddTrackBar(value =>
+                slowmodeTrackBar = UiControl.AddTrackBar("Speed", value =>
                 {
                     particleSceneNode?.FrametimeMultiplier = value;
                 }, particleSceneNode?.FrametimeMultiplier ?? 1f);

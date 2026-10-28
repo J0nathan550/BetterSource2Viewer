@@ -56,16 +56,13 @@ namespace ValveResourceFormat.Renderer.Buffers
         public Matrix4x4 WorldToShadow = Matrix4x4.Identity;
         /// <summary>Transform into the second, wider sun shadow cascade. Forms <c>g_matWorldToShadow[1]</c>.</summary>
         public Matrix4x4 WorldToShadowCascade1 = Matrix4x4.Identity;
-        /// <summary>Index of the drawn scene in <see cref="Renderer.Scenes"/>, written out by the picking pass.</summary>
+        /// <summary>Index of the drawn scene in <see cref="Renderer.Scenes"/>, which replacement shaders can write out.</summary>
         public uint SceneIndex;
         /// <summary>Whether this view draws the 3D skybox rather than the world.</summary>
         public bool IsSkybox;
         /// <summary>Depth bias applied when sampling the sun light shadow map.</summary>
         public float SunLightShadowBias = 0.001f;
-        /// <summary>
-        /// Whether this view samples the sun shadow cascades. They only cover the main scene, so the
-        /// 3D skybox view does not.
-        /// </summary>
+        /// <summary>Whether this view samples the sun shadow cascades.</summary>
         public bool SunShadowsEnabled = true;
 
         /// <summary>When <see langword="true"/>, volumetric fog is active and evaluated in the shader.</summary>

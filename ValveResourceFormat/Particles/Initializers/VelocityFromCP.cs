@@ -1,7 +1,10 @@
+using ValveResourceFormat.Particles.Utils;
+
 namespace ValveResourceFormat.Particles.Initializers
 {
     /// <summary>
     /// Initializes particle velocity from a vector input, optionally normalizing direction and applying a transform.
+    /// Every particle of one call gets the same velocity.
     /// </summary>
     /// <seealso href="https://s2v.app/SchemaExplorer/cs2/particles/C_INIT_VelocityFromCP">C_INIT_VelocityFromCP</seealso>
     class VelocityFromCP : ParticleFunctionInitializer
@@ -13,28 +16,31 @@ namespace ValveResourceFormat.Particles.Initializers
 
         public VelocityFromCP(ParticleDefinitionParser parse) : base(parse)
         {
-            velocityInput = parse.VectorProvider("m_velocityInput", velocityInput);
+            velocityInput = parse.CollectionVectorProvider("m_velocityInput", velocityInput);
             transformInput = parse.TransformInput("m_transformInput", transformInput);
             velocityScale = parse.Float("m_flVelocityScale", velocityScale);
             directionOnly = parse.Boolean("m_bDirectionOnly", directionOnly);
         }
 
-        public override ulong WrittenFields => FieldMask(ParticleField.PositionPrevious);
+        public override ulong WrittenFields => ParticleField.PositionPrevious.Mask();
 
-        public override Particle Initialize(ref Particle particle, ParticleCollection particles, ParticleSystemState particleSystemRenderState)
+        protected override void InitializeCall(ParticleSpan run, ParticleCollection particles, ParticleSystemState particleSystemState)
         {
-            var velocity = velocityInput.NextVector(ref particle, particleSystemRenderState);
+            var velocity = velocityInput.NextVector(particleSystemState);
+            velocity = Vector3.TransformNormal(velocity, transformInput.NextTransform(particleSystemState));
 
-            if (directionOnly && velocity != Vector3.Zero)
+            if (directionOnly)
             {
                 velocity = MathUtils.SafeNormalize(velocity);
             }
 
-            velocity *= velocityScale;
-            velocity = Vector3.TransformNormal(velocity, transformInput.NextTransform(ref particle, particleSystemRenderState));
+            var displacement = velocity * particleSystemState.PreviousStep * velocityScale;
+            var previousPositions = run.Vectors(ParticleField.PositionPrevious);
 
-            particle.Velocity += velocity;
-            return particle;
+            for (var i = 0; i < previousPositions.Length; i++)
+            {
+                previousPositions[i] -= displacement;
+            }
         }
     }
 }

@@ -235,7 +235,7 @@ namespace GUI.Types.Exporter
             {
                 FileName = entry.GetFullPath(),
             };
-            resource.Read(GameFileLoader.GetPackageEntryStream(package, entry));
+            resource.Read(package.GetMemoryMappedStreamIfPossible(entry));
 
             ExportMaterial(resource, vmatPath, contentRoot, fileLoader, progress, writtenFiles, cancellationToken);
         }

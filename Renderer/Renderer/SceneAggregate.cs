@@ -1,6 +1,7 @@
 using System.IO;
 using System.Linq;
 using ValveKeyValue;
+using ValveResourceFormat.Renderer.World;
 using ValveResourceFormat.ResourceTypes;
 using ValveResourceFormat.ResourceTypes.ModelData;
 using ValveResourceFormat.Serialization.KeyValues;
@@ -168,14 +169,9 @@ namespace ValveResourceFormat.Renderer
 
         private void LoadLodSetups(KVObject aggregateSceneObject, Matrix4x4 rootTransform)
         {
-            if (!aggregateSceneObject.ContainsKey("m_lodSetups"))
-            {
-                return;
-            }
-
             var lodSetups = aggregateSceneObject.GetArray("m_lodSetups");
 
-            if (lodSetups.Count == 0)
+            if (lodSetups == null || lodSetups.Count == 0)
             {
                 return;
             }
@@ -186,7 +182,7 @@ namespace ValveResourceFormat.Renderer
             {
                 LodSetups[i] = new LodSetup(
                     Vector3.Transform(lodSetups[i].GetSubCollection("m_vLODOrigin").ToVector3(), rootTransform),
-                    (float)lodSetups[i].GetFloatProperty("m_fMaxObjectScale"),
+                    lodSetups[i].GetFloatProperty("m_fMaxObjectScale"),
                     lodSetups[i].GetFloatArray("m_fSwitchDistances")
                 );
             }
@@ -300,7 +296,7 @@ namespace ValveResourceFormat.Renderer
                     var fragmentData = aggregateMeshes[drawCall.MeshId];
                     var lightProbeVolumePrecomputedHandshake = fragmentData.GetInt32Property("m_nLightProbeVolumePrecomputedHandshake");
                     var worldBounds = fragmentData.GetArray("m_vWorldBounds");
-                    var flags = fragmentData.GetEnumValue<ObjectTypeFlags>("m_objectFlags", normalize: true);
+                    var flags = WorldNodeLoader.ReadObjectFlags(fragmentData, "m_objectFlags");
 
                     drawCall.DrawBounds = new AABB(worldBounds[0].ToVector3(), worldBounds[1].ToVector3());
 
@@ -339,7 +335,7 @@ namespace ValveResourceFormat.Renderer
                 var drawCall = RenderMesh.DrawCallsOpaque[drawCallIndex];
                 var drawBounds = drawCall.DrawBounds ?? throw new InvalidDataException("Draw call bounds must exist for all new format fragments");
                 var tintColor = fragmentData.GetSubCollection("m_vTintColor").ToVector3();
-                var flags = fragmentData.GetEnumValue<ObjectTypeFlags>("m_objectFlags", normalize: true);
+                var flags = WorldNodeLoader.ReadObjectFlags(fragmentData, "m_objectFlags");
                 var lodGroupMask = fragmentData.GetUInt32Property("m_nLODGroupMask");
                 var fragmentTransform = fragmentData.GetBooleanProperty("m_bHasTransform") ? fragmentTransforms[transformIndex++]
                     : null;

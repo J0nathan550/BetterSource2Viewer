@@ -170,13 +170,6 @@ namespace ValveResourceFormat.ResourceTypes
                 StringAttributes[kvp.GetStringProperty("m_name")] = kvp.GetStringProperty("m_value");
             }
 
-            // This is zero-length for all vmat files in Dota2 and HL archives
-            var textureAttributes = Data.GetArray<string>("m_textureAttributes");
-            if (textureAttributes.Length > 0)
-            {
-                Console.WriteLine("unexpected textureAttributes length");
-            }
-
             RenderAttributesUsed = Data.GetArray<string>("m_renderAttributesUsed") ?? [];
 
             // s&box removed m_dynamicParams + m_dynamicTextureParams from the material schema
@@ -255,7 +248,7 @@ namespace ValveResourceFormat.ResourceTypes
 
             var inputSignatureString = (string)inputSignatureValue;
 
-            if (!inputSignatureString.StartsWith("<!-- kv3", StringComparison.InvariantCulture))
+            if (!inputSignatureString.StartsWith("<!-- kv3", StringComparison.Ordinal))
             {
                 return null;
             }

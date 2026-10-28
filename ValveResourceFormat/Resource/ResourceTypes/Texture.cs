@@ -15,6 +15,10 @@ namespace ValveResourceFormat.ResourceTypes
     /// <summary>
     /// Represents a texture resource containing image data with various formats and metadata.
     /// </summary>
+    /// <remarks>
+    /// Get one from <see cref="ValveResourceFormat.Resource.DataBlock"/> of a resource whose type is <see cref="ResourceType.Texture"/>.
+    /// Use <see cref="GenerateBitmap"/> to decode the pixels.
+    /// </remarks>
     public class Texture : Block
     {
         /// <summary>
@@ -245,10 +249,84 @@ namespace ValveResourceFormat.ResourceTypes
                 private static float CrossedFraction(float into, float span) => span > 0f ? into / span : 0f;
             }
 
+            private const string UnnamedSequenceName = "CDmeSheetSequence";
+
+            private Sequence[] sequences = [];
+            private int[] sequenceIndicesById = [];
+
             /// <summary>
             /// Gets or sets the array of animation sequences in this sprite sheet.
             /// </summary>
-            public Sequence[] Sequences { get; set; } = [];
+            public Sequence[] Sequences
+            {
+                get => sequences;
+                set
+                {
+                    sequences = value;
+                    sequenceIndicesById = BuildSequenceIndicesById(value);
+                }
+            }
+
+            /// <summary>
+            /// Gets the position in <see cref="Sequences"/> of the sequence a particle reaches with
+            /// sequence number <paramref name="id"/>, or -1 when no sequence answers to it.
+            /// </summary>
+            /// <remarks>
+            /// An unnamed sequence answers to its authored <see cref="Sequence.Id"/>, a sequence named with
+            /// digits only answers to that number, and any other named sequence cannot be reached.
+            /// </remarks>
+            /// <param name="id">The sequence number.</param>
+            /// <returns>The sequence's position, or -1.</returns>
+            public int GetSequenceIndex(int id)
+                => (uint)id < (uint)sequenceIndicesById.Length ? sequenceIndicesById[id] : -1;
+
+            /// <summary>
+            /// Gets the number one past the largest sequence number any sequence answers to.
+            /// </summary>
+            public int SequenceIdCount => sequenceIndicesById.Length;
+
+            private static int[] BuildSequenceIndicesById(Sequence[] sequences)
+            {
+                var ids = new int[sequences.Length];
+                var count = 0;
+
+                for (var i = 0; i < sequences.Length; i++)
+                {
+                    ids[i] = GetLookupId(sequences[i]);
+                    count = Math.Max(count, ids[i] + 1);
+                }
+
+                var indices = new int[count];
+                Array.Fill(indices, -1);
+
+                for (var i = 0; i < sequences.Length; i++)
+                {
+                    if (ids[i] >= 0)
+                    {
+                        indices[ids[i]] = i;
+                    }
+                }
+
+                return indices;
+            }
+
+            // TODO: Whether an empty name counts as all digits is not known; it is treated as a name
+            private static int GetLookupId(Sequence sequence)
+            {
+                var name = sequence.Name;
+
+                if (name == UnnamedSequenceName)
+                {
+                    return (int)sequence.Id;
+                }
+
+                if (name.Length == 0 || !name.All(char.IsAsciiDigit))
+                {
+                    return -1;
+                }
+
+                return int.TryParse(name, NumberStyles.None, CultureInfo.InvariantCulture, out var id) ? id : -1;
+            }
         }
 
         /// <summary>
@@ -757,7 +835,7 @@ namespace ValveResourceFormat.ResourceTypes
         /// <param name="depth">The depth to extract.</param>
         /// <param name="face">The face to extract for cube textures.</param>
         /// <param name="mipLevel">The mip level to extract.</param>
-        /// <param name="decodeFlags">The preferred codec to use when decoding the texture.</param>
+        /// <param name="decodeFlags">The preferred codec to use when decoding the texture. Flags set alongside <see cref="TextureCodec.Auto"/> are added to the detected ones.</param>
         /// <returns>Skia bitmap.</returns>
         public SKBitmap GenerateBitmap(uint depth = 0, CubemapFace face = 0, uint mipLevel = 0, TextureCodec decodeFlags = TextureCodec.Auto)
         {
@@ -796,12 +874,12 @@ namespace ValveResourceFormat.ResourceTypes
             }
 
             var isHdrBitmap = IsHighDynamicRange && !decodeFlags.HasFlag(TextureCodec.ForceLDR);
-            var removeDecodeFlags = isHdrBitmap
+            var removeDecodeFlags = IsHighDynamicRange
                 ? (TextureCodec.ColorSpaceLinear | TextureCodec.ColorSpaceSrgb)
                 : TextureCodec.None;
 
-            decodeFlags = decodeFlags == TextureCodec.Auto
-                ? RetrieveCodecFromResourceEditInfo() & ~removeDecodeFlags
+            decodeFlags = decodeFlags.HasFlag(TextureCodec.Auto)
+                ? (RetrieveCodecFromResourceEditInfo() & ~removeDecodeFlags) | (decodeFlags & ~TextureCodec.Auto)
                 : decodeFlags;
 
             var colorType = isHdrBitmap
@@ -1375,18 +1453,47 @@ namespace ValveResourceFormat.ResourceTypes
 
             var textureCompilerDependencies = Resource.EditInfo.SpecialDependencies
                 .Where(static dependency => dependency.CompilerIdentifier == "CompileTexture");
+            var isNormalMap = false;
+            var isAnisoRoughness_RG = false;
 
             foreach (var processorAlgorithm in textureCompilerDependencies)
             {
+                isNormalMap |= processorAlgorithm.String == "Texture Compiler Version Image NormalizeNormals";
+                isAnisoRoughness_RG |= processorAlgorithm.String == "Texture Compiler Version Mip AnisoRoughness_RG";
+
                 codec |= processorAlgorithm.String switch
                 {
                     // Image processor algorithms
                     "Texture Compiler Version Image YCoCg Conversion" => TextureCodec.YCoCg,
-                    "Texture Compiler Version Image NormalizeNormals" => TextureCodec.NormalizeNormals,
 
                     // Mipmap processor algorithms
+                    "Texture Compiler Version Mip HemiOctNormal" => TextureCodec.HemiOctNormal,
                     "Texture Compiler Version Mip HemiOctIsoRoughness_RG_B" => TextureCodec.HemiOctRB,
                     "Texture Compiler Version Mip HemiOctAnisoRoughness" => TextureCodec.HemiOctRB, // do we lose one of the roughness components? (anisotropic is xy)
+                    _ => TextureCodec.None,
+                };
+            }
+
+            // Roughness generated from a normal map lists the normal map's processors, but only holds roughness in red and green
+            if (isAnisoRoughness_RG)
+            {
+                isNormalMap = false;
+                codec &= ~TextureCodec.HemiOctRB;
+            }
+
+            // BC5 blue channel is always 0, it is not roughness
+            if (Format == VTexFormat.ATI2N)
+            {
+                codec &= ~TextureCodec.BlueToAlpha;
+            }
+
+            // The normalize processor runs on the source image, but normal maps in these formats only store X and Y
+            if (isNormalMap && !codec.HasFlag(TextureCodec.HemiOctNormal))
+            {
+                codec |= Format switch
+                {
+                    VTexFormat.DXT5 => TextureCodec.Dxt5nm | TextureCodec.NormalizeNormals,
+                    VTexFormat.ATI2N => TextureCodec.NormalizeNormals,
                     _ => TextureCodec.None,
                 };
             }
@@ -1395,16 +1502,6 @@ namespace ValveResourceFormat.ResourceTypes
             {
                 // Skybox cubemaps store YCoCg in sRGB gamma space; flat panorama textures are raw (issue #1127).
                 codec |= TextureCodec.ColorSpaceSrgb;
-            }
-
-            if (Format == VTexFormat.DXT5 && codec.HasFlag(TextureCodec.NormalizeNormals))
-            {
-                codec |= TextureCodec.Dxt5nm;
-            }
-            else if (Format == VTexFormat.BC7 && codec.HasFlag(TextureCodec.HemiOctRB)
-                                              && codec.HasFlag(TextureCodec.NormalizeNormals))
-            {
-                codec &= ~TextureCodec.NormalizeNormals;
             }
 
             if (IsHighDynamicRange)

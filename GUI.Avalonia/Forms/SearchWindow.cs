@@ -5,6 +5,8 @@ using Avalonia.Controls;
 using Avalonia.Input;
 using Avalonia.Layout;
 using Avalonia.Threading;
+using GUI.Types.PackageViewer;
+using ValveResourceFormat.IO;
 
 namespace GUI.Forms
 {
@@ -16,34 +18,36 @@ namespace GUI.Forms
         internal static readonly StringComparer NumericComparer =
             StringComparer.Create(CultureInfo.InvariantCulture, CompareOptions.IgnoreCase | CompareOptions.NumericOrdering);
 
-        private static readonly (string Name, SearchType Type)[] SearchTypes =
-        [
-            ("File Name (Partial Match)", SearchType.FileNamePartialMatch),
-            ("File Name (Exact Match)", SearchType.FileNameExactMatch),
-            ("File Full Path", SearchType.FullPath),
-            ("Regex", SearchType.Regex),
-            ("File Contents (Case Sensitive)", SearchType.FileContents),
-            ("File Contents Hex Bytes", SearchType.FileContentsHex),
-        ];
+        // Indexed by PackageSearchType
+        internal static readonly string[] SearchTypeNames = ["File name", "Full path", "File contents", "File contents hex bytes"];
 
         private readonly TextBox findTextBox;
         private readonly ComboBox searchTypeComboBox;
+        private readonly CheckBox matchCaseCheckBox;
+        private readonly CheckBox wholeWordCheckBox;
+        private readonly CheckBox regexCheckBox;
         private readonly ComboBox fileTypeComboBox;
+        private readonly TextBlock hintText;
+        private readonly Button findButton;
         private readonly ComboBox filterKeyComboBox;
         private readonly ComboBox filterValueComboBox;
         private Dictionary<string, SortedSet<string>>? filterKeys;
         private string[] fileTypes = [];
         private int filterLoadVersion;
 
-        public string SearchText => findTextBox.Text ?? string.Empty;
+        /// <summary>
+        /// Gets the search as entered by the user.
+        /// </summary>
+        public SearchRequest Request => new(
+            new(findTextBox.Text ?? string.Empty, (PackageSearchType)Math.Max(0, searchTypeComboBox.SelectedIndex), matchCaseCheckBox.IsChecked == true, wholeWordCheckBox.IsChecked == true, regexCheckBox.IsChecked == true),
+            null,
+            SelectedFileType,
+            SelectedFilterKey,
+            SelectedFilterKey != null && filterValueComboBox.SelectedIndex > 0 ? filterValueComboBox.SelectedItem as string : null);
 
-        public SearchType SelectedSearchType => SearchTypes[Math.Max(0, searchTypeComboBox.SelectedIndex)].Type;
+        private string? SelectedFileType => fileTypeComboBox.SelectedIndex > 0 ? fileTypes[fileTypeComboBox.SelectedIndex - 1] : null;
 
-        public string? SelectedFileType => fileTypeComboBox.SelectedIndex > 0 ? fileTypes[fileTypeComboBox.SelectedIndex - 1] : null;
-
-        public string? SelectedFilterKey => filterKeys != null && filterKeyComboBox.SelectedIndex > 0 ? filterKeyComboBox.SelectedItem as string : null;
-
-        public string? SelectedFilterValue => SelectedFilterKey != null && filterValueComboBox.SelectedIndex > 0 ? filterValueComboBox.SelectedItem as string : null;
+        private string? SelectedFilterKey => filterKeys != null && filterKeyComboBox.SelectedIndex > 0 ? filterKeyComboBox.SelectedItem as string : null;
 
         public SearchWindow()
         {
@@ -59,10 +63,15 @@ namespace GUI.Forms
 
             searchTypeComboBox = new ComboBox
             {
-                ItemsSource = SearchTypes.Select(static t => t.Name).ToArray(),
+                ItemsSource = SearchTypeNames,
                 SelectedIndex = 0,
                 HorizontalAlignment = HorizontalAlignment.Stretch,
             };
+
+            matchCaseCheckBox = new CheckBox { Content = "Match case" };
+            wholeWordCheckBox = new CheckBox { Content = "Whole word" };
+            regexCheckBox = new CheckBox { Content = "Regex" };
+            hintText = new TextBlock { IsVisible = false, Foreground = Avalonia.Media.Brushes.IndianRed, TextWrapping = Avalonia.Media.TextWrapping.Wrap };
 
             fileTypeComboBox = new ComboBox { HorizontalAlignment = HorizontalAlignment.Stretch, MaxDropDownHeight = 400 };
 
@@ -71,7 +80,7 @@ namespace GUI.Forms
 
             filterValueComboBox = new ComboBox { HorizontalAlignment = HorizontalAlignment.Stretch, IsVisible = false };
 
-            var findButton = new Button { Content = "Find", MinWidth = 88, HorizontalContentAlignment = HorizontalAlignment.Center, IsDefault = true };
+            findButton = new Button { Content = "Find", MinWidth = 88, HorizontalContentAlignment = HorizontalAlignment.Center, IsDefault = true };
             findButton.Click += (_, _) => Close(true);
 
             var cancelButton = new Button { Content = "Cancel", MinWidth = 88, HorizontalContentAlignment = HorizontalAlignment.Center, IsCancel = true };
@@ -85,11 +94,18 @@ namespace GUI.Forms
                 {
                     findTextBox,
                     searchTypeComboBox,
+                    new StackPanel
+                    {
+                        Orientation = Orientation.Horizontal,
+                        Spacing = 12,
+                        Children = { matchCaseCheckBox, wholeWordCheckBox, regexCheckBox },
+                    },
                     new TextBlock { Text = "File type:" },
                     fileTypeComboBox,
                     new TextBlock { Text = "Asset info filter:" },
                     filterKeyComboBox,
                     filterValueComboBox,
+                    hintText,
                     new StackPanel
                     {
                         Orientation = Orientation.Horizontal,
@@ -100,6 +116,15 @@ namespace GUI.Forms
                     },
                 },
             };
+
+            findTextBox.TextChanged += (_, _) => UpdateState();
+            searchTypeComboBox.SelectionChanged += (_, _) => UpdateState();
+            matchCaseCheckBox.IsCheckedChanged += (_, _) => UpdateState();
+            wholeWordCheckBox.IsCheckedChanged += (_, _) => UpdateState();
+            regexCheckBox.IsCheckedChanged += (_, _) => UpdateState();
+            fileTypeComboBox.SelectionChanged += (_, _) => UpdateState();
+            filterKeyComboBox.SelectionChanged += (_, _) => UpdateState();
+            UpdateState();
 
             Opened += (_, _) =>
             {
@@ -114,6 +139,17 @@ namespace GUI.Forms
                     Close(false);
                 }
             };
+        }
+
+        private void UpdateState()
+        {
+            var request = Request;
+            var error = PackageSearch.GetError(request.Query);
+
+            matchCaseCheckBox.IsEnabled = wholeWordCheckBox.IsEnabled = regexCheckBox.IsEnabled = request.Query.Type != PackageSearchType.FileContentsHex;
+            hintText.Text = error;
+            hintText.IsVisible = error != null;
+            findButton.IsEnabled = error == null && request is not { Query.Text: "", Extension: null, FilterKey: null };
         }
 
         /// <summary>

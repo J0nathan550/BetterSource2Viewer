@@ -1,6 +1,9 @@
+using System.Linq;
 using System.Windows.Forms;
+using GUI.Controls;
 using GUI.Types.Exporter;
 using GUI.Types.GLViewers;
+using GUI.Types.PackageViewer;
 
 namespace GUI.Utils
 {
@@ -20,8 +23,10 @@ namespace GUI.Utils
         WorldViewer,
         ParticleViewer,
         MaterialViewer,
+        GraphViewer,
         AudioPlayer,
         //PackageViewer,
+        PackageEditor,
     }
 
     /// <summary>
@@ -29,6 +34,17 @@ namespace GUI.Utils
     /// </summary>
     public static class KeybindingRegistry
     {
+        private static readonly List<KeybindingInfo> AppKeybindings =
+        [
+            new("Ctrl+F", "Find"),
+            new("Ctrl+O", "Open"),
+            new("Ctrl+W", "Close tab"),
+            new("Ctrl+Q", "Close all tabs"),
+            new("Ctrl+E", "Close tabs right"),
+            //new("Ctrl+R", "Reload"),
+            //new("F5", "Reload"),
+        ];
+
         private static readonly Dictionary<ViewerType, List<KeybindingInfo>> Registry = new()
         {
             [ViewerType.TextureViewer] =
@@ -47,7 +63,7 @@ namespace GUI.Utils
             [ViewerType.ModelViewer] =
             [
                 //new("WASD", "Move"),
-                new("Q/Z", "Up/Down"),
+                new("Z", "Mouselook"),
                 //new("Mouse", "Rotate"),
                 new("Alt", "Orbit"),
                 new("Shift", "Pan"),
@@ -65,7 +81,9 @@ namespace GUI.Utils
                 //new("WASD", "Move"),
                 new("Alt", "Orbit"),
                 new("Shift", "Pan"),
-                new("Click", "Pick"),
+                new("Click", "Select"),
+                new("Dbl-click", "Details"),
+                new("Ctrl+Dbl-click", "Open"),
                 //new("Ctrl+Click", "Multi-select"),
                 //new("Esc", "Deselect"),
                 //new("Del", "Hide"),
@@ -86,11 +104,25 @@ namespace GUI.Utils
 
             [ViewerType.MaterialViewer] =
             [
-                new("Mouse", "Orbit"),
+                new("Drag", "Orbit"),
+                new("Right drag", "Pan"),
                 new("Scroll", "Zoom"),
                 new("Ctrl+Drag", "Adjust sun"),
                 new("F11", "Fullscreen"),
                 new("Ctrl+C", "Screenshot"),
+            ],
+
+            [ViewerType.GraphViewer] =
+            [
+                new("Drag", "Pan"),
+                new("Scroll", "Zoom"),
+                new("Shift+Click", "Multi-select"),
+                new("Ctrl+Drag", "Move connected"),
+                new("Right click", "Menu"),
+                new("Ctrl+0", "Fit"),
+                new("Ctrl+C", "Copy"),
+                new("Ctrl+S", "Save"),
+                new("F11", "Fullscreen"),
             ],
 
             [ViewerType.AudioPlayer] =
@@ -102,16 +134,13 @@ namespace GUI.Utils
                 new("L", "Loop"),
             ],
 
-            [ViewerType.Default] =
+            [ViewerType.PackageEditor] =
             [
-                new("Ctrl+F", "Find"),
-                new("Ctrl+O", "Open"),
-                new("Ctrl+W", "Close tab"),
-                new("Ctrl+Q", "Close all tabs"),
-                new("Ctrl+E", "Close tabs right"),
-                //new("Ctrl+R", "Reload"),
-                //new("F5", "Reload"),
+                new("Ctrl+S", "Save"),
+                .. AppKeybindings,
             ],
+
+            [ViewerType.Default] = AppKeybindings,
         };
 
         /// <summary>
@@ -123,18 +152,21 @@ namespace GUI.Utils
         {
             if (tab?.Tag is not ExportData exportData)
             {
-                return ViewerType.Default;
+                return tab != null && PackageViewer.FromTab(tab) is { IsEditingPackage: true } ? ViewerType.PackageEditor : ViewerType.Default;
             }
 
             var contents = exportData.DisposableContents;
 
             if (contents is Types.Viewers.Resource resourceViewer)
             {
-                var glViewer = resourceViewer.GLViewer;
+                var selectedSubTab = tab.Controls.OfType<TabControl>().FirstOrDefault()?.SelectedTab;
+                var glViewer = (selectedSubTab != null ? GLBaseControl.FindHostedIn(selectedSubTab) : null) ?? resourceViewer.GLViewer;
+
                 if (glViewer != null)
                 {
                     return glViewer switch
                     {
+                        GLGraphViewer => ViewerType.GraphViewer,
                         GLTextureViewer => ViewerType.TextureViewer,
                         GLMaterialViewer => ViewerType.MaterialViewer,
                         GLWorldViewer => ViewerType.WorldViewer,
@@ -142,6 +174,11 @@ namespace GUI.Utils
                         GLSceneViewer => ViewerType.ModelViewer,
                         _ => ViewerType.Default,
                     };
+                }
+
+                if ((selectedSubTab ?? tab).Controls.OfType<AudioPlaybackPanel>().Any())
+                {
+                    return ViewerType.AudioPlayer;
                 }
 
                 return ViewerType.Default;

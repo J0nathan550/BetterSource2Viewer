@@ -1,4 +1,5 @@
 using System.Buffers;
+using System.Globalization;
 using System.IO;
 using System.Linq;
 using System.Text;
@@ -27,36 +28,33 @@ namespace GUI.Types.PackageViewer
     {
         public static List<PackageEntry> RecoverDeletedFiles(Package package, IProgressBarReporter progress)
         {
-            if (package.Entries == null)
-            {
-                return [];
-            }
-
-            var allEntries = package.Entries
-                .SelectMany(file => file.Value)
+            var allEntries = (package.Entries?.Values.SelectMany(static entries => entries) ?? [])
                 .OrderBy(file => file.Offset)
                 .GroupBy(file => file.ArchiveIndex)
                 .OrderBy(x => x.Key)
                 .ToDictionary(x => x.Key, x => x.ToList());
 
             // Every known entry has a gap in front of it to scan, so that is the unit of progress
-            progress.SetBarMax(allEntries.Sum(x => x.Value.Count));
+            progress.SetBarMax(allEntries.Values.Sum(static entries => entries.Count));
             var processed = 0;
 
             var hiddenIndex = 0;
             var totalSlackSize = 0u;
             var hiddenFiles = new List<PackageEntry>();
             var kv3header = Encoding.ASCII.GetBytes("<!-- kv3 ");
-            var previousArchiveIndex = 0;
+            var previousChunkIndex = -1;
 
             foreach (var (archiveIndex, entries) in allEntries)
             {
-                if (archiveIndex - previousArchiveIndex > 1)
+                if (archiveIndex != Package.DirectoryArchiveIndex)
                 {
-                    Log.Warn(nameof(PackageRecovery), $"There is probably an unused {previousArchiveIndex:D3}.vpk");
-                }
+                    for (var unusedChunkIndex = previousChunkIndex + 1; unusedChunkIndex < archiveIndex; unusedChunkIndex++)
+                    {
+                        Log.Warn(nameof(PackageRecovery), string.Create(CultureInfo.InvariantCulture, $"There is probably an unused {unusedChunkIndex:D3}.vpk"));
+                    }
 
-                previousArchiveIndex = archiveIndex;
+                    previousChunkIndex = archiveIndex;
+                }
 
                 var nextOffset = 0u;
 
@@ -153,13 +151,13 @@ namespace GUI.Types.PackageViewer
                                 var dirName = Path.GetDirectoryName(filepath);
                                 if (dirName != null)
                                 {
-                                    newEntry.DirectoryName = dirName.Replace('\\', ValvePak.Package.DirectorySeparatorChar);
+                                    newEntry.DirectoryName = dirName.Length > 0 ? dirName.Replace('\\', Package.DirectorySeparatorChar) : " ";
                                 }
                                 newEntry.FileName = Path.GetFileNameWithoutExtension(filepath);
                             }
                             else
                             {
-                                newEntry.DirectoryName += string.Concat(ValvePak.Package.DirectorySeparatorChar, resource.ResourceType);
+                                newEntry.DirectoryName += string.Concat(Package.DirectorySeparatorChar, resource.ResourceType);
                             }
                         }
                         catch (Exception ex)
@@ -184,13 +182,6 @@ namespace GUI.Types.PackageViewer
                             ArrayPool<byte>.Shared.Return(bytes);
                         }
 
-                        if (!package.Entries.TryGetValue(newEntry.TypeName, out var typeEntries))
-                        {
-                            typeEntries = [];
-                            package.Entries.Add(newEntry.TypeName, typeEntries);
-                        }
-
-                        typeEntries.Add(newEntry);
                         hiddenFiles.Add(newEntry);
 
                         progress.SetProgress($"Found {hiddenFiles.Count} files ({HumanReadableByteSizeFormatter.Format(totalSlackSize)}) so far…");
@@ -211,24 +202,28 @@ namespace GUI.Types.PackageViewer
                 }
 
                 // Recover files in archives after last possible entry for that archive
-                if (archiveIndex != short.MaxValue)
+                var archiveSize = nextOffset;
+
+                try
                 {
-                    var archiveFileSize = nextOffset;
-                    var archiveFileName = $"{package.FileName}_{archiveIndex:D3}.vpk";
+                    if (archiveIndex == Package.DirectoryArchiveIndex)
+                    {
+                        using var archive = package.OpenArchiveStream(archiveIndex);
+                        archiveSize = (uint)archive.Length;
+                    }
+                    else
+                    {
+                        archiveSize = (uint)new FileInfo(package.GetChunkFilePath(archiveIndex)).Length;
+                    }
+                }
+                catch (Exception e)
+                {
+                    Log.Debug(nameof(PackageRecovery), string.Create(CultureInfo.InvariantCulture, $"Failed to get size of archive {archiveIndex}: {e.Message}"));
+                }
 
-                    try
-                    {
-                        archiveFileSize = (uint)new FileInfo(archiveFileName).Length;
-                    }
-                    catch (Exception e)
-                    {
-                        Log.Debug(nameof(PackageRecovery), $"Failed to get size of \"{Path.GetFileName(archiveFileName)}\": {e.Message}");
-                    }
-
-                    if (archiveFileSize != nextOffset)
-                    {
-                        FindValidFiles(archiveFileSize, 0);
-                    }
+                if (archiveSize > nextOffset)
+                {
+                    FindValidFiles(archiveSize, 0);
                 }
             }
 

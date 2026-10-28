@@ -194,8 +194,15 @@ namespace ValveResourceFormat.CompiledShader
             }
 
             var constantBufferBindingArray = data.GetArray<int>("m_constantBufferBindingArray")!;
-            ConstantBufferBindingSlots = [.. constantBufferBindingArray.Select(i => (byte)(i >> 0))];
-            ConstantBufferBindingFlags = [.. constantBufferBindingArray.Select(i => (byte)(i >> 8))];
+            ConstantBufferBindingSlots = new byte[constantBufferBindingArray.Length];
+            ConstantBufferBindingFlags = new byte[constantBufferBindingArray.Length];
+
+            for (var i = 0; i < constantBufferBindingArray.Length; i++)
+            {
+                var binding = constantBufferBindingArray[i];
+                ConstantBufferBindingSlots[i] = (byte)binding;
+                ConstantBufferBindingFlags[i] = (byte)(binding >> 8);
+            }
 
             ConstantBufferSize = data.GetInt32Property("m_nConstantBufferSize");
             StaticCB = data.GetUInt32Property("m_bStaticCB") != 0u;
@@ -209,8 +216,15 @@ namespace ValveResourceFormat.CompiledShader
                 -1
             );
 
-            VsInputSignatureIndices = [.. data.GetIntegerArray("m_vsInputSignatureIndexArray").Select(i => (int)i)];
-            Attributes = [.. data.GetIntegerArray("m_attribIdx").Select(i => attributes[i])];
+            VsInputSignatureIndices = data.GetArray<int>("m_vsInputSignatureIndexArray") ?? [];
+
+            var attributeIndices = data.GetIntegerArray("m_attribIdx");
+            Attributes = new VfxShaderAttribute[attributeIndices.Length];
+
+            for (var i = 0; i < attributeIndices.Length; i++)
+            {
+                Attributes[i] = attributes[attributeIndices[i]];
+            }
         }
 
         /// <summary>

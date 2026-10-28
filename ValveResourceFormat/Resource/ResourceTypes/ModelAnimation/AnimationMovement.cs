@@ -84,8 +84,8 @@ namespace ValveResourceFormat.ResourceTypes.ModelAnimation
             V0 = frameBlock.GetFloatProperty("v0");
             V1 = frameBlock.GetFloatProperty("v1");
             Angle = frameBlock.GetFloatProperty("angle");
-            Vector = new Vector3(frameBlock.GetFloatArray("vector"));
-            Position = new Vector3(frameBlock.GetFloatArray("position"));
+            Vector = frameBlock.GetSubCollection("vector").ToVector3();
+            Position = frameBlock.GetSubCollection("position").ToVector3();
         }
 
         /// <summary>
@@ -111,7 +111,7 @@ namespace ValveResourceFormat.ResourceTypes.ModelAnimation
         private static MovementData Lerp(Vector3 aPos, float aAngle, Vector3 bPos, float bAngle, float t)
         {
             var position = Vector3.Lerp(aPos, bPos, t);
-            var angle = float.Lerp(aAngle, bAngle, t);
+            var angle = MathUtils.Lerp(aAngle, bAngle, t);
 
             return new MovementData(position, angle);
         }

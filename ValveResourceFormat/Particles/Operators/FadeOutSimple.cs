@@ -1,7 +1,8 @@
 namespace ValveResourceFormat.Particles.Operators
 {
     /// <summary>
-    /// Fades a particle's alpha field out linearly over a proportional fade-out time at the end of the particle's life.
+    /// Fades a particle's alpha field out along a smoothstep over a proportional fade-out time at the end of the particle's
+    /// life. It only ever lowers the field, never raising a value another operator has already brought down.
     /// </summary>
     /// <remarks>
     /// The fade-out time is a fraction of the particle's lifetime in the 0-1 range: a setting of
@@ -18,19 +19,41 @@ namespace ValveResourceFormat.Particles.Operators
         {
             fadeOutTime = parse.Float("m_flFadeOutTime", fadeOutTime);
             fieldOutput = parse.ParticleField("m_nFieldOutput", fieldOutput);
+
+            parse.AddInitialRead(fieldOutput);
         }
+
+        /// <inheritdoc/>
+        public override ulong StoredFields => fieldOutput.Mask();
 
         public override void Operate(ParticleCollection particles, float frameTime, ParticleSystemState particleSystemState, float strength)
         {
-            foreach (ref var particle in particles.Current)
+            var fadeStart = 1f - fadeOutTime;
+
+            if (!ParticleBuffer.IsScalar(fieldOutput))
             {
-                var timeLeft = 1 - particle.NormalizedAge;
-                if (timeLeft <= fadeOutTime)
+                return;
+            }
+
+            var current = particles.Current;
+            var ages = current.ReadAges();
+
+            var lifetimes = current.ReadFloats(ParticleField.LifeDuration);
+            var outputs = current.Floats(fieldOutput);
+            var initials = particles.Initial.ReadFloats(fieldOutput);
+
+            for (var i = 0; i < outputs.Length; i++)
+            {
+                var time = ages[i] / lifetimes[i];
+                var fading = fadeStart < time;
+
+                if (!fading)
                 {
-                    var t = timeLeft / fadeOutTime;
-                    var newAlpha = t * particle.GetInitialScalar(particles, ParticleField.Alpha);
-                    particle.SetScalar(fieldOutput, newAlpha);
+                    continue;
                 }
+
+                var faded = (1f - MathUtils.Smoothstep(fadeStart, 1f, time)) * initials[i];
+                outputs[i] = MathF.Min(faded, outputs[i]);
             }
         }
     }

@@ -1,15 +1,13 @@
 namespace ValveResourceFormat.Particles.Utils
 {
     /// <summary>
-    /// The scalar math the particle engine uses, reproduced operation for operation. Several of these
-    /// look like they could be written more simply and cannot: the engine reaches for approximations
-    /// and redundant-looking arithmetic whose rounding is part of the result, so a "simplification"
-    /// here changes what particles do.
+    /// Math with particle-specific semantics: the parabolic sine of the oscillators, quarter step
+    /// exponents, bias curves, the frame built around a forward vector, the epsilon normalize and range
+    /// fraction, and the length and epsilon thresholds particle functions share. General-purpose
+    /// helpers live in <see cref="MathUtils"/>.
     /// </summary>
     static class ParticleMath
     {
-        private const float OneOverPi = 0.31830987f;
-
         /// <summary>Length below which a vector counts as having no direction.</summary>
         public const float MinimumLength = 1e-6f;
 
@@ -17,27 +15,46 @@ namespace ValveResourceFormat.Particles.Utils
         public const float MinimumLengthSquared = 1e-12f;
 
         /// <summary>
-        /// FLT_EPSILON, which the engine adds to a divisor so a zero-length span is a step rather
-        /// than an infinity.
+        /// FLT_EPSILON, added to a divisor so a zero-length span is a step rather than an infinity.
         /// </summary>
         public const float FloatEpsilon = 1.1920929e-7f;
 
+        /// <summary>FLT_MIN, the smallest positive normal float.</summary>
+        public const float FloatMin = 1.17549435e-38f;
+
+        /// <summary>The fade end time taken when none is set, so far off that the fade never ends.</summary>
+        public const float NoFadeEnd = 1e20f;
+
+        /// <summary>Clamps <paramref name="value"/> to [0, 1], with NaN giving 0.</summary>
+        public static float ClampToUnit(float value) => value >= 0f ? MathF.Min(value, 1f) : 0f;
+
         /// <summary>
-        /// The parabola <c>4t(1 - t)</c> over [0, 1], which the engine uses in place of a sine half
-        /// period and as a triangle-like wave.
+        /// The parabola <c>4t(1 - t)</c> over [0, 1], used in place of a sine half period and as a
+        /// triangle-like wave.
         /// </summary>
         public static float HalfWave(float t) => (4f - (4f * t)) * t;
 
         public static float Square(float value) => value * value;
 
-        /// <summary>
-        /// A subtraction from one and back, which the engine's alternate noise turbulence puts its
-        /// target through. It is not an identity in floats: it moves about a third of inputs by a ulp.
-        /// </summary>
-        public static float RoundTripThroughOne(float value) => 1f - (1f - value);
+        /// <summary>The heading of <paramref name="direction"/> in the XY plane plus pi, in (0, 2 pi].</summary>
+        public static float Heading(Vector3 direction) => MathF.Atan2(direction.Y, direction.X) + MathF.PI;
 
         /// <summary>
-        /// The engine's approximation of <c>sin(pi * x)</c>, used by the oscillation operators. The
+        /// <paramref name="exponent"/> clamped to [-255, 255] and truncated toward zero to a multiple of
+        /// 0.25, the exponent <see cref="PowQuarterSteps"/> raises to.
+        /// </summary>
+        public static float TruncateToQuarterSteps(float exponent)
+            => (int)(Math.Clamp(exponent, -255f, 255f) * 4f) * 0.25f;
+
+        /// <summary>
+        /// Raises <paramref name="value"/> to <paramref name="exponent"/> after
+        /// <see cref="TruncateToQuarterSteps"/>, so an exponent of 2.3 acts as 2.25.
+        /// </summary>
+        public static float PowQuarterSteps(float value, float exponent)
+            => MathF.Pow(value, TruncateToQuarterSteps(exponent));
+
+        /// <summary>
+        /// An approximation of <c>sin(pi * x)</c>, used by the oscillation operators. The
         /// phase is wrapped to one period of 2 and each half is <see cref="HalfWave"/>, which runs up
         /// to 0.056 above a true sine and is 4/pi times it as the phase approaches a zero crossing.
         /// </summary>
@@ -51,30 +68,13 @@ namespace ValveResourceFormat.Particles.Utils
         }
 
         /// <summary>
-        /// Approximates the sine and cosine of an angle in radians, for the initializers that draw a random
-        /// direction. It is <see cref="HalfWave"/> plus a correction term that brings the peak error to 0.0011,
-        /// and the cosine is derived from the sine.
+        /// Divides <paramref name="age"/> by <paramref name="lifetime"/>, taking a lifetime below 0.0001 as
+        /// 0.0001 so a particle without one gets a large age rather than an infinite one.
         /// </summary>
-        public static (float Sin, float Cos) SinCos(float radians)
-        {
-            var phase = Wrap(radians * OneOverPi, out var negative);
-            var secondHalf = phase >= 1f;
-
-            var parabola = HalfWave(secondHalf ? phase - 1f : phase);
-            var sin = (((parabola * parabola) - parabola) * 0.225f) + parabola;
-
-            if (negative ^ secondHalf)
-            {
-                sin = -sin;
-            }
-
-            var cos = MathF.Sqrt(1f - (sin * sin));
-
-            return (sin, phase is >= 0.5f and <= 1.5f ? -cos : cos);
-        }
+        public static float NormalizedAge(float age, float lifetime) => age / MathF.Max(0.0001f, lifetime);
 
         /// <summary>
-        /// The engine's standard bias curve, <c>x / ((1 - x) * (1/bias - 2) + 1)</c>, for parameters
+        /// The standard bias curve, <c>x / ((1 - x) * (1/bias - 2) + 1)</c>, for parameters
         /// authored directly on an operator field. A bias of 0.5 is the identity; at or below 0 the
         /// result is always 0, and at or above 1 it is always 1.
         /// </summary>
@@ -91,6 +91,20 @@ namespace ValveResourceFormat.Particles.Utils
             {
                 return 1f;
             }
+
+            return x / (((1f - x) * ((1f / bias) - 2f)) + 1f);
+        }
+
+        /// <summary>
+        /// The curve of <see cref="Bias(float, float)"/> with <paramref name="x"/> clamped to [0, 1] and
+        /// <paramref name="bias"/> to [smallest normal float, 1] instead of saturating at the bias limits.
+        /// </summary>
+        /// <param name="x">Value to bias.</param>
+        /// <param name="bias">Bias parameter.</param>
+        public static float BiasClamped(float x, float bias)
+        {
+            x = MathUtils.Saturate(x);
+            bias = Math.Clamp(bias, FloatMin, 1f);
 
             return x / (((1f - x) * ((1f / bias) - 2f)) + 1f);
         }
@@ -159,22 +173,64 @@ namespace ValveResourceFormat.Particles.Utils
         }
 
         /// <summary>
+        /// Builds the left and up axes that complete a frame around <paramref name="forward"/>, taking
+        /// world up as the reference; a forward whose X and Y are both under 0.001 counts as vertical
+        /// and gets a fixed left instead.
+        /// </summary>
+        public static (Vector3 Left, Vector3 Up) VectorVectors(Vector3 forward)
+        {
+            if (MathF.Abs(forward.X) < 0.001f && MathF.Abs(forward.Y) < 0.001f)
+            {
+                return (Vector3.UnitY, new Vector3(-forward.Z, 0f, 0f));
+            }
+
+            var right = Vector3.Normalize(Vector3.Cross(forward, Vector3.UnitZ));
+            var up = Vector3.Normalize(Vector3.Cross(right, forward));
+
+            return (-right, up);
+        }
+
+        /// <summary>
         /// Folds <paramref name="x"/> onto [0, 2), one period of <c>sin(pi * x)</c>, and reports
         /// whether it was negative.
         /// </summary>
         private static float Wrap(float x, out bool negative)
         {
-            const float RoundingMagic = 8388608f;
-
             negative = float.IsNegative(x);
 
-            var magnitude = MathF.Abs(x);
-
-            // Adding 2^23 gives the mantissa's low bit a weight of 1, so clearing that bit lands on an
-            // even integer, and the compare backs off a period where the rounding went up.
-            var even = BitConverter.Int32BitsToSingle(BitConverter.SingleToInt32Bits(magnitude + RoundingMagic) & ~1) - RoundingMagic;
-
-            return magnitude - (magnitude < even ? even - 2f : even);
+            return MathF.Abs(x) % 2f;
         }
+
+        /// <summary>
+        /// Scales <paramref name="value"/> to unit length with <see cref="FloatEpsilon"/> added to its squared
+        /// length, so a vector much shorter than the square root of that epsilon shrinks toward zero instead
+        /// of growing to unit length.
+        /// </summary>
+        public static Vector3 NormalizeWithEpsilon(Vector3 value)
+            => value / MathF.Sqrt(value.LengthSquared() + FloatEpsilon);
+
+        /// <summary>
+        /// The tint the light colour <paramref name="light"/> gives: the light quantised to bytes, as the
+        /// lighting query returns it, clamped between the byte colours <paramref name="tintMin"/> and
+        /// <paramref name="tintMax"/>, and scaled by <paramref name="amplification"/> / 255.
+        /// </summary>
+        public static Vector3 LightTint(Vector3 light, Vector3 tintMin, Vector3 tintMax, float amplification)
+        {
+            var lightBytes = new Vector3(LightToByte(light.X), LightToByte(light.Y), LightToByte(light.Z));
+            var tintMinBytes = Vector3.Round(tintMin * 255f);
+            var tintMaxBytes = Vector3.Round(tintMax * 255f);
+
+            return Vector3.Max(Vector3.Min(lightBytes, tintMaxBytes), tintMinBytes) * (amplification / 255f);
+        }
+
+        /// <summary>Converts a light channel to its byte value, clamped to [0, 1] and truncated, with NaN giving 0.</summary>
+        private static float LightToByte(float value) => MathF.Truncate(ClampToUnit(value) * 255f);
+
+        /// <summary>
+        /// Where <paramref name="x"/> lies between <paramref name="min"/> and <paramref name="max"/> as a
+        /// fraction clamped to [0, 1], with a range of no width counting as one unit wide.
+        /// </summary>
+        public static float ClampedFraction(float x, float min, float max)
+            => MathUtils.Saturate((x - min) / (max == min ? 1f : max - min));
     }
 }

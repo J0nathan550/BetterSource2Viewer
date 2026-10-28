@@ -127,11 +127,6 @@ namespace ValveResourceFormat.Renderer
         public uint Id { get; set; }
 
         /// <summary>
-        /// Gets or sets whether this node is currently selected.
-        /// </summary>
-        public bool IsSelected { get; set; }
-
-        /// <summary>
         /// Gets whether this node is a fixed-size marker standing in for a point, so its bounds describe
         /// the marker rather than anything in the world.
         /// </summary>
@@ -284,11 +279,6 @@ namespace ValveResourceFormat.Renderer
         }
 
         /// <summary>
-        /// Gets the environment maps affecting this node.
-        /// </summary>
-        public List<SceneEnvMap> EnvMaps { get; private set; } = [];
-
-        /// <summary>
         /// Gets or sets the environment map visibility bitfield for shaders.
         /// </summary>
         public SceneEnvMap.EnvMapVisibility128 ShaderEnvMapVisibility { get; set; } = SceneEnvMap.EnvMapVisibility128.Full;
@@ -317,6 +307,15 @@ namespace ValveResourceFormat.Renderer
         /// Gets or sets the bound light probe for this node.
         /// </summary>
         public SceneLightProbe? LightProbeBinding { get; set; }
+
+        /// <summary>
+        /// Gets or sets the environment map picked for a moving node, which shades what no environment map box covers.
+        /// Static nodes use the highest priority one they overlap.
+        /// </summary>
+        public SceneEnvMap? EnvMapBinding { get; set; }
+
+        /// <summary>Where a moving node's lighting bindings were last picked from, NaN when they have to be picked again.</summary>
+        internal Vector3 LightingBindPosition { get; set; } = new(float.NaN);
 
         /// <summary>
         /// Gets or sets the associated entity data from the map.
@@ -473,7 +472,7 @@ namespace ValveResourceFormat.Renderer
         /// </summary>
         /// <param name="camera">The camera to measure distance from.</param>
         /// <returns>The squared distance to the camera.</returns>
-        public float GetCameraDistance(Camera camera)
+        public virtual float GetCameraDistance(Camera camera)
         {
             return Vector3.DistanceSquared(BoundingBox.Center, camera.Location);
         }

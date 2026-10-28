@@ -1,8 +1,11 @@
+using System.Numerics.Tensors;
+
 namespace ValveResourceFormat.Particles.Initializers
 {
     /// <summary>
     /// Uniformly scales a particle's radius, spawn position and velocity by a literal scale,
-    /// optionally multiplied by the value carried on a scale control point.
+    /// optionally multiplied by the X component of a scale control point. A scale control point
+    /// reading 0 is taken as unset and ignored, since games always set it and previews never do.
     /// </summary>
     /// <seealso href="https://s2v.app/SchemaExplorer/cs2/particles/C_INIT_GlobalScale">C_INIT_GlobalScale</seealso>
     class GlobalScale : ParticleFunctionInitializer
@@ -18,55 +21,76 @@ namespace ValveResourceFormat.Particles.Initializers
         {
             scale = parse.Float("m_flScale", scale);
             scaleControlPoint = parse.Int32("m_nScaleControlPointNumber", scaleControlPoint);
-            controlPoint = parse.Int32("m_nControlPointNumber", controlPoint);
+            controlPoint = parse.ControlPoint("m_nControlPointNumber", controlPoint);
             scaleRadius = parse.Boolean("m_bScaleRadius", scaleRadius);
             scalePosition = parse.Boolean("m_bScalePosition", scalePosition);
             scaleVelocity = parse.Boolean("m_bScaleVelocity", scaleVelocity);
         }
 
-        public override ulong WrittenFields => FieldMask(ParticleField.Position) | FieldMask(ParticleField.PositionPrevious) | FieldMask(ParticleField.Radius) | FieldMask(ParticleField.HitboxOffsetPosition);
+        public override void AddControlPointDefaults(ControlPointDefaults defaults)
+        {
+            defaults.AddScale(scaleControlPoint);
+        }
 
-        public override Particle Initialize(ref Particle particle, ParticleCollection particles, ParticleSystemState particleSystemState)
+        public override ulong WrittenFields => ParticleField.Position.Mask() | ParticleField.PositionPrevious.Mask() | ParticleField.Radius.Mask() | ParticleField.HitboxOffsetPosition.Mask();
+
+        protected override void InitializeCall(ParticleSpan run, ParticleCollection particles, ParticleSystemState particleSystemState)
         {
             var finalScale = scale;
 
             if (scaleControlPoint >= 0)
             {
-                // The scale is carried in the control point's X component, driven game-side from the
-                // effect's control point configuration. An undriven point reads zero, which would
-                // collapse the effect entirely, so treat that as "no scale supplied".
                 var controlPointScale = particleSystemState.GetControlPoint(scaleControlPoint).Position.X;
 
-                if (controlPointScale == 0f)
+                // An x of 0 collapses radius and position, since the scale is applied unconditionally; it is ignored here
+                if (controlPointScale != 0f)
                 {
-                    return particle;
+                    finalScale *= controlPointScale;
                 }
-
-                finalScale *= controlPointScale;
             }
 
             if (finalScale == 1f)
             {
-                return particle;
+                return;
             }
 
             if (scaleRadius)
             {
-                particle.Radius *= finalScale;
+                var radii = run.Floats(ParticleField.Radius);
+                TensorPrimitives.Multiply(radii, finalScale, radii);
             }
 
-            if (scalePosition)
+            // Scales about the control point's origin in world axes rather than in its basis, which differs
+            // only for a basis that is not orthonormal
+            var origin = particleSystemState.GetControlPoint(controlPoint).Position;
+            var positions = run.Vectors(ParticleField.Position);
+            var previousPositions = run.Vectors(ParticleField.PositionPrevious);
+
+            for (var i = 0; i < positions.Length; i++)
             {
-                var origin = particleSystemState.GetControlPoint(controlPoint).Position;
-                particle.Position = origin + ((particle.Position - origin) * finalScale);
-            }
+                var position = positions[i];
+                var previous = previousPositions[i];
+                var velocity = position - previous;
 
-            if (scaleVelocity)
-            {
-                particle.Velocity *= finalScale;
-            }
+                if (scalePosition)
+                {
+                    position = origin + ((position - origin) * finalScale);
+                }
 
-            return particle;
+                if (scaleVelocity)
+                {
+                    previous = scalePosition
+                        ? origin + ((previous - origin) * finalScale)
+                        : position - (velocity * finalScale);
+                }
+                else if (scalePosition)
+                {
+                    previous = position - velocity;
+                }
+
+                positions[i] = position;
+                previousPositions[i] = previous;
+            }
         }
     }
 }

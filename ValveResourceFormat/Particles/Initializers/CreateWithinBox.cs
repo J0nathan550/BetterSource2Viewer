@@ -3,9 +3,14 @@ using ValveResourceFormat.Particles.Utils;
 namespace ValveResourceFormat.Particles.Initializers
 {
     /// <summary>
-    /// Places particles at random positions within an axis-aligned box defined by a minimum and
-    /// maximum corner vector, offset by a control point.
+    /// Places particles at random positions within a box defined by a minimum and maximum corner
+    /// vector, around a control point where it was at each particle's creation time, optionally in the
+    /// control point's own axes.
     /// </summary>
+    /// <remarks>
+    /// <c>m_bUseNewCode</c> is not read. The game evaluates <c>m_vecMin</c> three more times with it set,
+    /// which takes extra draws when that input is random.
+    /// </remarks>
     /// <seealso href="https://s2v.app/SchemaExplorer/cs2/particles/C_INIT_CreateWithinBox">C_INIT_CreateWithinBox</seealso>
     class CreateWithinBox : ParticleFunctionInitializer
     {
@@ -13,30 +18,44 @@ namespace ValveResourceFormat.Particles.Initializers
         private readonly IVectorProvider max = new LiteralVectorProvider(Vector3.Zero);
 
         private readonly int controlPointNumber;
+        private readonly bool localSpace;
         private readonly RangeSampler rangeSampler;
 
         public CreateWithinBox(ParticleDefinitionParser parse) : base(parse)
         {
             min = parse.VectorProvider("m_vecMin", min);
             max = parse.VectorProvider("m_vecMax", max);
-            controlPointNumber = parse.Int32("m_nControlPointNumber", controlPointNumber);
+            controlPointNumber = parse.ControlPoint("m_nControlPointNumber", controlPointNumber);
+            localSpace = parse.Boolean("m_bLocalSpace", localSpace);
             rangeSampler = RangeSampler.Parse(parse);
         }
 
-        public override ulong WrittenFields => FieldMask(ParticleField.Position) | FieldMask(ParticleField.PositionPrevious);
+        public override ulong WrittenFields => ParticleField.Position.Mask() | ParticleField.PositionPrevious.Mask();
 
-        public override Particle Initialize(ref Particle particle, ParticleCollection particles, ParticleSystemState particleSystemState)
+        protected override void InitializeCall(ParticleSpan run, ParticleCollection particles, ParticleSystemState particleSystemState)
         {
-            var posMin = min.NextVector(ref particle, particleSystemState);
-            var posMax = max.NextVector(ref particle, particleSystemState);
+            var creationTimes = run.ReadFloats(ParticleField.CreationTime);
+            var positions = run.Vectors(ParticleField.Position);
+            var previous = SpawnPreviousPositions(run, particleSystemState);
+            var controlPoint = particleSystemState.GetControlPoint(controlPointNumber);
 
-            var position = rangeSampler.NextVectorBetween(ref particle, particleSystemState, posMin, posMax);
+            run.FillVectorInputs(min, max, particleSystemState, out var mins, out var maxs);
 
-            var offset = particleSystemState.GetControlPoint(controlPointNumber).Position;
+            for (var i = 0; i < run.Length; i++)
+            {
+                var position = rangeSampler.NextVectorBetween(run.Start + i, particleSystemState, mins[i], maxs[i]);
 
-            particle.Position = position + offset;
+                position = localSpace
+                    ? Vector3.Transform(position, controlPoint.GetBasisAtTime(creationTimes[i]))
+                    : position + controlPoint.GetPositionAtTime(creationTimes[i]);
 
-            return particle;
+                positions[i] = position;
+
+                if (!previous.IsEmpty)
+                {
+                    previous[i] = position;
+                }
+            }
         }
     }
 }

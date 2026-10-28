@@ -110,7 +110,7 @@ namespace ValveResourceFormat.Renderer.SceneNodes
 
             renderShader.Use();
 
-            renderShader.SetUniform("g_bTriplanarMapping", false);
+            renderShader.SetUniform("g_bHasToolTexture", false);
 
             VertexArray.Bind(vao, renderShader);
 
@@ -228,8 +228,8 @@ namespace ValveResourceFormat.Renderer.SceneNodes
                         continue;
                     }
 
-                    var minBounds = new Vector3(float.MinValue);
-                    var maxBounds = new Vector3(float.MaxValue);
+                    var minBounds = new Vector3(float.MaxValue);
+                    var maxBounds = new Vector3(float.MinValue);
                     foreach (var area in hullAreas)
                     {
                         AddArea(area, verts, triangleInds, lineInds, NavMeshColor, ref minBounds, ref maxBounds);
@@ -250,8 +250,8 @@ namespace ValveResourceFormat.Renderer.SceneNodes
 
             if (navMeshFile.Ladders != null && navMeshFile.Ladders.Length > 0)
             {
-                var minBounds = new Vector3(float.MinValue);
-                var maxBounds = new Vector3(float.MaxValue);
+                var minBounds = new Vector3(float.MaxValue);
+                var maxBounds = new Vector3(float.MinValue);
 
                 foreach (var ladder in navMeshFile.Ladders)
                 {

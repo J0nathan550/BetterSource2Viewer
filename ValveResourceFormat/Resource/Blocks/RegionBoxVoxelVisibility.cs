@@ -1,5 +1,6 @@
 using System.Diagnostics;
 using System.IO;
+using System.Numerics.Tensors;
 using ValveKeyValue;
 using ValveResourceFormat.Serialization.KeyValues;
 
@@ -154,7 +155,7 @@ namespace ValveResourceFormat.Blocks
             ClusterCount = clusters.Count;
             BytesPerCluster = (ClusterCount + 7) / 8;
 
-            var blockOffsets = data.GetIntegerArray("m_blockOffset");
+            var blockOffsets = data.GetArray<int>("m_blockOffset") ?? [];
 
             ClusterRowOffsets = new int[ClusterCount];
             for (var i = 0; i < ClusterCount; i++)
@@ -191,7 +192,7 @@ namespace ValveResourceFormat.Blocks
             // Each node's box in grid cells, the same box halving the bounds down the tree gives
             reader.BaseStream.Position += (long)nodeCount * NodeExtraBytes;
 
-            var mergeLists = data.ContainsKey("m_mergeLists") ? data.GetArray("m_mergeLists") : [];
+            var mergeLists = data.GetArray("m_mergeLists") ?? [];
 
             Regions = new Region[regionCount];
             for (var i = 0; i < regionCount; i++)
@@ -211,7 +212,7 @@ namespace ValveResourceFormat.Blocks
 
             if (mergeLists.Count > 0)
             {
-                ReadMergedRows(mergeLists, data.GetIntegerArray("m_mergeClusters"));
+                ReadMergedRows(mergeLists, data.GetArray<int>("m_mergeClusters") ?? []);
             }
 
             BuildCoarseGrid();
@@ -254,7 +255,7 @@ namespace ValveResourceFormat.Blocks
             }
         }
 
-        private void ReadMergedRows(IReadOnlyList<KVObject> mergeLists, long[] mergeClusters)
+        private void ReadMergedRows(IReadOnlyList<KVObject> mergeLists, int[] mergeClusters)
         {
             MergedVisBlocks = new byte[mergeLists.Count * BytesPerCluster];
 
@@ -266,23 +267,21 @@ namespace ValveResourceFormat.Blocks
 
                 for (var j = first; j < first + count && j < mergeClusters.Length; j++)
                 {
-                    var cluster = (int)mergeClusters[j];
+                    var cluster = mergeClusters[j];
                     var row = cluster < ClusterCount ? RowMemory(ClusterRowOffsets[cluster]).Span : [];
+                    var target = merged[..row.Length];
 
-                    for (var b = 0; b < row.Length; b++)
-                    {
-                        merged[b] |= row[b];
-                    }
+                    TensorPrimitives.BitwiseOr(target, row, target);
                 }
             }
         }
 
-        private static int RowOffset(KVObject cluster, long[] blockOffsets)
+        private static int RowOffset(KVObject cluster, int[] blockOffsets)
         {
             var blockIndex = cluster.GetInt32Property("m_nBlockIndex");
             var offset = cluster.GetInt32Property("m_nOffsetIntoBlock");
 
-            return (int)(blockIndex < blockOffsets.Length ? blockOffsets[blockIndex] : 0) + offset;
+            return (blockIndex < blockOffsets.Length ? blockOffsets[blockIndex] : 0) + offset;
         }
 
         /// <summary>

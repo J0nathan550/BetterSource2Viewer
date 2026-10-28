@@ -20,8 +20,11 @@ namespace ValveResourceFormat.Particles.Initializers
         private readonly int initialWeightedCursor;
         private int weightedCursor;
 
-        private readonly int[] list = [];
-        private int current;
+        private const int TableSize = 64;
+
+        /// <summary>The order a shuffled or linear pick walks, indexed by sequence number.</summary>
+        private readonly int[] table = new int[TableSize];
+        private int next;
 
         public RandomSequence(ParticleDefinitionParser parse) : base(parse)
         {
@@ -56,58 +59,66 @@ namespace ValveResourceFormat.Particles.Initializers
                 initialWeightedCursor = shuffle || linear ? sequenceMin : 0;
                 weightedCursor = initialWeightedCursor;
             }
-            else if (shuffle || linear)
-            {
-                var count = Math.Max(sequenceMax - sequenceMin + 1, 1);
-                list = new int[count];
-                for (var i = 0; i < count; i++)
-                {
-                    list[i] = sequenceMin + i;
-                }
-
-                current = list.Length;
-            }
         }
 
-        public override void Reset()
+        /// <summary>Lays out the walk, shuffling it with draws from the system's table when asked to.</summary>
+        public override void Initialize(ParticleSystemState particleSystemState)
         {
-            current = list.Length;
             weightedCursor = initialWeightedCursor;
+            Array.Clear(table);
+            next = 0;
+
+            if (!(shuffle || linear))
+            {
+                return;
+            }
+
+            // A weighted list never reads the table, but the shuffle still takes its draws from the shared stream
+            next = sequenceMin;
+
+            for (var sequence = Math.Max(sequenceMin, 0); sequence <= Math.Min(sequenceMax, TableSize - 1); sequence++)
+            {
+                SetEntry(sequence, sequence);
+            }
+
+            if (shuffle)
+            {
+                Shuffle(particleSystemState);
+            }
         }
 
-        public override ulong WrittenFields => FieldMask(ParticleField.SequenceNumber);
+        public override ulong WrittenFields => ParticleField.SequenceNumber.Mask();
 
-        public override Particle Initialize(ref Particle particle, ParticleCollection particles, ParticleSystemState particleSystemState)
+        protected override void InitializeCall(ParticleSpan run, ParticleCollection particles, ParticleSystemState particleSystemState)
         {
-            if (weightedList.Length > 0)
+            var sequences = run.Floats(ParticleField.SequenceNumber);
+
+            for (var i = 0; i < sequences.Length; i++)
             {
-                particle.SequenceNumber = NextWeightedSequence(particleSystemState);
-            }
-            else if (shuffle || linear)
-            {
-                if (current >= list.Length)
+                if (weightedList.Length > 0)
                 {
-                    if (shuffle)
+                    sequences[i] = NextWeightedSequence(particleSystemState);
+                }
+                else if (shuffle || linear)
+                {
+                    if (next > sequenceMax)
                     {
-                        Shuffle(particleSystemState);
+                        if (shuffle)
+                        {
+                            Shuffle(particleSystemState);
+                        }
+
+                        next = sequenceMin;
                     }
 
-                    current = 0;
+                    sequences[i] = GetEntry(next);
+                    next++;
                 }
-
-                particle.SequenceNumber = list[current];
-                current++;
+                else
+                {
+                    sequences[i] = sequenceMin + particleSystemState.Random.NextIndex(sequenceMax - sequenceMin + 1);
+                }
             }
-            else
-            {
-                var sample = particleSystemState.Random.Next();
-
-                particle.SequenceNumber = sequenceMax > sequenceMin
-                    ? Math.Min(sequenceMin + (int)(sample * (sequenceMax - sequenceMin + 1)), sequenceMax)
-                    : sequenceMin;
-            }
-
-            return particle;
         }
 
         /// <summary>
@@ -156,10 +167,23 @@ namespace ValveResourceFormat.Particles.Initializers
 
         private void Shuffle(ParticleSystemState particleSystemState)
         {
-            for (var i = list.Length - 1; i > 0; i--)
+            for (var i = sequenceMax; i > sequenceMin; i--)
             {
-                var j = Math.Min((int)(particleSystemState.Random.Next() * (i + 1)), i);
-                (list[i], list[j]) = (list[j], list[i]);
+                var j = sequenceMin + particleSystemState.Random.NextIndex(i - sequenceMin + 1);
+                var swapped = GetEntry(i);
+                SetEntry(i, GetEntry(j));
+                SetEntry(j, swapped);
+            }
+        }
+
+        // The table has 64 entries and is indexed without a bounds check, so sequences outside 0..63 overrun it; here they read as 0 and are not written
+        private int GetEntry(int sequence) => (uint)sequence < TableSize ? table[sequence] : 0;
+
+        private void SetEntry(int sequence, int value)
+        {
+            if ((uint)sequence < TableSize)
+            {
+                table[sequence] = value;
             }
         }
     }

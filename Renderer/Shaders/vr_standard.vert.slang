@@ -20,7 +20,7 @@ uniform int F_TEXTURE_ANIMATION_MODE;
 
 #if D_BAKED_LIGHTING_FROM_LIGHTMAP == 1
     in vec2 vLightmapUV;
-    centroid out vec3 vLightmapUVScaled;
+    centroid out vec4 vLightmapUVScaled;
 #elif D_BAKED_LIGHTING_FROM_VERTEX_STREAM == 1
     in vec4 vCOLOR1;
     out vec3 vPerVertexLightingOut;
@@ -34,8 +34,7 @@ uniform int F_TEXTURE_ANIMATION_MODE;
 centroid out vec4 vVertexColorOut;
 out vec3 vFragPosition;
 out vec3 vNormalOut;
-out vec3 vTangentOut;
-out vec3 vBitangentOut;
+out vec4 vTangentOut;
 out vec2 vTexCoordOut;
 
 uniform vec3 g_vColorTint = vec3(1.0);
@@ -86,12 +85,12 @@ void main()
     vec4 tangent;
     GetOptionallyCompressedNormalTangent(normal, tangent);
     normal = applyMorphNormal(normal);
-    ComputeWorldTangentFrame(skinTransform, normal, tangent, vNormalOut, vTangentOut, vBitangentOut);
+    ComputeWorldTangentFrame(skinTransform, normal, tangent, vNormalOut, vTangentOut);
 
     vTexCoordOut = GetAnimatedUVs(vTEXCOORD.xy);
 
 #if (D_BAKED_LIGHTING_FROM_LIGHTMAP == 1)
-    vLightmapUVScaled = vec3(vLightmapUV * g_vLightmapUvScale.xy, 0);
+    vLightmapUVScaled = GetLightmapCoordinates(vLightmapUV);
 #elif (D_BAKED_LIGHTING_FROM_VERTEX_STREAM == 1)
     vec4 vPerVertexLighting = vCOLOR1;
     vec3 Light = vPerVertexLighting.rgb * 6.0 * vPerVertexLighting.a;

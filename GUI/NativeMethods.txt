@@ -12,6 +12,8 @@ DwmDefWindowProc
 FindWindowEx
 DwmGetWindowAttribute
 DwmSetWindowAttribute
+EC_LEFTMARGIN
+EM_SETMARGINS
 GetComboBoxInfo
 GetMessageExtraInfo
 GetSystemMenu
@@ -24,6 +26,7 @@ HTCLOSE
 HTLEFT
 HTMAXBUTTON
 HTMINBUTTON
+HTOBJECT
 HTRIGHT
 HTTOP
 HTTOPLEFT

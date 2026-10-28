@@ -1,3 +1,5 @@
+using System.Numerics.Tensors;
+
 namespace ValveResourceFormat.Particles.Operators
 {
     /// <summary>
@@ -28,35 +30,62 @@ namespace ValveResourceFormat.Particles.Operators
             }
         }
 
+        /// <inheritdoc/>
+        public override ulong StoredFields => fieldOutput.Mask();
+
         public override void Operate(ParticleCollection particles, float frameTime, ParticleSystemState particleSystemState, float strength)
         {
-            var fromIsVector = fieldInputFrom.FieldType() == "vector";
-            var toIsVector = fieldInput.FieldType() == "vector";
+            var current = particles.Current;
+            var fromIsVector = ParticleBuffer.IsVector(fieldInputFrom);
+            var toIsVector = ParticleBuffer.IsVector(fieldInput);
+            var fromVectors = fromIsVector ? current.ReadVectors(fieldInputFrom) : default;
+            var toVectors = toIsVector ? current.ReadVectors(fieldInput) : default;
+            var fromScalars = fromIsVector ? default : current.ReadFloats(fieldInputFrom);
+            var toScalars = toIsVector ? default : current.ReadFloats(fieldInput);
 
-            if (fieldOutput.FieldType() == "vector")
+            if (ParticleBuffer.IsVector(fieldOutput))
             {
                 if (!fromIsVector && !toIsVector)
                 {
                     return;
                 }
 
-                foreach (ref var particle in particles.Current)
+                var vectorOutput = current.Vectors(fieldOutput);
+                var vectorInterpolations = interpolation.Fill(current, particleSystemState);
+
+                for (var i = 0; i < vectorOutput.Length; i++)
                 {
-                    var interp = MathUtils.Saturate(interpolation.NextNumber(ref particle, particleSystemState) * strength);
-                    var from = fromIsVector ? particle.GetVector(fieldInputFrom) : new Vector3(particle.GetScalar(fieldInputFrom));
-                    var to = toIsVector ? particle.GetVector(fieldInput) : new Vector3(particle.GetScalar(fieldInput));
-                    particle.SetVector(fieldOutput, Vector3.Lerp(from, to, interp));
+                    var interp = MathUtils.Saturate(vectorInterpolations[i] * strength);
+                    var from = fromIsVector ? fromVectors[i] : new Vector3(fromScalars[i]);
+                    var to = toIsVector ? toVectors[i] : new Vector3(toScalars[i]);
+                    vectorOutput[i] = Vector3.Lerp(from, to, interp);
                 }
 
                 return;
             }
 
-            foreach (ref var particle in particles.Current)
+            if (!ParticleBuffer.IsScalar(fieldOutput))
             {
-                var interp = MathUtils.Saturate(interpolation.NextNumber(ref particle, particleSystemState) * strength);
-                var from = fromIsVector ? particle.GetVector(fieldInputFrom).Length() : particle.GetScalar(fieldInputFrom);
-                var to = toIsVector ? particle.GetVector(fieldInput).Length() : particle.GetScalar(fieldInput);
-                particle.SetScalar(fieldOutput, float.Lerp(from, to, interp));
+                return;
+            }
+
+            var scalarOutput = current.Floats(fieldOutput);
+            var interpolations = interpolation.Fill(current, particleSystemState);
+
+            if (!fromIsVector && !toIsVector)
+            {
+                TensorPrimitives.Multiply(interpolations, strength, interpolations);
+                TensorPrimitives.Clamp(interpolations, 0f, 1f, interpolations);
+                TensorPrimitives.Lerp(fromScalars, toScalars, interpolations, scalarOutput);
+                return;
+            }
+
+            for (var i = 0; i < scalarOutput.Length; i++)
+            {
+                var interp = MathUtils.Saturate(interpolations[i] * strength);
+                var from = fromIsVector ? fromVectors[i].Length() : fromScalars[i];
+                var to = toIsVector ? toVectors[i].Length() : toScalars[i];
+                scalarOutput[i] = MathUtils.Lerp(from, to, interp);
             }
         }
     }

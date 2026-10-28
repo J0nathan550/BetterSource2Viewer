@@ -1,4 +1,4 @@
-using ValveResourceFormat.Serialization.KeyValues;
+using ValveResourceFormat.Particles.Utils;
 
 namespace ValveResourceFormat.Particles.Operators
 {
@@ -11,7 +11,7 @@ namespace ValveResourceFormat.Particles.Operators
     class SetAttributeToScalarExpression : ParticleFunctionOperator
     {
         private readonly ParticleField outputField = ParticleField.Radius;
-        private readonly INumberProvider input1 = new LiteralNumberProvider(1f);
+        private readonly INumberProvider input1 = new LiteralNumberProvider(0f);
         private readonly INumberProvider input2 = new LiteralNumberProvider(0);
         private readonly ScalarExpressionType expression = ScalarExpressionType.SCALAR_EXPRESSION_ADD;
         private readonly ParticleSetMethod setMethod = ParticleSetMethod.PARTICLE_SET_REPLACE_VALUE;
@@ -24,63 +24,52 @@ namespace ValveResourceFormat.Particles.Operators
             input2 = parse.NumberProvider("m_flInput2", input2);
             expression = parse.Enum<ScalarExpressionType>("m_nExpression", expression);
             setMethod = parse.Enum<ParticleSetMethod>("m_nSetMethod", setMethod);
+            outputRemap = AttributeMapping.FromRemapInput(parse, "m_flOutputRemap");
 
-            if (parse.Data.GetSubCollection("m_flOutputRemap") is { IsCollection: true } remap)
-            {
-                outputRemap = new AttributeMapping(parse.Nested(remap));
-            }
+            AddInitialReadOf(parse, setMethod, outputField);
         }
+
+        /// <inheritdoc/>
+        public override ulong StoredFields => outputField.Mask();
 
         public override void Operate(ParticleCollection particles, float frameTime, ParticleSystemState particleSystemState, float strength)
         {
-            foreach (ref var particle in particles.Current)
-            {
-                var value1 = input1.NextNumber(ref particle, particleSystemState);
-                var value2 = input2.NextNumber(ref particle, particleSystemState);
+            var (min, max) = outputField.SetFloatRange();
+            var current = particles.Current;
 
-                var output = expression switch
-                {
-                    ScalarExpressionType.SCALAR_EXPRESSION_UNINITIALIZED
-                        => 0f,
-                    ScalarExpressionType.SCALAR_EXPRESSION_ADD
-                        => value1 + value2,
-                    ScalarExpressionType.SCALAR_EXPRESSION_SUBTRACT
-                        => value1 - value2,
-                    ScalarExpressionType.SCALAR_EXPRESSION_MUL
-                        => value1 * value2,
-                    ScalarExpressionType.SCALAR_EXPRESSION_DIVIDE
-                        => value2 == 0f ? 0f : value1 / value2,
-                    ScalarExpressionType.SCALAR_EXPRESSION_INPUT_1
-                        => value1,
-                    ScalarExpressionType.SCALAR_EXPRESSION_MIN
-                        => Math.Min(value1, value2),
-                    ScalarExpressionType.SCALAR_EXPRESSION_MAX
-                        => Math.Max(value1, value2),
-                    ScalarExpressionType.SCALAR_EXPRESSION_MOD // new in CS2
-                        => (float)(value1 % value2),
-                    ScalarExpressionType.SCALAR_EXPRESSION_EQUAL
-                        => value1 == value2 ? 1f : 0f,
-                    ScalarExpressionType.SCALAR_EXPRESSION_GT
-                        => value1 > value2 ? 1f : 0f,
-                    ScalarExpressionType.SCALAR_EXPRESSION_LT
-                        => value1 < value2 ? 1f : 0f,
-                    _ => throw new NotImplementedException($"Unrecognized scalar expression type ({expression})")
-                };
+            var values1 = input1.Fill(current, particleSystemState);
+            var values2 = input2.Fill(current, particleSystemState);
+
+            if (!ParticleBuffer.IsScalar(outputField))
+            {
+                return;
+            }
+
+            var outputs = current.Floats(outputField);
+            var initial = particles.Initial.ReadFloats(outputField);
+            var deltaTime = particleSystemState.CurrentStep;
+            var scalesByStrength = !expression.IsComparison();
+
+            for (var i = 0; i < outputs.Length; i++)
+            {
+                var evaluated = expression.Evaluate(values1[i], values2[i], truncatedRemainder: true);
 
                 // Strength scales arithmetic results before the set method; comparisons stay 0/1
-                if (expression is not (ScalarExpressionType.SCALAR_EXPRESSION_EQUAL
-                    or ScalarExpressionType.SCALAR_EXPRESSION_GT
-                    or ScalarExpressionType.SCALAR_EXPRESSION_LT))
+                if (scalesByStrength)
                 {
-                    output *= strength;
+                    evaluated *= strength;
                 }
+
+                // An unknown expression passes the current value on as the result
+                var output = evaluated ?? outputs[i];
 
                 if (outputRemap != null)
                 {
                     output = outputRemap.ApplyMapping(output);
                 }
 
-                particle.SetScalar(outputField, particle.ModifyScalarBySetMethod(particles, outputField, output, setMethod));
+                var result = ParticleFieldExtensions.ApplySetMethod(output, initial[i], outputs[i], deltaTime, setMethod);
+                outputs[i] = Math.Clamp(result, min, max);
             }
         }
     }

@@ -1,9 +1,11 @@
 using System.Diagnostics;
 using System.Drawing;
+using System.Linq;
 using System.Runtime.ExceptionServices;
 using System.Threading;
 using System.Windows.Forms;
 using Avalonia.Input;
+using Avalonia.LogicalTree;
 using Avalonia.Threading;
 using GUI.Controls;
 using GUI.Utils;
@@ -29,7 +31,7 @@ internal abstract class GLBaseControl : IDisposable
     protected NativeWindow? GLNativeWindow;
 
     /// <summary>The command stream this control records into, over <see cref="GLNativeWindow"/>.</summary>
-    protected GraphicsContext? GraphicsContext;
+    protected internal GraphicsContext? GraphicsContext;
 
     public GLViewport? GLControl { get; private set; }
 
@@ -1065,15 +1067,14 @@ internal abstract class GLBaseControl : IDisposable
         //
     }
 
-    public GLLockScope MakeCurrent()
-    {
-        if (GraphicsContext == null)
-        {
-            throw new InvalidOperationException("Cannot acquire GLLockScope without a valid GLNativeWindow.");
-        }
+    public GLLockScope MakeCurrent() => new(glLock, this);
 
-        return new GLLockScope(glLock, GraphicsContext);
-    }
+    /// <summary>
+    /// Finds the viewer whose GL surface sits somewhere under <paramref name="container"/> (a tab page,
+    /// say), or null when it hosts none.
+    /// </summary>
+    public static GLBaseControl? FindHostedIn(AvaloniaControl container)
+        => container.GetLogicalDescendants().OfType<GLViewport>().FirstOrDefault()?.Owner;
 
     static bool loadedBindings;
     private static void LoadOpenGLBindings()

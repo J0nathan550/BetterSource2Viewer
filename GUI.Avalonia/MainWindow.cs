@@ -23,6 +23,7 @@ using GUI.Types.GLViewers;
 using GUI.Types.Viewers;
 using GUI.Utils;
 using ValvePak;
+using ValveResourceFormat.IO;
 using ValveResourceFormat.TextureDecoders;
 
 namespace GUI
@@ -556,7 +557,7 @@ namespace GUI
                     {
                         nestedPackage.OptimizeEntriesForBinarySearch(StringComparison.OrdinalIgnoreCase);
                         nestedPackage.SetFileName(nestedPath);
-                        nestedPackage.Read(ValveResourceFormat.IO.GameFileLoader.GetPackageEntryStream(packageContext.CurrentPackage!, nestedEntry));
+                        nestedPackage.Read(packageContext.CurrentPackage!.GetMemoryMappedStreamIfPossible(nestedEntry));
                         packageContext = new VrfGuiContext(nestedPath, packageContext)
                         {
                             CurrentPackage = nestedPackage
@@ -1029,7 +1030,7 @@ namespace GUI
         {
             Log.Info(nameof(MainWindow), $"Opening {fileName}");
 
-            if (Regexes.VpkNumberArchive().IsMatch(fileName))
+            if (PackageFileNames.IsArchiveChunk(fileName))
             {
                 var fixedPackage = $"{fileName[..^8]}_dir.vpk";
 

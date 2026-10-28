@@ -45,8 +45,11 @@ public abstract class BaseModelEntity : BaseEntity
     /// </summary>
     public ModelSceneNode? ModelNode { get; private set; }
 
+    /// <summary>Gets the physics of the model, or <see langword="null"/> when it has none.</summary>
+    public PhysAggregateData? Physics { get; private set; }
+
     /// <summary>Gets the model this entity loaded, or <see langword="null"/> when it names none or it failed to load.</summary>
-    protected Model? LoadedModel { get; private set; }
+    public Model? LoadedModel { get; private set; }
 
     /// <summary>Initializes a model entity from its keyvalues.</summary>
     protected BaseModelEntity(EntitySystem system, EntitySpawnInfo spawnInfo) : base(system, spawnInfo)
@@ -147,6 +150,8 @@ public abstract class BaseModelEntity : BaseEntity
 
         if (EntityCollider.LoadPhysics(model, fileLoader) is { } physics)
         {
+            Physics = physics;
+
             if (BuildsCollider)
             {
                 Collider = new EntityCollider(physics);
@@ -154,10 +159,10 @@ public abstract class BaseModelEntity : BaseEntity
             }
 
             // Owned by the entity, not the model node: a collision-only brush has no model node,
-            // and its hulls are all there is to show.
-            foreach (var physicsNode in PhysSceneNode.CreatePhysSceneNodes(Scene, physics, modelName, Classname))
+            // and what the tool draws of its collision is all there is to show.
+            foreach (var node in EntitySystem.ToolVisuals?.CreateCollisionVisuals(Scene, physics, modelName, this) ?? [])
             {
-                AddNode(physicsNode);
+                AddNode(node);
             }
 
             // intentionally skip default scene node if phys exists

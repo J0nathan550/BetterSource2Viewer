@@ -17,23 +17,38 @@ namespace ValveResourceFormat.Particles.Operators
             quantizeSize = parse.NumberProvider("m_InputValue", quantizeSize);
 
             // The rotation attributes quantize in degrees; every other field is taken as authored.
-            sizeScale = outputField is ParticleField.Roll or ParticleField.Yaw or ParticleField.Pitch
+            sizeScale = outputField.IsOrientationField()
                 ? float.DegreesToRadians(1f)
                 : 1f;
         }
+
+        /// <inheritdoc/>
+        public override ulong StoredFields => outputField.Mask();
+
         public override void Operate(ParticleCollection particles, float frameTime, ParticleSystemState particleSystemState, float strength)
         {
-            foreach (ref var particle in particles.Current)
-            {
-                var quantizeSize = this.quantizeSize.NextNumber(ref particle, particleSystemState) * strength * sizeScale;
-                var value = particle.GetScalar(outputField);
+            var (min, max) = outputField.SetFloatRange();
 
-                if (quantizeSize != 0)
+            if (!ParticleBuffer.IsScalar(outputField))
+            {
+                return;
+            }
+
+            var current = particles.Current;
+            var output = current.Floats(outputField);
+            var inputs = quantizeSize.Fill(current, particleSystemState);
+
+            for (var i = 0; i < output.Length; i++)
+            {
+                var size = inputs[i] * strength * sizeScale;
+                var value = output[i];
+
+                if (size != 0)
                 {
-                    value = quantizeSize * MathF.Floor((value / quantizeSize) + 0.5f);
+                    value = size * MathF.Floor((value / size) + 0.5f);
                 }
 
-                particle.SetScalar(outputField, value);
+                output[i] = Math.Clamp(value, min, max);
             }
         }
     }

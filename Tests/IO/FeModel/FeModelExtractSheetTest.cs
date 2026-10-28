@@ -1,3 +1,4 @@
+using System.Diagnostics;
 using System.IO;
 using System.Linq;
 using System.Threading.Tasks;
@@ -63,6 +64,7 @@ namespace Tests.IO
 
             using (Assert.Multiple())
             {
+                Debug.Assert(apart is not null);
                 await Assert.That(apart).IsNotNull();
                 await Assert.That(apartCurvature).IsEqualTo(0f);
                 await Assert.That(apart!.GetValueOrDefault(1) + apart.GetValueOrDefault(5)).IsEqualTo(0f).Within(0.02f);
@@ -105,6 +107,7 @@ namespace Tests.IO
 
             using (Assert.Multiple())
             {
+                Debug.Assert(paint is not null);
                 await Assert.That(paint).IsNotNull();
                 await Assert.That(curvature).IsEqualTo(0f);
                 await Assert.That(paint!.GetValueOrDefault(1) + paint.GetValueOrDefault(5)).IsEqualTo(0.25f).Within(0.02f);
@@ -161,6 +164,7 @@ namespace Tests.IO
 
             using (Assert.Multiple())
             {
+                Debug.Assert(paint is not null);
                 await Assert.That(paint).IsNotNull();
                 await Assert.That(curvature).IsEqualTo(0.25f);
                 await Assert.That(paint!.GetValueOrDefault(1) + paint.GetValueOrDefault(5)).IsEqualTo(1f).Within(0.02f);
@@ -320,6 +324,7 @@ namespace Tests.IO
 
             using (Assert.Multiple())
             {
+                Debug.Assert(folded is not null);
                 await Assert.That(paint).IsNull();
                 await Assert.That(curvature).IsEqualTo(0.64999986f);
                 await Assert.That(folded).IsNotNull();
@@ -353,10 +358,10 @@ namespace Tests.IO
             {
                 await Assert.That(cleared.Count).IsEqualTo(1);
                 await Assert.That(cleared[0].Layer).IsEqualTo(1);
-                await Assert.That(cleared[0].Painted).IsEquivalentTo(ClearedLayerPaint, CollectionOrdering.Matching);
+                await Assert.That(cleared[0].Painted).IsEquivalentTo(ClearedLayerPaint, EqualityComparer<float>.Default, CollectionOrdering.Matching);
                 await Assert.That(whole.Count).IsEqualTo(0);
                 await Assert.That(lowFour.Select(static paint => paint.Layer).ToArray())
-                    .IsEquivalentTo(LowFourLayers, CollectionOrdering.Matching);
+                    .IsEquivalentTo(LowFourLayers, EqualityComparer<int>.Default, CollectionOrdering.Matching);
             }
         }
 
@@ -495,13 +500,13 @@ namespace Tests.IO
             {
                 await Assert.That(redeclared).Contains("coattail_0_L_second");
                 await Assert.That(members.Select(bone => LastSimulate(redeclared, bone)))
-                    .IsEquivalentTo(simulating, CollectionOrdering.Matching);
+                    .IsEquivalentTo(simulating, StringComparer.Ordinal, CollectionOrdering.Matching);
 
                 await Assert.That(LastSimulate(redeclared, "coattail_0_L")).IsEqualTo("false");
 
                 await Assert.That(single).DoesNotContain("_second");
                 await Assert.That(members.Select(bone => LastSimulate(single, bone)))
-                    .IsEquivalentTo(simulating, CollectionOrdering.Matching);
+                    .IsEquivalentTo(simulating, StringComparer.Ordinal, CollectionOrdering.Matching);
             }
         }
 

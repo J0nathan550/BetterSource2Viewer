@@ -3,11 +3,9 @@ using System.Globalization;
 using System.IO;
 using System.IO.Hashing;
 using System.Linq;
-using System.Runtime.InteropServices;
 using System.Text;
 using System.Threading.Tasks;
 using SkiaSharp;
-using TinyEXR;
 using ValveResourceFormat.IO.ContentFormats.ValveTexture;
 using ValveResourceFormat.ResourceTypes;
 using ChannelMapping = ValveResourceFormat.CompiledShader.ChannelMapping;
@@ -98,7 +96,7 @@ public sealed class TextureExtract
     public TextureDecoders.TextureCodec DecodeFlags { get; set; } = TextureDecoders.TextureCodec.Auto;
 
     /// <summary>
-    /// Whether to combine cubemap faces into a single latlong image. Only applies to high dynamic range cubemaps.
+    /// Whether to combine cubemap faces into a single latlong image. Only applies to cubemaps exported as EXR.
     /// </summary>
     public bool LatLongCombineCubemap { get; set; } = true;
 
@@ -178,13 +176,14 @@ public sealed class TextureExtract
 
                     contentFile.AddSubFile(outTextureName + ImageOutputExtension, () =>
                     {
-                        return ImageEncode(texture.GenerateBitmap(depth: currentDepth, decodeFlags: DecodeFlags));
+                        using var bitmap = texture.GenerateBitmap(depth: currentDepth, decodeFlags: DecodeFlags);
+                        return ImageEncode(bitmap);
                     });
 
                     continue;
                 }
 
-                if (LatLongCombineCubemap && texture.IsHighDynamicRange)
+                if (LatLongCombineCubemap && ExportExr)
                 {
                     var currentDepth = depth;
                     contentFile.AddSubFile($"{outTextureName}{ImageOutputExtension}", () =>
@@ -705,15 +704,7 @@ public sealed class TextureExtract
     /// </summary>
     public static byte[] ToExrImage(SKPixmap pixels)
     {
-        var pixelSpan = pixels.GetPixelSpan<SKColorF>();
-        var floatSpan = MemoryMarshal.Cast<SKColorF, float>(pixelSpan);
-        var result = Exr.SaveEXRToMemory(floatSpan, pixels.Width, pixels.Height, components: 4, asFp16: false, out var exrData);
-        if (result != ResultCode.Success)
-        {
-            throw new InvalidOperationException($"Got result {result} while saving EXR image");
-        }
-
-        return exrData;
+        return ExrWriter.Write(pixels);
     }
 
     /// <summary>
@@ -951,7 +942,7 @@ public sealed class TextureExtract
 
         using var stream = new MemoryStream();
         datamodel.Save(stream, "keyvalues2_noids", 1);
-        return Encoding.UTF8.GetString(stream.ToArray());
+        return Encoding.UTF8.GetString(stream.GetBuffer(), 0, (int)stream.Length);
     }
 
     /// <summary>

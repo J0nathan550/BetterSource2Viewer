@@ -1,8 +1,10 @@
+using System.Buffers;
 using System.Collections;
 using System.Diagnostics;
 using System.IO;
 using System.Text;
 using System.Threading;
+using ValvePak;
 using ValveResourceFormat.Blocks;
 using ValveResourceFormat.Blocks.ResourceEditInfoStructs;
 using ValveResourceFormat.CompiledShader;
@@ -12,11 +14,17 @@ using ValveResourceFormat.ResourceTypes.GenericData;
 namespace ValveResourceFormat
 {
     /// <summary>
-    /// Represents a Valve resource.
+    /// Represents a compiled Source 2 resource file, such as a <c>.vtex_c</c> or <c>.vmdl_c</c>.
     /// </summary>
     /// <remarks>
+    /// <para>
+    /// Create an instance, then call <see cref="Read(string, ReadMode)"/> or <see cref="Read(Stream, bool, ReadMode)"/>.
+    /// Check <see cref="ResourceType"/> and cast <see cref="DataBlock"/> to the matching block class.
+    /// </para>
+    /// <para>
     /// Blocks and the data they expose are read from the input stream when first accessed, so the
     /// resource must stay undisposed and its input stream open for as long as its blocks are used.
+    /// </para>
     /// </remarks>
     public class Resource : IDisposable
     {
@@ -70,7 +78,9 @@ namespace ValveResourceFormat
         internal List<Block> UnparsedBlocks => blocks.Items;
 
         /// <summary>
-        /// Gets the type of the resource.
+        /// Gets the type of the resource, which decides the class of <see cref="DataBlock"/>.
+        /// It comes from the file extension of <see cref="FileName"/> when set, otherwise from the edit info block,
+        /// and is <see cref="ResourceType.Unknown"/> when neither identifies it.
         /// </summary>
         /// <value>The type of the resource.</value>
         public ResourceType ResourceType { get; private set; }
@@ -95,7 +105,9 @@ namespace ValveResourceFormat
         public ResourceExtRefList? ExternalReferences => (ResourceExtRefList?)GetBlockByType(BlockType.RERL);
 
         /// <summary>
-        /// Gets the generic DATA block.
+        /// Gets the DATA block, which holds the main contents of the resource.
+        /// Its class depends on <see cref="ResourceType"/>, for example <see cref="ResourceTypes.Texture"/>
+        /// for textures. It is <c>null</c> when the resource has no DATA block.
         /// </summary>
         public Block? DataBlock => GetBlockByType(BlockType.DATA);
 
@@ -203,7 +215,7 @@ namespace ValveResourceFormat
 
             FileSize = Reader.ReadUInt32();
 
-            if (FileSize == ValvePak.Package.MAGIC)
+            if (FileSize == Package.MAGIC)
             {
                 throw new InvalidDataException("Use ValvePak library to parse VPK files.\nSee https://github.com/ValveResourceFormat/ValvePak");
             }
@@ -326,6 +338,74 @@ namespace ValveResourceFormat
             {
                 blocks.Items[blocks.Items.IndexOf(vdataBlock)] = specializedData;
             }
+        }
+
+        /// <summary>
+        /// Whether any block of a compiled resource satisfies a predicate, without parsing the resource.
+        /// Compressed binary KV3 blocks are visited as their decompressed buffers, other blocks as stored,
+        /// and geometry and visibility buffers are skipped.
+        /// </summary>
+        /// <param name="input">A seekable stream with the resource at position 0.</param>
+        /// <param name="predicate">Called with each buffer, which is only valid during the call, until it returns true.</param>
+        /// <exception cref="UnexpectedMagicException">The stream does not hold a resource.</exception>
+        /// <exception cref="InvalidDataException">A block or a compressed buffer is invalid.</exception>
+        /// <exception cref="EndOfStreamException">The stream ends early.</exception>
+        public static bool AnyBlockContents(Stream input, Func<ReadOnlySpan<byte>, bool> predicate)
+        {
+            using var reader = new BinaryReader(input, Encoding.UTF8, leaveOpen: true);
+
+            input.Position = 4;
+            var headerVersion = reader.ReadUInt16();
+
+            if (headerVersion != KnownHeaderVersion)
+            {
+                throw new UnexpectedMagicException("Not a resource", headerVersion, nameof(headerVersion));
+            }
+
+            input.Position = 8;
+            var blockOffset = reader.ReadUInt32();
+            var blockCount = reader.ReadUInt32();
+            input.Position += blockOffset - 8;
+
+            for (var i = 0; i < blockCount; i++)
+            {
+                var type = (BlockType)reader.ReadUInt32();
+                var offset = input.Position;
+                offset += reader.ReadUInt32();
+                var size = reader.ReadUInt32();
+                var nextBlock = input.Position;
+
+                if (type is BlockType.VBIB or BlockType.MBUF or BlockType.MVTX or BlockType.MIDX or BlockType.MADJ or BlockType.MSLT or BlockType.TBUF or BlockType.VXVS)
+                {
+                    continue;
+                }
+
+                if (offset + size > input.Length)
+                {
+                    throw new InvalidDataException("A block is outside of the resource.");
+                }
+
+                var buffer = ArrayPool<byte>.Shared.Rent((int)size);
+
+                try
+                {
+                    input.Position = offset;
+                    input.ReadExactly(buffer, 0, (int)size);
+
+                    if (BinaryKV3.AnyDecompressedBuffer(new ArraySegment<byte>(buffer, 0, (int)size), predicate))
+                    {
+                        return true;
+                    }
+                }
+                finally
+                {
+                    ArrayPool<byte>.Shared.Return(buffer);
+                }
+
+                input.Position = nextBlock;
+            }
+
+            return false;
         }
 
         /// <summary>

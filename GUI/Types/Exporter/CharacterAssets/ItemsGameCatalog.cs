@@ -1048,7 +1048,7 @@ namespace GUI.Types.Exporter.CharacterAssets
                 return null;
             }
 
-            using var stream = GameFileLoader.GetPackageEntryStream(package, entry);
+            using var stream = package.GetMemoryMappedStreamIfPossible(entry);
 
             return KVSerializer.Create(KVSerializationFormat.KeyValues1Text).Deserialize(stream, options ?? KVSerializerOptions.DefaultOptions);
         }
@@ -1078,7 +1078,7 @@ namespace GUI.Types.Exporter.CharacterAssets
                 var path = $"{folder}/{filePath.Replace('\\', '/')}";
                 var entry = package.FindEntry(path) ?? throw new FileNotFoundException($"\"{path}\" was not found in the package");
 
-                return GameFileLoader.GetPackageEntryStream(package, entry);
+                return package.GetMemoryMappedStreamIfPossible(entry);
             }
         }
     }

@@ -25,6 +25,9 @@ sealed class GLViewport : Control
     private const int BitmapCount = 3;
 
     private readonly GLBaseControl owner;
+
+    /// <summary>The viewer that renders into this viewport.</summary>
+    public GLBaseControl Owner => owner;
     private readonly WriteableBitmap?[] bitmaps = new WriteableBitmap?[BitmapCount];
     private WriteableBitmap? displayedBitmap;
     private int nextBitmap;

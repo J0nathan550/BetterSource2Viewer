@@ -7,7 +7,6 @@ using ValveKeyValue;
 using ValveResourceFormat.IO;
 using ValveResourceFormat.ResourceTypes.ModelAnimation;
 using ValveResourceFormat.Serialization.KeyValues;
-using Transform = ValveResourceFormat.ResourceTypes.ModelAnimation.FrameBone;
 
 namespace ValveResourceFormat.ResourceTypes.ModelAnimation2
 {
@@ -78,7 +77,7 @@ namespace ValveResourceFormat.ResourceTypes.ModelAnimation2
         /// <summary>
         /// Gets the offsets (in 16-bit / ushort units) into the compressed pose data for each frame.
         /// </summary>
-        public long[] CompressedPoseOffsets { get; private set; } = [];
+        public int[] CompressedPoseOffsets { get; private set; } = [];
 
         /// <summary>
         /// Gets the secondary animations associated with this clip.
@@ -181,7 +180,7 @@ namespace ValveResourceFormat.ResourceTypes.ModelAnimation2
                 link.GetInt32Property("m_nBoneIdx", -1),
                 link.GetInt32Property("m_nParentBoneIdx", -1),
                 link.GetInt32Property("m_nParentChainLinkIdx", -1)))];
-            ModelSpaceBoneSamplingIndices = [.. clipData.GetIntegerArray("m_modelSpaceBoneSamplingIndices").Select(static i => (int)i)];
+            ModelSpaceBoneSamplingIndices = clipData.GetArray<int>("m_modelSpaceBoneSamplingIndices") ?? [];
 
             TrackCompressionSettings = ReadTrackCompressionSettings(clipData);
             FloatCurves = ReadFloatCurves(clipData);
@@ -195,7 +194,7 @@ namespace ValveResourceFormat.ResourceTypes.ModelAnimation2
                 Events[eventIndex] = Animation.Event.Create(events[eventIndex], Duration);
             }
 
-            CompressedPoseOffsets = clipData.GetIntegerArray("m_compressedPoseOffsets");
+            CompressedPoseOffsets = clipData.GetArray<int>("m_compressedPoseOffsets") ?? [];
             Debug.Assert(CompressedPoseOffsets.Length == NumFrames);
 
             var secondaryAnims = clipData.GetArray("m_secondaryAnimations") ?? [];
@@ -213,12 +212,6 @@ namespace ValveResourceFormat.ResourceTypes.ModelAnimation2
             }
         }
 
-        private static Transform ReadTransform(KVObject data)
-        {
-            var (position, scale, rotation) = data.ToTransform();
-            return new Transform(position, scale, rotation);
-        }
-
         private AnimationFloatCurve[] ReadFloatCurves(KVObject clipData)
         {
             var floatCurveIds = clipData.GetArray<string>("m_floatCurveIDs");
@@ -229,7 +222,7 @@ namespace ValveResourceFormat.ResourceTypes.ModelAnimation2
 
             var curveDefs = clipData.GetArray("m_floatCurveDefs");
             var curveData = clipData.GetIntegerArray("m_compressedFloatCurveData");
-            var curveOffsets = clipData.GetIntegerArray("m_compressedFloatCurveOffsets");
+            var curveOffsets = clipData.GetArray<int>("m_compressedFloatCurveOffsets") ?? [];
 
             var curves = new AnimationFloatCurve[floatCurveIds.Length];
 
@@ -281,7 +274,6 @@ namespace ValveResourceFormat.ResourceTypes.ModelAnimation2
                 var rangeY = setting.GetSubCollection("m_translationRangeY");
                 var rangeZ = setting.GetSubCollection("m_translationRangeZ");
                 var scaleRange = setting.GetSubCollection("m_scaleRange");
-                var constantRotation = setting.GetFloatArray("m_constantRotation");
 
                 trackSettings[i++] = new TrackCompressionSetting
                 {
@@ -289,7 +281,7 @@ namespace ValveResourceFormat.ResourceTypes.ModelAnimation2
                     TranslationRangeY = new QuantizationRange(rangeY.GetFloatProperty("m_flRangeStart"), rangeY.GetFloatProperty("m_flRangeLength")),
                     TranslationRangeZ = new QuantizationRange(rangeZ.GetFloatProperty("m_flRangeStart"), rangeZ.GetFloatProperty("m_flRangeLength")),
                     ScaleRange = new QuantizationRange(scaleRange.GetFloatProperty("m_flRangeStart"), scaleRange.GetFloatProperty("m_flRangeLength")),
-                    ConstantRotation = new Quaternion(constantRotation[0], constantRotation[1], constantRotation[2], constantRotation[3]),
+                    ConstantRotation = setting.GetSubCollection("m_constantRotation").ToQuaternion(),
                     IsRotationStatic = setting.GetBooleanProperty("m_bIsRotationStatic"),
                     IsTranslationStatic = setting.GetBooleanProperty("m_bIsTranslationStatic"),
                     IsScaleStatic = setting.GetBooleanProperty("m_bIsScaleStatic"),
@@ -304,49 +296,74 @@ namespace ValveResourceFormat.ResourceTypes.ModelAnimation2
         /// </summary>
         /// <param name="frameIndex">The index of the frame to read.</param>
         /// <param name="bones">The array of bones to populate with frame data.</param>
-        public void ReadFrame(int frameIndex, FrameBone[] bones)
+        public void ReadFrame(int frameIndex, Span<FrameBone> bones)
         {
-            var frameData = MemoryMarshal.Cast<byte, ushort>(CompressedPoseData);
-            frameData = frameData[(int)CompressedPoseOffsets[frameIndex]..];
+            var frameData = GetFrameData(frameIndex);
+
+            for (var i = 0; i < TrackCompressionSettings.Length && i < bones.Length; i++)
+            {
+                bones[i] = DecodeBone(TrackCompressionSettings[i], ref frameData);
+            }
+        }
+
+        /// <summary>
+        /// Reads two frames of animation data and blends them into the provided bone array.
+        /// </summary>
+        /// <param name="frameIndex">The index of the frame to blend from.</param>
+        /// <param name="nextFrameIndex">The index of the frame to blend to.</param>
+        /// <param name="t">How far to blend towards the second frame, from 0 to 1.</param>
+        /// <param name="bones">The array of bones to populate with frame data.</param>
+        public void ReadInterpolatedFrame(int frameIndex, int nextFrameIndex, float t, Span<FrameBone> bones)
+        {
+            var frameData = GetFrameData(frameIndex);
+            var nextFrameData = GetFrameData(nextFrameIndex);
 
             for (var i = 0; i < TrackCompressionSettings.Length && i < bones.Length; i++)
             {
                 var config = TrackCompressionSettings[i];
+                bones[i] = DecodeBone(config, ref frameData).Blend(DecodeBone(config, ref nextFrameData), t);
+            }
+        }
 
-                var translationRangeStart = new Vector3(
-                    config.TranslationRangeX.Start,
-                    config.TranslationRangeY.Start,
-                    config.TranslationRangeZ.Start
+        private ReadOnlySpan<ushort> GetFrameData(int frameIndex)
+            => MemoryMarshal.Cast<byte, ushort>(CompressedPoseData)[CompressedPoseOffsets[frameIndex]..];
+
+        // Reads one bone of a frame, moving the data past it
+        private static FrameBone DecodeBone(in TrackCompressionSetting config, ref ReadOnlySpan<ushort> frameData)
+        {
+            var translationRangeStart = new Vector3(
+                config.TranslationRangeX.Start,
+                config.TranslationRangeY.Start,
+                config.TranslationRangeZ.Start
+            );
+
+            var bone = new FrameBone(translationRangeStart, config.ScaleRange.Start, config.ConstantRotation);
+
+            if (!config.IsRotationStatic)
+            {
+                bone.Angle = DecodeQuaternion(frameData);
+                frameData = frameData[CompressedQuaternionSize..];
+            }
+
+            if (!config.IsTranslationStatic)
+            {
+                var translationRangeLength = new Vector3(
+                    config.TranslationRangeX.Length,
+                    config.TranslationRangeY.Length,
+                    config.TranslationRangeZ.Length
                 );
 
-                bones[i].Angle = config.ConstantRotation;
-                bones[i].Position = translationRangeStart;
-                bones[i].Scale = config.ScaleRange.Start;
-
-                if (!config.IsRotationStatic)
-                {
-                    bones[i].Angle = DecodeQuaternion(frameData);
-                    frameData = frameData[CompressedQuaternionSize..];
-                }
-
-                if (!config.IsTranslationStatic)
-                {
-                    var translationRangeLength = new Vector3(
-                        config.TranslationRangeX.Length,
-                        config.TranslationRangeY.Length,
-                        config.TranslationRangeZ.Length
-                    );
-
-                    bones[i].Position = DecodeTranslation(frameData, translationRangeStart, translationRangeLength);
-                    frameData = frameData[CompressedTranslationSize..];
-                }
-
-                if (!config.IsScaleStatic)
-                {
-                    bones[i].Scale = DecodeFloat(frameData[0], config.ScaleRange.Start, config.ScaleRange.Length);
-                    frameData = frameData[1..];
-                }
+                bone.Position = DecodeTranslation(frameData, translationRangeStart, translationRangeLength);
+                frameData = frameData[CompressedTranslationSize..];
             }
+
+            if (!config.IsScaleStatic)
+            {
+                bone.Scale = DecodeFloat(frameData[0], config.ScaleRange.Start, config.ScaleRange.Length);
+                frameData = frameData[1..];
+            }
+
+            return bone;
         }
 
         const int CompressedQuaternionSize = 3;

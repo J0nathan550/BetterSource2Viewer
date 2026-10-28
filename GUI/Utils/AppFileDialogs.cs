@@ -19,12 +19,16 @@ public static class AppFileDialogs
     // updateRemembered: set to false when the caller validates the picked path first and
     // wants to remember the directory only when the pick is actually accepted.
     public static string? PickFolder(string? title, RememberIn remember = RememberIn.None, bool updateRemembered = true)
+        => PickFolders(title, remember, updateRemembered, multiselect: false)?[0];
+
+    public static string[]? PickFolders(string? title, RememberIn remember = RememberIn.None, bool updateRemembered = true, bool multiselect = true)
     {
         using var dialog = new FolderBrowserDialog
         {
             Description = title ?? string.Empty,
             UseDescriptionForTitle = title != null,
             SelectedPath = GetRememberedDirectory(remember),
+            Multiselect = multiselect,
             AddToRecent = true,
         };
 
@@ -33,12 +37,14 @@ public static class AppFileDialogs
             return null;
         }
 
+        string[] folders = multiselect ? dialog.SelectedPaths : [dialog.SelectedPath];
+
         if (updateRemembered)
         {
-            SetRememberedDirectory(remember, dialog.SelectedPath);
+            SetRememberedDirectory(remember, folders[0]);
         }
 
-        return dialog.SelectedPath;
+        return folders;
     }
 
     // Code shared with the Avalonia GUI awaits the pickers there, the WinForms dialogs are modal and return right away
@@ -94,7 +100,7 @@ public static class AppFileDialogs
     }
 
     // selectedFilterIndex is 1 based, 0 means user canceled
-    public static string? SaveFile(string title, string? defaultFileName, string? defaultExtension, string filter, out int selectedFilterIndex, RememberIn remember = RememberIn.SaveDirectory)
+    public static string? SaveFile(string title, string? defaultFileName, string? defaultExtension, string filter, out int selectedFilterIndex, RememberIn remember = RememberIn.SaveDirectory, int filterIndex = 1)
     {
         using var dialog = new SaveFileDialog
         {
@@ -102,6 +108,7 @@ public static class AppFileDialogs
             FileName = defaultFileName,
             DefaultExt = defaultExtension,
             Filter = filter,
+            FilterIndex = filterIndex,
             InitialDirectory = GetRememberedDirectory(remember),
             AddToRecent = true,
         };

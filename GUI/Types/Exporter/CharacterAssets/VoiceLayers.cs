@@ -82,7 +82,7 @@ namespace GUI.Types.Exporter.CharacterAssets
                 }
 
                 using var resource = new Resource { FileName = path };
-                resource.Read(GameFileLoader.GetPackageEntryStream(package, entry));
+                resource.Read(package.GetMemoryMappedStreamIfPossible(entry));
 
                 foreach (var (name, definition) in resource.DataBlock?.AsKeyValueCollection().Children ?? [])
                 {

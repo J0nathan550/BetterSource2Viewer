@@ -21,6 +21,8 @@ public sealed class EnvTonemapController : BaseEntity
     /// <inheritdoc/>
     public override void Spawn()
     {
+        base.Spawn();
+
         var minExposure = KeyValues.GetFloatProperty("minexposure");
         var maxExposure = KeyValues.GetFloatProperty("maxexposure");
         var exposureRate = KeyValues.GetFloatProperty("rate");
@@ -29,6 +31,7 @@ public sealed class EnvTonemapController : BaseEntity
         {
             ControllerExposureSettings = new ExposureSettings()
             {
+                AutoExposureEnabled = true,
                 ExposureMin = minExposure,
                 ExposureMax = maxExposure,
                 ExposureSpeedDown = exposureRate,

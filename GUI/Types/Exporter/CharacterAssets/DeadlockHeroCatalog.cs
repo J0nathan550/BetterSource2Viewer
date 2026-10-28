@@ -156,7 +156,7 @@ namespace GUI.Types.Exporter.CharacterAssets
             var entry = package.FindEntry(path) ?? throw new FileNotFoundException($"\"{path}\" was not found in the package");
 
             using var resource = new Resource { FileName = path };
-            resource.Read(GameFileLoader.GetPackageEntryStream(package, entry));
+            resource.Read(package.GetMemoryMappedStreamIfPossible(entry));
 
             return resource.DataBlock?.AsKeyValueCollection() ?? throw new InvalidDataException($"\"{path}\" has no data");
         }

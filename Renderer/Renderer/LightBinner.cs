@@ -11,7 +11,7 @@ namespace ValveResourceFormat.Renderer;
 /// <remarks>
 /// Bit indices are positions in the barn light and env map arrays of that one scene, so masks are not interchangeable between scenes.
 /// </remarks>
-public sealed class LightBinner(SceneViewState view) : IDisposable
+public sealed class LightBinner(SceneViewState view)
 {
     /// <summary>Screen tile size as a power of two shift. 4 is 16x16 pixels.</summary>
     private const int TileShift = 4;
@@ -32,7 +32,7 @@ public sealed class LightBinner(SceneViewState view) : IDisposable
     private const float MaxSliceFar = 32768f;
 
     /// <summary>Words one batch's mask spans, which is also the reduce pass's dispatch width.</summary>
-    private const int MaxBatchWords = BarnLightConstants.MAX_BARN_LIGHTS / TiledCullFeeder.ItemsPerMask;
+    private const int MaxBatchWords = BarnLightConstants.MAX_BARN_LIGHT_FACES / TiledCullFeeder.ItemsPerMask;
 
     private readonly TiledCullFeeder Feeder = new();
 
@@ -311,7 +311,7 @@ public sealed class LightBinner(SceneViewState view) : IDisposable
         // The slot order this mask is against only exists this frame, so what each bit meant travels with
         // the copy, per ring slot because three are in flight at once.
         ref var snapshot = ref VisibilitySnapshots[slot];
-        snapshot ??= new BarnLightFaceSlot[BarnLightConstants.MAX_BARN_LIGHTS];
+        snapshot ??= new BarnLightFaceSlot[BarnLightConstants.MAX_BARN_LIGHT_FACES];
 
         faces.CopyTo(snapshot);
         VisibilitySnapshotCounts[slot] = faces.Length;
@@ -401,15 +401,15 @@ public sealed class LightBinner(SceneViewState view) : IDisposable
             view.DepthPyramid.Height / MathF.Max(Feeder.ViewportSize.Y, 1f)));
     }
 
-    /// <inheritdoc/>
-    public void Dispose()
+    /// <summary>Deletes the GPU buffers of the cull passes.</summary>
+    public void Delete()
     {
         CullBits?.Delete();
         CullItemsGpu?.Delete();
         CullPlanesGpu?.Delete();
         VisibleBitsGpu?.Delete();
-        CullParamsGpu?.Dispose();
-        VisibilityReadback?.Dispose();
+        CullParamsGpu?.Delete();
+        VisibilityReadback?.Delete();
 
         CullBits = null;
         CullItemsGpu = null;

@@ -166,6 +166,8 @@ namespace GUI.Utils
             control.ResumeLayout(true);
         }
 
+        private static readonly Dictionary<Type, PropertyInfo?> BorderStyleProperties = [];
+
         private static void ThemeControlInternal(Control control)
         {
             if (control is ExplorerControl or TreeViewWithSearchResults)
@@ -173,7 +175,13 @@ namespace GUI.Utils
                 return;
             }
 
-            var borderStyleInfo = control.GetType().GetProperty("BorderStyle");
+            var controlType = control.GetType();
+            if (!BorderStyleProperties.TryGetValue(controlType, out var borderStyleInfo))
+            {
+                borderStyleInfo = controlType.GetProperty("BorderStyle");
+                BorderStyleProperties[controlType] = borderStyleInfo;
+            }
+
             if (borderStyleInfo != null)
             {
                 var borderStyle = (BorderStyle?)borderStyleInfo.GetValue(control);
@@ -335,7 +343,9 @@ namespace GUI.Utils
             if (control is TreeView treeView)
             {
                 treeView.BorderStyle = BorderStyle.None;
-                treeView.BackColor = CurrentThemeColors.AppSoft;
+
+                // A tree of check boxes sits among the checked lists of a viewer's controls, and takes their color
+                treeView.BackColor = treeView is GLViewerTreeSelectionControl.CompactTreeView ? CurrentThemeColors.AppMiddle : CurrentThemeColors.AppSoft;
                 treeView.ForeColor = CurrentThemeColors.Contrast;
                 treeView.LineColor = CurrentThemeColors.Border;
             }

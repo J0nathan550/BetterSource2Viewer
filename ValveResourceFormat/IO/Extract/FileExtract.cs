@@ -28,7 +28,7 @@ namespace ValveResourceFormat.IO
             get => outFileName;
             set
             {
-                outFileName = value.EndsWith(GameFileLoader.CompiledFileSuffix, StringComparison.InvariantCultureIgnoreCase)
+                outFileName = value.EndsWith(GameFileLoader.CompiledFileSuffix, StringComparison.OrdinalIgnoreCase)
                 ? value[..^2]
                 : value;
             }
@@ -70,6 +70,19 @@ namespace ValveResourceFormat.IO
             };
 
             SubFiles.Add(subFile);
+        }
+
+        /// <summary>
+        /// Gets the sub-file name that places <paramref name="contentPath"/> at its content path when written
+        /// next to the content file at <paramref name="documentPath"/>. Both paths are content relative.
+        /// </summary>
+        internal static string GetSubFileName(string documentPath, string contentPath)
+        {
+            var documentFolder = Path.GetDirectoryName(documentPath);
+
+            return string.IsNullOrEmpty(documentFolder)
+                ? contentPath
+                : Path.GetRelativePath(documentFolder, contentPath).Replace('\\', '/');
         }
 
         /// <summary>
@@ -146,6 +159,9 @@ namespace ValveResourceFormat.IO
 
         /// <inheritdoc/>
         public Stream? GetFileStream(string file) => fileLoader.GetFileStream(file);
+
+        /// <inheritdoc/>
+        public GameInfo GameInfo => fileLoader.GameInfo;
 
         /// <summary>
         /// Initializes a new instance of the <see cref="TrackingFileLoader"/> class.
@@ -367,7 +383,7 @@ namespace ValveResourceFormat.IO
             }
 
             Span<byte> buffer = stackalloc byte[4];
-            var read = stream.Read(buffer);
+            var read = stream.ReadAtLeast(buffer, buffer.Length, throwOnEndOfStream: false);
             stream.Seek(-read, SeekOrigin.Current);
             if (read != 4)
             {

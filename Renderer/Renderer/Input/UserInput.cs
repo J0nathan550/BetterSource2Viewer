@@ -134,7 +134,7 @@ public class UserInput
     {
         Renderer = renderer;
         Camera = new Camera(renderer.RendererContext.FieldOfView);
-        PlayerMovement = new PlayerMovement(this);
+        PlayerMovement = new PlayerMovement(this, renderer.RendererContext.FileLoader);
     }
 
     /// <summary>
@@ -402,7 +402,9 @@ public class UserInput
         }
         else
         {
-            MoveCamera(new Vector3(0, 0, 32), transition: true);
+            // Straight up in the world, not along the view, which tilts with pitch
+            SaveCameraForTransition();
+            Camera.Location += Vector3.UnitZ * 32f;
             CurrentSpeedModifier = 7;
         }
     }
@@ -410,7 +412,7 @@ public class UserInput
     /// <summary>
     /// Switches to noclip mode and begins a smooth camera transition from the current position.
     /// </summary>
-    /// <param name="transitionDuration">Duration of the transition animation in seconds.</param>
+    /// <param name="transitionDuration">Duration of the transition animation in seconds. Zero shows the camera where it is placed at once, cancelling a transition that is running.</param>
     /// <param name="exitWalkMode">Whether to leave walk mode; pass false to teleport the player instead.</param>
     public void SaveCameraForTransition(float transitionDuration = 1.5f, bool exitWalkMode = true)
     {
@@ -446,6 +448,16 @@ public class UserInput
 
     private void TransitionCamera(float transitionDuration = 1.5f)
     {
+        if (transitionDuration <= 0f)
+        {
+            TransitionEndTime = -1f;
+
+            // Without the mouse over the viewport nothing else ticks the input, and the render camera
+            // would keep showing the pose the view was left at
+            ForceUpdate = true;
+            return;
+        }
+
         StartingCamera = GetInterpolatedCamera();
         TransitionDuration = transitionDuration;
         TransitionEndTime = Renderer.Uptime + transitionDuration;
@@ -522,8 +534,8 @@ public class UserInput
             var speed = deltaTime * OrbitDistance / 2;
             var panOffset = Camera.Right * speed * -MouseDelta2D.X;
 
-            OrbitTarget += panOffset;
             Camera.Location += panOffset;
+            OrbitTarget += panOffset;
         }
 
         if ((keyboardState & TrackedKeys.MouseLeft) != 0 || mouseLook)

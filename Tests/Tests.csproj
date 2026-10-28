@@ -3,9 +3,12 @@
     <RollForward>LatestMajor</RollForward>
     <OutputType>Exe</OutputType>
     <PublishReadyToRun>false</PublishReadyToRun>
+    <EnableTrimAnalyzer Condition="'$(EnableTrimAnalyzer)' == ''">true</EnableTrimAnalyzer>
+    <EnableAotAnalyzer Condition="'$(EnableAotAnalyzer)' == ''">true</EnableAotAnalyzer>
+    <ServerGarbageCollection>true</ServerGarbageCollection>
   </PropertyGroup>
   <ItemGroup>
-    <PackageReference Include="TUnit" Version="1.73.5" />
+    <PackageReference Include="TUnit" Version="1.75.0" />
   </ItemGroup>
   <ItemGroup>
     <ProjectReference Include="..\ValveResourceFormat\ValveResourceFormat.csproj" />

@@ -1,3 +1,7 @@
+---
+description: Learn how to write and submit a guide for the Source 2 Viewer documentation using GitHub or a git fork and a pull request.
+---
+
 # Help Write Guides
 
 Our documentation is still growing, and we'd love your help! Whether you've figured out a workflow that others might find useful, or you want to document something you've learned about Source 2 files, contributing a guide is a great way to give back to the community.
@@ -80,13 +84,13 @@ resource.Read(stream); // highlighted line
 If your guide benefits from screenshots or diagrams, place image files in the `docs/guides/images/` directory and reference them using a relative path:
 
 ```md
-![Description of the image](./images/my-screenshot.png)
+![Description of the image](./images/my-screenshot.webp)
 ```
 
-Keep images concise and relevant. Crop to the area of interest and avoid including unnecessary UI chrome. Use PNG for screenshots and SVG for diagrams where possible.
+Keep images concise and relevant. Crop to the area of interest and avoid including unnecessary UI chrome. Use lossless WebP for screenshots and SVG for diagrams where possible.
 
 ::: tip
-Use [TinyPNG](https://tinypng.com/) to optimize your images before committing them.
+Convert screenshots with `cwebp -lossless -exact -m 6 input.png -o output.webp`, from Google's [WebP tools](https://developers.google.com/speed/webp/download).
 :::
 
 See the [VitePress Markdown docs](https://vitepress.dev/guide/markdown) for more.

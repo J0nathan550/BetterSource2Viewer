@@ -1,5 +1,6 @@
 using System.Buffers.Binary;
 using System.Linq;
+using System.Numerics.Tensors;
 using System.Runtime.InteropServices;
 using System.Runtime.Intrinsics;
 using SkiaSharp;
@@ -43,9 +44,9 @@ namespace ValveResourceFormat.TextureDecoders
         RGBM = 1 << 1, // todo
 
         /// <summary>
-        /// Hemi Octahedron surface normal data in RB. Widens to RGB.
+        /// Hemi Octahedron surface normal data in RG. Widens to RGB.
         /// </summary>
-        HemiOctRB = 1 << 2,
+        HemiOctNormal = 1 << 2,
 
         /// <summary>
         /// Reconstruct normal Z from X and Y.
@@ -73,7 +74,17 @@ namespace ValveResourceFormat.TextureDecoders
         ForceLDR = 1 << 7,
 
         /// <summary>
-        /// Automatically determine codec flags.
+        /// Move blue to alpha, before other conversions overwrite blue.
+        /// </summary>
+        BlueToAlpha = 1 << 8,
+
+        /// <summary>
+        /// Hemi Octahedron surface normal data in RG and roughness in B, moved to alpha.
+        /// </summary>
+        HemiOctRB = HemiOctNormal | BlueToAlpha,
+
+        /// <summary>
+        /// Determine codec flags from the texture's edit info. Other flags set alongside it are added on top.
         /// </summary>
         Auto = 1 << 30,
     }
@@ -85,10 +96,11 @@ namespace ValveResourceFormat.TextureDecoders
             var swapRA = decodeFlags.HasFlag(TextureCodec.Dxt5nm);
             var decodeYCoCg = decodeFlags.HasFlag(TextureCodec.YCoCg);
             var linearizeYCoCg = decodeYCoCg && decodeFlags.HasFlag(TextureCodec.ColorSpaceSrgb);
-            var decodeHemiOct = decodeFlags.HasFlag(TextureCodec.HemiOctRB);
+            var blueToAlpha = decodeFlags.HasFlag(TextureCodec.BlueToAlpha);
+            var decodeHemiOct = decodeFlags.HasFlag(TextureCodec.HemiOctNormal);
             var reconstructZ = decodeFlags.HasFlag(TextureCodec.NormalizeNormals);
 
-            if (!swapRA && !decodeYCoCg && !decodeHemiOct && !reconstructZ)
+            if (!swapRA && !decodeYCoCg && !blueToAlpha && !decodeHemiOct && !reconstructZ)
             {
                 return;
             }
@@ -123,6 +135,11 @@ namespace ValveResourceFormat.TextureDecoders
                     pixel.a = 255;
                 }
 
+                if (blueToAlpha)
+                {
+                    pixels[i].a = pixels[i].b;
+                }
+
                 if (decodeHemiOct)
                 {
                     Decode_HemiOct(ref pixels[i]);
@@ -152,12 +169,12 @@ namespace ValveResourceFormat.TextureDecoders
 
         public static void ReconstructNormals(ref Color color)
         {
-            var swizzleR = (color.r * 2) - 255;     // premul R
-            var swizzleG = (color.g * 2) - 255;     // premul G
-            var deriveB = (int)MathF.Sqrt((255 * 255) - (swizzleR * swizzleR) - (swizzleG * swizzleG));
-            color.r = ClampColor((swizzleR / 2) + 128); // unpremul R and normalize (128 = forward, or facing viewer)
-            color.g = ClampColor((swizzleG / 2) + 128); // unpremul G and normalize
-            color.b = ClampColor((deriveB / 2) + 128);  // unpremul B and normalize
+            var x = (color.r / 255f * 2) - 1;
+            var y = (color.g / 255f * 2) - 1;
+
+            // Byte rounding can push X and Y just outside the unit circle
+            var z = MathF.Sqrt(MathF.Max(0, 1 - (x * x) - (y * y)));
+            color.b = ToClampedLdrColor((z * 0.5f) + 0.5f);
         }
 
         public static void Decode_HemiOct(ref Color color)
@@ -167,10 +184,9 @@ namespace ValveResourceFormat.TextureDecoders
             var nz = 1 - MathF.Abs(nx) - MathF.Abs(ny);
 
             var l = MathF.Sqrt((nx * nx) + (ny * ny) + (nz * nz));
-            color.a = color.b; //b to alpha
-            color.r = (byte)(((nx / l * 0.5f) + 0.5f) * 255);
-            color.g = (byte)(((ny / l * 0.5f) + 0.5f) * 255);
-            color.b = (byte)(((nz / l * 0.5f) + 0.5f) * 255);
+            color.r = ToClampedLdrColor((nx / l * 0.5f) + 0.5f);
+            color.g = ToClampedLdrColor((ny / l * 0.5f) + 0.5f);
+            color.b = ToClampedLdrColor((nz / l * 0.5f) + 0.5f);
         }
 
         public static byte ClampColor(int a)
@@ -186,6 +202,26 @@ namespace ValveResourceFormat.TextureDecoders
         public static byte ToClampedLdrColor(float a)
         {
             return (byte)(ClampHighRangeColor(a) * 255 + 0.5f);
+        }
+
+        /// <summary>
+        /// Same as <see cref="ToClampedLdrColor(float)"/> for every element.
+        /// </summary>
+        public static void ToClampedLdrColor(ReadOnlySpan<Half> source, Span<byte> destination)
+        {
+            const int ChunkSize = 1024;
+            Span<float> values = stackalloc float[ChunkSize];
+
+            for (var offset = 0; offset < destination.Length; offset += ChunkSize)
+            {
+                var count = Math.Min(ChunkSize, destination.Length - offset);
+                var sourceChunk = source.Slice(offset, count);
+                var valuesChunk = values[..count];
+                var destinationChunk = destination.Slice(offset, count);
+
+                TensorPrimitives.ConvertToSingle(sourceChunk, valuesChunk);
+                TensorPrimitives.ConvertToClampedUnorm8(valuesChunk, destinationChunk);
+            }
         }
 
         private static byte[] CreateSimdSwizzleMask(int[] swizzle) =>

@@ -1,3 +1,5 @@
+using System.Diagnostics;
+
 namespace ValveResourceFormat.Renderer.SceneEnvironment;
 
 /// <summary>
@@ -21,10 +23,10 @@ public class SceneLightProbe : SceneNode
     /// <summary>Gets or sets the direct light shadow texture (lighting version 8.2).</summary>
     public RenderTexture? DirectLightShadows { get; set; }
 
-    /// <summary>Gets or sets the probe atlas size in texels (lighting version 8.2).</summary>
+    /// <summary>Gets or sets the size of the volume's probe grid in the probe atlas, in probes.</summary>
     public Vector3 AtlasSize { get; set; }
 
-    /// <summary>Gets or sets the probe atlas offset in texels (lighting version 8.2).</summary>
+    /// <summary>Gets or sets where the volume's probe grid starts in the probe atlas, in probes.</summary>
     public Vector3 AtlasOffset { get; set; }
 
     /// <summary>
@@ -54,10 +56,9 @@ public class SceneLightProbe : SceneNode
     }
 
     /// <summary>
-    /// Computes the <see cref="LightProbeVolume"/> GPU data for this probe, including atlas offsets when applicable.
+    /// Computes the <see cref="LightProbeVolume"/> GPU data for this probe, placing it in the probe atlas.
     /// </summary>
-    /// <param name="isProbeAtlas">Whether the probe uses a probe atlas texture (lighting version 8.2).</param>
-    public LightProbeVolume CalculateGpuProbeData(bool isProbeAtlas)
+    public LightProbeVolume CalculateGpuProbeData()
     {
         if (!Matrix4x4.Invert(Transform, out var worldToLocal))
         {
@@ -72,32 +73,26 @@ public class SceneLightProbe : SceneNode
                 Matrix4x4.CreateTranslation(-LocalBoundingBox.Min) *
                 Matrix4x4.CreateScale(Vector3.One / LocalBoundingBox.Size),
 
-            InvEdgeWidth = new Vector4(LocalBoundingBox.Size / Vector3.Max(EdgeFadeDists, new Vector3(SceneEnvMap.BoundsExtend)), 0),
+            InvEdgeWidth = new Vector4(SceneEnvMap.GetInverseEdgeFade(EdgeFadeDists / LocalBoundingBox.Size), 0),
+            BoundsExtend = new Vector4(new Vector3(SceneEnvMap.BoundsExtend) / LocalBoundingBox.Size, 0),
         };
 
-        if (isProbeAtlas)
-        {
-            if (DirectLightShadows == null)
-            {
-                throw new InvalidOperationException("DirectLightShadows is null but probe atlas is expected");
-            }
+        Debug.Assert(Irradiance != null);
 
-            var half = Vector3.One * 0.5f;
-            var depthDivide = Vector3.One with { Z = 1f / 6 };
+        var half = Vector3.One * 0.5f;
+        var depthDivide = Vector3.One with { Z = 1f / 6 };
 
-            var textureDims = new Vector3(DirectLightShadows.Width, DirectLightShadows.Height, DirectLightShadows.Depth);
-            var atlasDims = AtlasOffset + AtlasSize;
+        var textureDims = new Vector3(Irradiance.Width, Irradiance.Height, Irradiance.Depth) * depthDivide;
 
-            var borderMin = half * depthDivide / textureDims;
-            var borderMax = (textureDims - half) * depthDivide / textureDims;
-            var scale = AtlasSize / textureDims;
-            var offset = AtlasOffset / textureDims;
+        var borderMin = half * depthDivide / AtlasSize;
+        var borderMax = (AtlasSize - half) * depthDivide / AtlasSize;
+        var scale = AtlasSize / textureDims;
+        var offset = AtlasOffset / textureDims;
 
-            data.BorderMin = new Vector4(borderMin, 0);
-            data.BorderMax = new Vector4(borderMax, 0);
-            data.AtlasScale = new Vector4(scale, 0);
-            data.AtlasOffset = new Vector4(offset, 0);
-        }
+        data.BorderMin = new Vector4(borderMin, 0);
+        data.BorderMax = new Vector4(borderMax, 0);
+        data.AtlasScale = new Vector4(scale, 0);
+        data.AtlasOffset = new Vector4(offset, 0);
 
         return data;
     }

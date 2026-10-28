@@ -1,3 +1,7 @@
+---
+description: See which Source 2 resource formats Source 2 Viewer can view, decompile and export, and what data is lost along the way.
+---
+
 # Format Support and Export Fidelity
 
 Source 2 Viewer (and the ValveResourceFormat library) can view, dump, decompile, and export
@@ -24,8 +28,8 @@ When data does not survive, the reason falls into one of three categories:
 
 Decompiled `.vmdl` and `.vmap` files are expected to load and recompile in ModelDoc and
 Hammer; the sections below list exactly what the recompiled asset will be missing. There
-is also basic support for writing VPKs and re-serializing resources back to their binary
-format. Parsing network/demo formats such as `.dem` is out of scope
+is also support for creating and editing VPKs and re-serializing resources back to their
+binary format. Parsing network/demo formats such as `.dem` is out of scope
 ([#1122](https://github.com/ValveResourceFormat/ValveResourceFormat/issues/1122)).
 
 ## Support Matrix
@@ -45,14 +49,14 @@ in the Dump column.
 | vanim    | Animation                  | text                          | generic | - (legacy, animation data now lives inside vmdl)                                                             |
 | vanmgrph | Animation Graph            | graph                         | yes     | editable graph document                                                                                      |
 | vcd      | Choreo Scene               | text                          | generic | KV3 text (no dedicated parsing; vcdlist scenes are separate)                                                 |
-| vcdlist  | Choreo Scene File Data     | text                          | yes     | per-scene `.vcd` as KV3 text (see [Choreo](#choreo-captions-and-ui))                                         |
+| vcdlist  | Choreo Scene File Data     | scene list, text              | yes     | per-scene `.vcd` as KV3 text (see [Choreo](#choreo-captions-and-ui))                                         |
 | vcompmat | Composite Material         | text                          | generic | KV3 text (no compositing preview)                                                                            |
 | vcss     | Panorama Style             | text                          | yes     | `.css` (prettified minified text)                                                                            |
 | vdata    | Data                       | text (3D for CS2 bomb damage) | generic | KV3 text                                                                                                     |
 | vdpn     | Dota Patch Notes           | text                          | generic | KV3 text                                                                                                     |
 | vdsp     | DSP Presets                | text                          | generic | KV3 text                                                                                                     |
 | vdvn     | Dota Visual Novels         | text                          | generic | KV3 text                                                                                                     |
-| vents    | Entity Lump                | graph, text                   | yes     | entity dump; glTF/GLB; included in map exports                                                               |
+| vents    | Entity Lump                | list, graph, text, FGD        | yes     | entity dump; glTF/GLB; included in map exports                                                               |
 | vjs      | Panorama Script            | text                          | yes     | `.js` (byte-exact; see [Panorama](#choreo-captions-and-ui))                                                  |
 | vmap     | Map                        | 3D                            | yes     | `.vmap` (Hammer); glTF/GLB                                                                                   |
 | vmat     | Material                   | 3D                            | yes     | `.vmat` + unpacked texture inputs                                                                            |
@@ -101,7 +105,7 @@ in the Dump column.
 
 | Format                             | Support                                                                                                                                                                                                       |
 | ---------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| vpk (Valve Pak)                    | Browse, extract, create, and edit, handled by [ValvePak](https://github.com/ValveResourceFormat/ValvePak)                                                                                                     |
+| vpk (Valve Pak)                    | Browse and extract, handled by [ValvePak](https://github.com/ValveResourceFormat/ValvePak); create and edit in the GUI; create in the CLI; saved VPKs are unsigned; VPKs inside VPKs open at any depth        |
 | vcs (compiled shader)              | Combo/parameter browser; `.vfx` reconstruction; per-stage source for GL and Vulkan platforms (see [Shaders](#shaders-vcs))                                                                                    |
 | SPIR-V `.spv`                      | Decompiled via SPIRV-Cross to HLSL (or GLSL), same as Vulkan vcs stages                                                                                                                                       |
 | dat (VCCD closed captions)         | Grid view; export to `.txt` KV1 (caption keys are lost, see [below](#choreo-captions-and-ui))                                                                                                                 |
@@ -117,6 +121,7 @@ in the Dump column.
 | DMX / KeyValues2                   | Normalized text dump                                                                                                                                                                                          |
 | VBKV / binary KeyValues1           | Text dump                                                                                                                                                                                                     |
 | Binary KeyValues3 (all versions)   | Text dump; backbone of the generic fallback above; writing supported                                                                                                                                          |
+| KeyValues3 text                    | Highlighted text view; Animgraph 1 graph documents also open in the graph viewer                                                                                                                              |
 | Binary resource writing            | Basic re-serialization of resources back to the compiled binary format (`Resource.Serialize`), for a subset of block types (binary KV3, plaintext, Panorama, external reference lists, and raw binary blocks) |
 
 ## Models (vmdl)
@@ -140,13 +145,13 @@ rebuilt keeps only its cloth on bones, with a warning; `--skip_softbody_reconstr
 
 What a recompiled model will be missing:
 
-| What                                      | Why                          | Details                                                                                                                                                                                                                                                                                                                                                               |
-| ----------------------------------------- | ---------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Cloth simulation                          | Partly not in compiled files | Node masses of cloth on bones come out from the geometry rather than as authored, and joints aligned to the same node twice can take a different base node. Some values of cloth on a mesh, such as painted masses and planarized collision shapes, are worked back from the compiled data and can come out slightly different. [#653](https://github.com/ValveResourceFormat/ValveResourceFormat/issues/653) |
-| Stereo flex controls                      | Not in compiled files        | The compiler splits a stereo slider into independent left and right controllers, so it comes back as two sliders.                                                                                                                                                                                                                                                     |
-| Animations from include-models            | Not implemented              | Their sequences are not written, but their `AnimIncludeModel` references are kept, so they come back if those models are decompiled too.                                                                                                                                                                                                                              |
-| Vertical root motion                      | Intentional                  | The Z component of root motion is zeroed on export, matching how the engine applies movement to the visible body.                                                                                                                                                                                                                                                     |
-| Attachment camera preview look            | Not in compiled files        | The `preview_scale` and `background_color` of an `Attachment Camera Preview` only affect the editor, so they come back at their defaults. A camera on an attachment that the compiled model does not have is dropped.                                                                                                                                                 |
+| What                           | Why                          | Details                                                                                                                                                                                                                                                                                                                                                                                                       |
+| ------------------------------ | ---------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Cloth simulation               | Partly not in compiled files | Node masses of cloth on bones come out from the geometry rather than as authored, and joints aligned to the same node twice can take a different base node. Some values of cloth on a mesh, such as painted masses and planarized collision shapes, are worked back from the compiled data and can come out slightly different. [#653](https://github.com/ValveResourceFormat/ValveResourceFormat/issues/653) |
+| Stereo flex controls           | Not in compiled files        | The compiler splits a stereo slider into independent left and right controllers, so it comes back as two sliders.                                                                                                                                                                                                                                                                                             |
+| Animations from include-models | Not implemented              | Their sequences are not written, but their `AnimIncludeModel` references are kept, so they come back if those models are decompiled too.                                                                                                                                                                                                                                                                      |
+| Vertical root motion           | Intentional                  | The Z component of root motion is zeroed on export, matching how the engine applies movement to the visible body.                                                                                                                                                                                                                                                                                             |
+| Attachment camera preview look | Not in compiled files        | The `preview_scale` and `background_color` of an `Attachment Camera Preview` only affect the editor, so they come back at their defaults. A camera on an attachment that the compiled model does not have is dropped.                                                                                                                                                                                         |
 
 ### glTF Export
 
@@ -158,10 +163,12 @@ is embedded in the model or in a referenced `.vphys_c`.
 | What                       | Why               | Details                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                      |
 | -------------------------- | ----------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | Lower LODs                 | Intentional       | Only the highest-detail LOD is exported. [#535](https://github.com/ValveResourceFormat/ValveResourceFormat/issues/535)                                                                                                                                                                                                                                                                                                                                                                                                                                                                       |
-| Source 2 material features | Format limitation | Materials are flattened to glTF PBR metallic-roughness. Layered blend materials export only one layer ([#1161](https://github.com/ValveResourceFormat/ValveResourceFormat/issues/1161)), cloth sheen has no accurate glTF equivalent ([#576](https://github.com/ValveResourceFormat/ValveResourceFormat/issues/576)), vertex-color-driven shaders like foliage do not translate ([#1180](https://github.com/ValveResourceFormat/ValveResourceFormat/issues/1180)). Every exported material also carries the original shader name and parameters in a `vmat` extras block for custom tooling. |
+| Tools materials            | Intentional       | Map, world node and entity lump exports leave out draw calls of tools materials such as light blockers, as the world view hides them.                                                                                                                                                                                                                                                                                                                                                                                                                                                        |
+| Source 2 material features | Format limitation | Materials are flattened to glTF PBR metallic-roughness. Layered blend materials export only one layer ([#1161](https://github.com/ValveResourceFormat/ValveResourceFormat/issues/1161)), cloth sheen has no accurate glTF equivalent ([#576](https://github.com/ValveResourceFormat/ValveResourceFormat/issues/576)), csgo_foliage vertex colors (wind) are saved as `_COLOR_0` ([#1180](https://github.com/ValveResourceFormat/ValveResourceFormat/issues/1180)). Every exported material also carries the original shader name and parameters in a `vmat` extras block for custom tooling. |
 | Flex controllers           | Format limitation | glTF has no flex rig; controller-driven morph animation is baked into per-frame morph weights instead.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                       |
 | Morph wrinkle weights      | Format limitation | Position and normal deltas are exported; the wrinkle weight has no glTF equivalent.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                          |
 | Additive animations        | Format limitation | glTF has no additive concept; clips are composed over the bind pose, or written as delta tracks flagged via a VRF-specific extras convention that generic viewers will play back incorrectly.                                                                                                                                                                                                                                                                                                                                                                                                |
+| Animation keyframes        | Intentional       | Keys that linear interpolation of the kept keys reproduces within a small tolerance (0.01 degrees, 0.01 mm) are dropped, and a channel that does not change keeps a single key. `--gltf_keep_all_keyframes` writes every frame.                                                                                                                                                                                                                                                                                                                                                              |
 | Hitboxes                   | Format limitation | glTF has no collision volume concept; hitboxes are not exported.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                             |
 | Cloth simulation           | Not implemented   | There is no cloth solver; procedural cloth bones are rigidly pinned to their anchor bones.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                   |
 | Physical properties        | Format limitation | The physics export carries visualization geometry and materials, plus each shape's surface property and collision tags as node extras; the physical values themselves (mass, friction, joints) are not represented.                                                                                                                                                                                                                                                                                                                                                                          |
@@ -230,11 +237,11 @@ lighting and visibility: the 3D sky a `skybox_reference` names, prefabs left for
 load (`point_prefab` and classes flagged `ispointprefab`, such as the CS2 team intros), and the
 stages an `info_spawngroup_load_unload` loads and unloads when its entity I/O fires.
 
-| What                         | Details                                                                                                              |
-| ---------------------------- | -------------------------------------------------------------------------------------------------------------------- |
-| Runtime spawn group lights   | Realtime barn lights of a loaded stage are not drawn; its baked lighting and its sun are.                            |
-| Translucents across groups   | Each spawn group sorts its own translucent geometry, so translucents of two groups can overlap in the wrong order.  |
-| `sky_camera_volume`          | Not implemented; the 3D sky always comes from the `skybox_reference` and its `sky_camera`.                           |
+| What                       | Details                                                                                                            |
+| -------------------------- | ------------------------------------------------------------------------------------------------------------------ |
+| Runtime spawn group lights | Realtime barn lights of a loaded stage are not drawn; its baked lighting and its sun are.                          |
+| Translucents across groups | Each spawn group sorts its own translucent geometry, so translucents of two groups can overlap in the wrong order. |
+| `sky_camera_volume`        | The sky blur effect is not drawn.                                                                                  |
 
 ## Materials (vmat)
 
@@ -275,8 +282,8 @@ are reversed on export. LDR textures export as PNG and HDR as EXR, except textur
 store a whole JPEG/PNG/WebP file, which are copied out byte-exact instead (with a `.vtex`
 config referencing it when one is requested). Sprite sheets
 reconstruct a compilable `.mks` plus per-frame images; LDR cubemaps export one image per
-face, HDR cubemaps combine into a single equirectangular map; arrays and volumes export
-per slice.
+face, HDR cubemaps combine into a single equirectangular map, or one image per face with
+`ForceLDR`; arrays and volumes export per slice.
 
 | What                                       | Why                   | Details                                                                                                                                                                                                                                                                                                                                             |
 | ------------------------------------------ | --------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
@@ -296,19 +303,19 @@ retarget clips authored on a different skeleton.
 
 Animation _graphs_ are decompiled to editable documents and visualized, for both Animgraph 1
 and Animgraph 2. Animgraph 2 graphs (`vnmgraph`) are also executed in the model viewer.
-The viewer evaluates bone constraints, including constraint-driven morphs, on every pose; IK
+The viewer evaluates bone constraints, including constraint-driven morphs, on every pose, and
+solves the two-bone and foot IK nodes of an executed Animgraph 2 graph; the model's own IK
 chains are not solved, and glTF export does not apply constraints. `vnmikrig` files have no
 dedicated support beyond the generic dump.
 
 ### Animgraph Playback
 
-| Gap                                 | Category              | Detail                                                                                                      |
-| ----------------------------------- | --------------------- | ----------------------------------------------------------------------------------------------------------- |
-| Control parameter values            | Not in compiled files | Set at runtime. The viewer exposes every parameter as a control and guesses starting values.                |
-| External graph, pose and data slots | Not in compiled files | Slots filled at runtime stay empty, and the branches reading them contribute no pose.                       |
-| Animgraph 1 execution               | Not implemented       | Only Animgraph 2 graphs are executed.                                                                       |
-| Orientation warp translation        | Not implemented       | The translation warp flag of `OrientationWarpNode` is not applied.                                          |
-| Target selector alignment bone      | Not implemented       | `TargetSelectorNode` scores its options by where their root motion ends, without the alignment bone.        |
+| Gap                                 | Category              | Detail                                                                                       |
+| ----------------------------------- | --------------------- | -------------------------------------------------------------------------------------------- |
+| Control parameter values            | Not in compiled files | Set at runtime. The viewer exposes every parameter as a control and guesses starting values. |
+| External graph, pose and data slots | Not in compiled files | Slots filled at runtime stay empty, and the branches reading them contribute no pose.        |
+| Animgraph 1 execution               | Not implemented       | Only Animgraph 2 graphs are executed.                                                        |
+| Orientation warp translation        | Not implemented       | The translation warp flag of `OrientationWarpNode` is not applied.                           |
 
 Animgraph 2 system is taken from the [Esoterica](https://www.esotericaengine.com/) animation system. Source 2 adds a couple of new nodes: `ChainLookatNode`,
 `FollowBoneNode`, `BodyGroupNode` and `IsInactiveBranchConditionNode`, and a few ones that are game specific.
@@ -333,9 +340,14 @@ Particle systems round-trip exactly: extraction re-emits the original stored KV3
 VRF's upgraded in-memory version, so decompiled `.vpcf` files match the compiled source
 (pre-KV3 NTRO-era files are re-encoded as KV3 text instead). The viewer simulates a large
 subset of particle functions and lists any unsupported functions per system in red instead
-of failing. Effects that create their particles on a model spawn them on the posed mesh or
-hitboxes of the model they play on, such as a model's own effects in the model viewer, and
-at their control point when previewed on their own. Omni2 particle lights of the barn type are drawn as point lights.
+of failing. Model particles pick their body groups and play their sequences, but only the
+sequences the model embeds, and activities are not resolved. Per-particle material variables (`m_MaterialVars`) are not
+applied ([#716](https://github.com/ValveResourceFormat/ValveResourceFormat/issues/716)). Cables
+draw their end caps but no normal map, and ignore their material variables. Projected decals
+have no sheet animation.
+Screen-space effects (`m_bScreenSpaceEffect`) draw over the scene at full resolution rather than
+into a half-resolution layer, are not pickable, and only their sprite renderers face the
+screen-space view.
 
 Particle snapshots (`vsnap`) preview and extract. Bone name streams survive, but skinning
 streams are written into the extracted `.vsnap` as empty streams: their values show in the
@@ -383,9 +395,7 @@ interpreted.
 - **Dota 2**: the uncompiled VGrass format found in map VPKs is entirely unparsed
   ([#83](https://github.com/ValveResourceFormat/ValveResourceFormat/issues/83)). Hero list,
   patch notes and visual novel resources are text dumps only.
-- **Deadlock**: viewer shading is a work in progress; environment blend materials in
-  particular do not render their texture layers correctly yet
-  ([#1092](https://github.com/ValveResourceFormat/ValveResourceFormat/issues/1092)).
+- **Deadlock**: viewer shading is a work in progress.
 - **s&box**: compiled shaders are not supported. Managed resources extract as plaintext.
 - **Source 1 leftovers**: `vfont` (VFONT1), `uifont` packages, VBKV, closed captions, and
   flex scene `.vfe` files are supported even where they appear in Source 1 games. Source 1

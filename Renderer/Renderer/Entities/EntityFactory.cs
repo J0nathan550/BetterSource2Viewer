@@ -65,6 +65,7 @@ public static class EntityFactory
         Register<EnvCubemap>("env_cubemap", static (system, spawnInfo) => new EnvCubemap(system, spawnInfo, isSphere: true));
         Register<EnvCubemap>("env_cubemap_box", static (system, spawnInfo) => new EnvCubemap(system, spawnInfo, isSphere: false));
         Register<EnvCubemapFog>("env_cubemap_fog", static (system, spawnInfo) => new EnvCubemapFog(system, spawnInfo));
+        Register<EnvFogController>("env_fog_controller", static (system, spawnInfo) => new EnvFogController(system, spawnInfo));
         Register<EnvLightProbeVolume>("env_combined_light_probe_volume", static (system, spawnInfo) => new EnvLightProbeVolume(system, spawnInfo, bakesCubemap: true));
         Register<EnvLightProbeVolume>("env_light_probe_volume", static (system, spawnInfo) => new EnvLightProbeVolume(system, spawnInfo, bakesCubemap: false));
         Register<EnvGradientFog>("env_gradient_fog", static (system, spawnInfo) => new EnvGradientFog(system, spawnInfo));
@@ -102,9 +103,13 @@ public static class EntityFactory
         Register<PointCamera>("point_camera_vertical_fov", static (system, spawnInfo) => new PointCamera(system, spawnInfo));
         Register<PointCamera>("point_devshot_camera", static (system, spawnInfo) => new PointCamera(system, spawnInfo));
         Register<SkyCamera>("sky_camera", static (system, spawnInfo) => new SkyCamera(system, spawnInfo));
+        Register<SkyboxReference>("skybox_reference", static (system, spawnInfo) => new SkyboxReference(system, spawnInfo));
+        Register<SkyCameraVolume>("sky_camera_volume", static (system, spawnInfo) => new SkyCameraVolume(system, spawnInfo));
+        Register<SkyCameraVolumeTarget>("sky_camera_volume_target", static (system, spawnInfo) => new SkyCameraVolumeTarget(system, spawnInfo));
         Register<SpawnPoint>("info_player_counterterrorist", static (system, spawnInfo) => new SpawnPoint(system, spawnInfo));
         Register<SpawnPoint>("info_player_start", static (system, spawnInfo) => new SpawnPoint(system, spawnInfo));
         Register<SpawnPoint>("info_player_start_badguys", static (system, spawnInfo) => new SpawnPoint(system, spawnInfo));
+        Register<SpawnPoint>("info_player_start_dota", static (system, spawnInfo) => new SpawnPoint(system, spawnInfo));
         Register<SpawnPoint>("info_player_start_goodguys", static (system, spawnInfo) => new SpawnPoint(system, spawnInfo));
         Register<SpawnPoint>("info_player_terrorist", static (system, spawnInfo) => new SpawnPoint(system, spawnInfo));
         Register<SpawnPoint>("info_team_spawn", static (system, spawnInfo) => new SpawnPoint(system, spawnInfo));
@@ -122,6 +127,7 @@ public static class EntityFactory
         Register<FilterActivatorModel>("filter_activator_model", static (system, spawnInfo) => new FilterActivatorModel(system, spawnInfo));
         Register<FilterActivatorTeam>("filter_activator_team", static (system, spawnInfo) => new FilterActivatorTeam(system, spawnInfo));
         Register<InfoSpawnGroupLoadUnload>("info_spawngroup_load_unload", static (system, spawnInfo) => new InfoSpawnGroupLoadUnload(system, spawnInfo));
+        Register<PointTemplate>("point_template", static (system, spawnInfo) => new PointTemplate(system, spawnInfo));
 
         // sounds
         Register<EnvSoundscape>("env_soundscape", static (system, spawnInfo) => new EnvSoundscape(system, spawnInfo));
@@ -152,8 +158,8 @@ public static class EntityFactory
     }
 
     /// <summary>
-    /// Creates the entity for a classname, which <see cref="EntitySystem.CreateEntity"/> then spawns and
-    /// adds to the world. An unimplemented classname gives a
+    /// Creates the entity for a classname, which the entity system adds to the world to spawn with the rest of
+    /// its spawn group. An unimplemented classname gives a
     /// <see cref="GenericModelEntity"/> when it has a model, otherwise a <see cref="GenericEntity"/>.
     /// </summary>
     /// <returns>

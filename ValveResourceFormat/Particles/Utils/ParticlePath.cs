@@ -20,9 +20,10 @@ namespace ValveResourceFormat.Particles.Utils
         public readonly Vector3 MidPointOffset = Vector3.Zero;
         public readonly Vector3 EndOffset = Vector3.Zero;
 
-        public ParticlePathParameters(ParticleDefinitionParser parse)
+        /// <summary>Reads the path from the block at <paramref name="key"/>, keeping the defaults when it is absent.</summary>
+        public ParticlePathParameters(ParticleDefinitionParser parse, string key = "m_PathParams")
         {
-            var pathParams = parse.Data.GetSubCollection("m_PathParams");
+            var pathParams = parse.Data.GetSubCollection(key);
             if (pathParams == null)
             {
                 return;
@@ -43,12 +44,23 @@ namespace ValveResourceFormat.Particles.Utils
 
         /// <summary>This path with a different control point pair, keeping every other parameter.</summary>
         public ParticlePathParameters WithControlPoints(int start, int end)
-            => new(start, end, this);
+            => new(start, MidControlPointNumber, end, this);
 
-        private ParticlePathParameters(int start, int end, in ParticlePathParameters source)
+        /// <summary>
+        /// This path with the start and end control points clamped to the valid indices, and the mid
+        /// control point to them or -1 for none.
+        /// </summary>
+        public ParticlePathParameters WithClampedControlPoints()
+            => new(
+                Math.Clamp(StartControlPointNumber, 0, ParticleSystemState.MaxControlPoint),
+                Math.Clamp(MidControlPointNumber, -1, ParticleSystemState.MaxControlPoint),
+                Math.Clamp(EndControlPointNumber, 0, ParticleSystemState.MaxControlPoint),
+                this);
+
+        private ParticlePathParameters(int start, int mid, int end, in ParticlePathParameters source)
         {
             StartControlPointNumber = start;
-            MidControlPointNumber = source.MidControlPointNumber;
+            MidControlPointNumber = mid;
             EndControlPointNumber = end;
             BulgeControl = source.BulgeControl;
             Bulge = source.Bulge;
@@ -70,10 +82,7 @@ namespace ValveResourceFormat.Particles.Utils
         /// recorded control point history.
         /// </summary>
         public static Vector3 GetControlPointAtTime(ParticleSystemState state, int controlPoint, float time)
-        {
-            var point = state.GetControlPoint(controlPoint);
-            return Vector3.Lerp(point.PositionPrevious, point.Position, point.StepFraction(state, time));
-        }
+            => state.GetControlPoint(controlPoint).GetPositionAtTime(time);
 
         /// <summary>
         /// Computes the Bezier control triple for a path at the given timestamp. Endpoint offsets

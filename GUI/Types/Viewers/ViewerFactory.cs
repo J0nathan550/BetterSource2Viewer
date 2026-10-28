@@ -2,7 +2,6 @@ using System.IO;
 using System.Threading.Tasks;
 using GUI.Utils;
 using ValvePak;
-using ValveResourceFormat.IO;
 
 namespace GUI.Types.Viewers;
 
@@ -24,7 +23,7 @@ static class ViewerFactory
                 throw new InvalidDataException("Parent context or package is null");
             }
 
-            stream = GameFileLoader.GetPackageEntryStream(parentContext.CurrentPackage, entry);
+            stream = parentContext.CurrentPackage.GetMemoryMappedStreamIfPossible(entry);
 
             if (stream.Length >= magicData.Length)
             {
@@ -47,8 +46,13 @@ static class ViewerFactory
 
         if (PackageViewer.PackageViewer.IsAccepted(magic))
         {
+            if (stream != null)
+            {
+                await stream.DisposeAsync().ConfigureAwait(false);
+            }
+
             var viewer = new PackageViewer.PackageViewer(vrfGuiContext);
-            await viewer.LoadAsync(stream).ConfigureAwait(false);
+            viewer.Load(entry);
             return viewer;
         }
         else if (CompiledShader.IsAccepted(magic))

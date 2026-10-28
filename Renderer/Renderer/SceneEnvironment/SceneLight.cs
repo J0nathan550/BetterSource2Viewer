@@ -147,6 +147,9 @@ public class SceneLight(Scene scene) : SceneNode(scene)
     /// <summary>Gets or sets the additional brightness scale multiplier.</summary>
     public float BrightnessScale { get; set; } = 1.0f;
 
+    /// <summary>Gets or sets the brightness multiplier of the current light style.</summary>
+    public float StyleBrightness { get; set; } = 1.0f;
+
     /// <summary>Gets or sets the maximum range of the light in world units.</summary>
     public float Range { get; set; } = 512.0f;
 
@@ -158,6 +161,12 @@ public class SceneLight(Scene scene) : SceneNode(scene)
 
     /// <summary>Gets or sets the outer cone half-angle for spot lights in degrees.</summary>
     public float SpotOuterAngle { get; set; } = 45.0f;
+
+    /// <summary>
+    /// Gets or sets whether an omni2 light skips fading toward the edge of its cone, which the outer
+    /// angle still limits.
+    /// </summary>
+    internal bool NoAngleFade { get; set; }
 
     /// <summary>Gets or sets the linear attenuation coefficient.</summary>
     public float AttenuationLinear { get; set; }
@@ -173,6 +182,12 @@ public class SceneLight(Scene scene) : SceneNode(scene)
 
     /// <summary>Gets or sets the near skirt distance for perspective barn lights.</summary>
     public float SkirtNear { get; set; }
+
+    /// <summary>
+    /// Gets or sets the fraction of <see cref="Range"/> over which a perspective barn light fades out with
+    /// distance from its frustum's apex, or null for no such fade.
+    /// </summary>
+    internal float? BarnDistanceSkirt { get; set; }
 
     /// <summary>Gets or sets the shape blend factor for barn lights.</summary>
     public float Shape { get; set; }
@@ -205,8 +220,11 @@ public class SceneLight(Scene scene) : SceneNode(scene)
     /// <summary>Gets or sets the fraction of the screen at which the light's shadows have faded out.</summary>
     public float ShadowFadeSizeEnd { get; set; }
 
+    /// <summary>The roughness no direct specular highlight is sharper than, whatever a light asks for.</summary>
+    public const float MinSpecularRoughness = 0.04f;
+
     /// <summary>Gets or sets the minimum roughness clamped for specular highlight calculations.</summary>
-    public float MinRoughness { get; set; } = 0.04f;
+    public float MinRoughness { get; set; } = MinSpecularRoughness;
 
     /// <summary>Gets or sets the material path of the cookie texture, or <see langword="null"/> if none.</summary>
     public string? CookieTexturePath { get; set; }
@@ -251,7 +269,17 @@ public class SceneLight(Scene scene) : SceneNode(scene)
     public Vector3 PrecomputedObbAngles { get; set; }
 
     /// <summary>Gets or sets the axis-aligned precomputed world bounds.</summary>
-    public AABB PrecomputedBounds { get; set; }
+    public AABB PrecomputedBounds
+    {
+        get;
+        set
+        {
+            field = value;
+            PrecomputedBoundsDiagonal = Vector3.Distance(value.Min, value.Max);
+        }
+    }
+
+    private float PrecomputedBoundsDiagonal;
 
     /// <summary>Gets or sets the number of precomputed sub-frusta for omni lights.</summary>
     public int PrecomputedSubfrusta { get; set; }
@@ -305,10 +333,15 @@ public class SceneLight(Scene scene) : SceneNode(scene)
     /// <summary>
     /// Creates a <see cref="SceneLight"/> populated from entity key-value properties.
     /// </summary>
-    public static SceneLight FromEntityProperties(Scene scene, EntityType type, Entity entity)
+    /// <param name="scene">The scene the light belongs to.</param>
+    /// <param name="type">The light entity class.</param>
+    /// <param name="entity">The entity key-values.</param>
+    /// <param name="name">The name to give the light node, or <see langword="null"/> for none.</param>
+    public static SceneLight FromEntityProperties(Scene scene, EntityType type, Entity entity, string? name = null)
     {
         var light = new SceneLight(scene)
         {
+            Name = name,
             StationaryLightIndex =
                 entity.GetInt32Property("bakedshadowindex", entity.GetInt32Property("bakelightindex", -1)),
             Entity = type,
@@ -341,6 +374,7 @@ public class SceneLight(Scene scene) : SceneNode(scene)
             SkyAmbientBounce = entity.GetColor32Property("skyambientbounce"),
             Range = entity.GetFloatProperty("range", 512.0f),
             FallOff = entity.GetFloatProperty("skirt", 0.1f),
+            MinRoughness = entity.GetFloatProperty("minroughness", MinSpecularRoughness),
 
             Enabled = entity.GetInt32Property("enabled", 1) != 0,
             RenderDiffuse = entity.GetInt32Property("renderdiffuse", 1) != 0,
@@ -407,7 +441,6 @@ public class SceneLight(Scene scene) : SceneNode(scene)
             light.LuminaireAnisotropy = entity.GetFloatProperty("luminaire_anisotropy");
             light.SizeParams = entity.GetVector3Property("size_params");
             light.CookieTexturePath = entity.GetStringProperty("lightcookie") is { Length: > 0 } cookie ? cookie : null;
-            light.MinRoughness = entity.GetFloatProperty("minroughness", 0.04f);
 
             light.Shear = entity.GetVector2Property("shear");
         }
@@ -419,7 +452,6 @@ public class SceneLight(Scene scene) : SceneNode(scene)
             light.SpotOuterAngle = 90f;
             light.SizeParams = entity.GetVector3Property("size_params");
             light.Shape = entity.GetFloatProperty("shape"); // 0 = rectangle, 1 = disc
-            light.MinRoughness = entity.GetFloatProperty("minroughness", 0.04f);
         }
 
         if (type is EntityType.Omni2)
@@ -428,7 +460,6 @@ public class SceneLight(Scene scene) : SceneNode(scene)
             light.SpotOuterAngle = entity.GetFloatProperty("outer_angle", 180f);
             light.SizeParams = entity.GetVector3Property("size_params");
             light.CookieTexturePath = entity.GetStringProperty("lightcookie") is { Length: > 0 } cookie ? cookie : null;
-            light.MinRoughness = entity.GetFloatProperty("minroughness", 0.04f);
             light.LuminaireShape = entity.GetInt32Property("shape");
             light.LuminaireSize = entity.GetFloatProperty("luminaire_size");
         }
@@ -592,7 +623,14 @@ public class SceneLight(Scene scene) : SceneNode(scene)
     internal static float GetShapeExponent(float shape) => shape > 0f ? MathF.Min(shape, 1f) * 0.875f + 0.125f : 0f;
 
     /// <summary>Distance, in world units, in front of the luminaire at which a light reaches its <see cref="LinearBrightness"/>.</summary>
-    private const float LinearBrightnessDistance = 100f;
+    internal const float LinearBrightnessDistance = 100f;
+
+    /// <summary>The brightness one candela gives at the luminaire, before the falloff to <see cref="LinearBrightnessDistance"/>.</summary>
+    private const float BrightnessPerCandela = 40f * MathF.PI;
+
+    /// <summary>The <see cref="LinearBrightness"/> of a light with an intensity of <paramref name="candelas"/>.</summary>
+    internal static float LinearBrightnessFromCandelas(float candelas)
+        => candelas * BrightnessPerCandela / (LinearBrightnessDistance * LinearBrightnessDistance);
 
     // Mirrored by the BARN_LIGHT_FLAG_ constants in lighting.barn.slang
     private const uint RectLuminaireFlag = 0x1000u;
@@ -715,20 +753,24 @@ public class SceneLight(Scene scene) : SceneNode(scene)
 
         var (illuminationFromWorld, obbToWorld) = GetLightObb(light);
 
+        var (distFadeOffset, distFadeRate) = light.BarnDistanceSkirt is { } distanceSkirt
+            ? ComputeDistanceFade(light.Range, distanceSkirt)
+            : (1f, 0f);
+
         return new BarnFaceData
         {
             GpuData = new BarnLightConstants
             {
                 BarnFrustum = worldToFrustum,
                 BarnLightPosition = barnLightPosition,
-                BarnLightDistanceFade_vSkirt = new Vector4(1f, 0f, skirtNear, skirtFar),
+                BarnLightDistanceFade_vSkirt = new Vector4(distFadeOffset, distFadeRate, skirtNear, skirtFar),
                 BarnLightColor_flCookie = new Vector4(linearColor, cookieW),
                 BarnLightOrientationQ = new Vector4(orientationQ.X, orientationQ.Y, orientationQ.Z, orientationQ.W),
                 BarnLightAngleFade = new Vector3(1f, 0f, 0f),
                 BarnLightShadowOffsetScale = Vector4.Zero,
                 BarnLightCookieParameters = cookieParams,
                 BarnLightBakedShadowMask = light.BakedShadowMask,
-                BarnLightMinRoughness = MathF.Max(0.04f, light.MinRoughness),
+                BarnLightMinRoughness = MathF.Max(MinSpecularRoughness, light.MinRoughness),
                 BarnLightShadowScale = 0f,
                 PathTraceIndex_BarnLightFlags = 0xFFFF0000u,
                 BarnIlluminationFromWorld = illuminationFromWorld
@@ -794,7 +836,7 @@ public class SceneLight(Scene scene) : SceneNode(scene)
         }
 
         var (distFadeOffset, distFadeRate) = ComputeDistanceFade(light.Range, light.FallOff);
-        var (angleBias, angleScale) = ComputeAngleFade(light.SpotOuterAngle, light.SpotInnerAngle);
+        var (angleBias, angleScale) = light.NoAngleFade ? (1f, 0f) : ComputeAngleFade(light.SpotOuterAngle, light.SpotInnerAngle);
         var angleFadeZ = light.LuminaireShape switch
         {
             1 or 2 => light.SizeParams.Y,
@@ -819,7 +861,7 @@ public class SceneLight(Scene scene) : SceneNode(scene)
                     BarnLightShadowOffsetScale = Vector4.Zero,
                     BarnLightCookieParameters = cookieParams,
                     BarnLightBakedShadowMask = light.BakedShadowMask,
-                    BarnLightMinRoughness = MathF.Max(0.04f, light.MinRoughness),
+                    BarnLightMinRoughness = MathF.Max(MinSpecularRoughness, light.MinRoughness),
                     BarnLightShadowScale = 0f,
                     PathTraceIndex_BarnLightFlags = flags | luminaireFlags,
                     BarnLightLuminaireHalfHeight = luminaireHalfSize.Y,
@@ -874,31 +916,46 @@ public class SceneLight(Scene scene) : SceneNode(scene)
     /// <summary>
     /// Calculates the effective solid angle of a spotlight cone, clamped to a maximum of 4pi steradians (full sphere).
     /// </summary>
-    public float ComputeConeSolidAngle()
+    public float ComputeConeSolidAngle() => ComputeConeSolidAngle(SpotOuterAngle, SpotInnerAngle);
+
+    /// <inheritdoc cref="ComputeConeSolidAngle()"/>
+    /// <param name="spotOuterAngle">The outer cone angle, in degrees.</param>
+    /// <param name="spotInnerAngle">The inner cone angle, in degrees.</param>
+    public static float ComputeConeSolidAngle(float spotOuterAngle, float spotInnerAngle)
     {
-        var outerRad = float.DegreesToRadians(Math.Clamp(SpotOuterAngle, 1f, 180f));
-        var innerRad = float.DegreesToRadians(Math.Clamp(SpotInnerAngle, 0f, SpotOuterAngle));
+        var outerRad = float.DegreesToRadians(Math.Clamp(spotOuterAngle, 1f, 180f));
+        var innerRad = float.DegreesToRadians(Math.Clamp(spotInnerAngle, 0f, spotOuterAngle));
 
         var avgCos = (MathF.Cos(outerRad) + MathF.Cos(innerRad)) * 0.5f;
         return MathF.Min(MathF.Tau * (1f - avgCos), 4f * MathF.PI);
     }
 
     /// <summary>
-    /// How much of the light, and of its shadows, is left after fading out with the fraction of the screen its bounds cover.
+    /// The fraction of the screen the light's bounds cover, from 0 to 1.
     /// </summary>
     /// <param name="cameraPosition">Position of the camera the light is seen from.</param>
     /// <param name="tanHalfHorizontalFov">Tangent of half the camera's horizontal field of view.</param>
-    internal (float Light, float Shadow) ComputeScreenSizeFades(Vector3 cameraPosition, float tanHalfHorizontalFov)
+    internal float ComputeScreenSize(Vector3 cameraPosition, float tanHalfHorizontalFov)
     {
         var bounds = PrecomputedFieldsValid ? PrecomputedBounds : new AABB(Position, Range);
-        var diagonal = Vector3.Distance(bounds.Min, bounds.Max);
+        var diagonal = PrecomputedFieldsValid ? PrecomputedBoundsDiagonal : Vector3.Distance(bounds.Min, bounds.Max);
         var distanceSq = Vector3.DistanceSquared(cameraPosition, bounds.Center);
 
         // Covers the whole screen with the camera close enough to be inside the bounds
-        var screenSize = diagonal * diagonal > distanceSq
+        return diagonal * diagonal > distanceSq
             ? 1f
             : MathUtils.Saturate(diagonal / (MathF.Sqrt(distanceSq) * tanHalfHorizontalFov));
+    }
 
+    /// <summary>The center of the light's bounds, which its distance to the camera is measured to.</summary>
+    internal Vector3 BoundsCenter => PrecomputedFieldsValid ? PrecomputedBounds.Center : Position;
+
+    /// <summary>
+    /// How much of the light, and of its shadows, is left after fading out with the fraction of the screen its bounds cover.
+    /// </summary>
+    /// <param name="screenSize">Result of <see cref="ComputeScreenSize"/>.</param>
+    internal (float Light, float Shadow) ComputeScreenSizeFades(float screenSize)
+    {
         float Fade(float start, float end) => 1f - MathUtils.Saturate((start - screenSize) / MathF.Max(1e-4f, start - end));
 
         return (Fade(FadeSizeStart, FadeSizeEnd), Fade(ShadowFadeSizeStart, ShadowFadeSizeEnd));
@@ -908,19 +965,17 @@ public class SceneLight(Scene scene) : SceneNode(scene)
     internal Vector3 ComputeOmni2Color()
         => ColorSpace.SrgbGammaToLinear(Color) * ComputeIntensity(this, 1f, 0f);
 
+    /// <summary>
+    /// The fade from full at <c>(1 - skirt) * range</c> to none at <paramref name="range"/>, as an offset and a
+    /// rate per unit of distance. A skirt that is not positive makes it a sharp cut at <c>(1 - skirt) * range</c>.
+    /// </summary>
     private static (float Offset, float Rate) ComputeDistanceFade(float range, float skirt)
     {
-        if (skirt <= 0f)
-        {
-            return (1f, 0f);
-        }
+        var fadeStart = (1f - skirt) * range;
+        var fadeEnd = MathF.Max(range, MathF.BitIncrement(fadeStart));
+        var fadeLength = fadeEnd - fadeStart;
 
-        if (skirt >= 1f)
-        {
-            return (1f, -1f / range);
-        }
-
-        return (1f / skirt, -1f / (range * skirt));
+        return (fadeEnd / fadeLength, -1f / fadeLength);
     }
 
     private static (float Bias, float Scale) ComputeAngleFade(float outerAngleDeg, float innerAngleDeg)

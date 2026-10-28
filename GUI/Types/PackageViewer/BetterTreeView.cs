@@ -1,18 +1,14 @@
 using System.Drawing;
 using System.Linq;
-using System.Text;
-using System.Text.RegularExpressions;
-using System.Threading.Tasks;
 using System.Windows.Forms;
 using GUI.Controls;
-using GUI.Forms;
 using GUI.Utils;
 using ValvePak;
 
 namespace GUI.Types.PackageViewer
 {
     /// <summary>
-    /// Represents a TreeView with the ability to have its contents searched.
+    /// Represents a TreeView of the folders in a package.
     /// </summary>
     partial class BetterTreeView : TreeViewDoubleBuffered
     {
@@ -214,138 +210,6 @@ namespace GUI.Types.PackageViewer
             extraSelectedNodes.Clear();
         }
 
-        /// <summary>
-        /// Performs a depth-first search on the tree's nodes in search of the passed value. The matching conditions are based on the passed search type parameter.
-        /// </summary>
-        /// <param name="value">Value to search for in the TreeView. Matching on this value is based on the search type.</param>
-        /// <param name="searchType">Determines the matching of the value. For example, full/partial text search or full path search.</param>
-        /// <returns>A collection of package entries that match the conditions based on the search type.</returns>
-        public List<PackageEntry> Search(string value, SearchType searchType)
-        {
-            var results = new List<PackageEntry>();
-
-            if (Root == null)
-            {
-                return results;
-            }
-
-            if (searchType == SearchType.FileNamePartialMatch || searchType == SearchType.FullPath)
-            {
-                value = value.Replace('\\', Package.DirectorySeparatorChar);
-            }
-
-            // If only file name search is selected, but entered text contains a slash, search full path
-            if (searchType == SearchType.FileNamePartialMatch && value.Contains(Package.DirectorySeparatorChar, StringComparison.Ordinal))
-            {
-                searchType = SearchType.FullPath;
-            }
-
-            if (searchType == SearchType.FileNameExactMatch)
-            {
-                bool MatchFunction(PackageEntry entry) => entry.GetFileName().Equals(value, StringComparison.OrdinalIgnoreCase);
-                Search(Root, results, MatchFunction);
-            }
-            else if (searchType == SearchType.FileNamePartialMatch)
-            {
-                bool MatchFunction(PackageEntry entry) => entry.GetFileName().Contains(value, StringComparison.OrdinalIgnoreCase);
-                Search(Root, results, MatchFunction);
-            }
-            else if (searchType == SearchType.FullPath)
-            {
-                bool MatchFunction(PackageEntry entry) => entry.GetFullPath().Contains(value, StringComparison.OrdinalIgnoreCase);
-                Search(Root, results, MatchFunction);
-            }
-            else if (searchType == SearchType.Regex)
-            {
-                var regex = new Regex(value, RegexOptions.CultureInvariant | RegexOptions.IgnoreCase);
-
-                bool MatchFunction(PackageEntry entry) => regex.IsMatch(entry.GetFileName());
-                Search(Root, results, MatchFunction);
-            }
-            else if (searchType == SearchType.FileContents)
-            {
-                SearchFileContents(results, Encoding.UTF8.GetBytes(value));
-            }
-            else if (searchType == SearchType.FileContentsHex)
-            {
-                // TODO: Optimize this
-                value = value.Replace(" ", "", StringComparison.Ordinal);
-
-                var bytes = Enumerable.Range(0, value.Length)
-                     .Where(x => x % 2 == 0)
-                     .Select(x => Convert.ToByte(value.Substring(x, 2), 16))
-                     .ToArray();
-
-                SearchFileContents(results, bytes);
-            }
-
-            return results;
-        }
-
-        /// <summary>
-        /// Performs a depth-first search on the virtual package node tree, adding entries for which the match function returns true. The matching conditions are based on the passed function.
-        /// </summary>
-        /// <param name="node">Node whose subtree is searched.</param>
-        /// <param name="results">List that receives the matching entries.</param>
-        /// <param name="matchFunction">Function which performs matching on each PackageEntry. Returns true if there's a match.</param>
-        private static void Search(VirtualPackageNode node, List<PackageEntry> results, Func<PackageEntry, bool> matchFunction)
-        {
-            foreach (var entry in node.Files)
-            {
-                if (matchFunction(entry))
-                {
-                    results.Add(entry);
-                }
-            }
-
-            foreach (var folder in node.Folders)
-            {
-                Search(folder.Value, results, matchFunction);
-            }
-        }
-
-        private void SearchFileContents(List<PackageEntry> results, byte[] pattern)
-        {
-            if (pattern.Length < 3)
-            {
-                throw new ArgumentException("Search input is too short.", nameof(pattern));
-            }
-
-            if (VrfGuiContext == null)
-            {
-                return;
-            }
-
-            if (VrfGuiContext.ParentGuiContext != null)
-            {
-                throw new InvalidOperationException("Inner paks are not supported.");
-            }
-
-            var package = VrfGuiContext.CurrentPackage;
-
-            if (package?.Entries == null)
-            {
-                return;
-            }
-
-            using var progressDialog = new GenericProgressForm
-            {
-                Text = "Searching file contents…"
-            };
-            progressDialog.OnProcess = cancellationToken =>
-            {
-                Log.Info(nameof(BetterTreeView), "Pattern search");
-
-                var matches = PackageContentSearch.Search(package, pattern, progressDialog, cancellationToken);
-                results.AddRange(matches);
-
-                Log.Info(nameof(BetterTreeView), $"Found {results.Count} matches");
-
-                return Task.CompletedTask;
-            };
-            progressDialog.ShowDialog();
-        }
-
         public void GenerateIconList(IEnumerable<string> extensions)
         {
             var defaultImage = AppIcons.Icons["File"];
@@ -359,7 +223,7 @@ namespace GUI.Types.PackageViewer
                     continue;
                 }
 
-                ExtensionIconList.Add(originalExtension, image);
+                ExtensionIconList.TryAdd(originalExtension, image);
             }
 
             FolderImage = AppIcons.Icons["Folder"];
@@ -392,9 +256,11 @@ namespace GUI.Types.PackageViewer
 
         public static VirtualPackageNode AddFileNode(VirtualPackageNode currentNode, PackageEntry file)
         {
-            if (!string.IsNullOrWhiteSpace(file.DirectoryName))
+            var directory = file.GetDirectoryPath();
+
+            if (directory.Length > 0)
             {
-                currentNode = AddFolderNode(currentNode, file.DirectoryName, file.TotalLength);
+                currentNode = AddFolderNode(currentNode, directory, file.TotalLength);
             }
 
             currentNode.Files.Add(file);

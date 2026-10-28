@@ -12,6 +12,7 @@ namespace ValveResourceFormat.Particles.Operators
         private readonly ParticleSetMethod setMethod = ParticleSetMethod.PARTICLE_SET_REPLACE_VALUE;
         private readonly INumberProvider lerp = new LiteralNumberProvider(1f);
         private readonly bool normalizedOutput;
+        private readonly bool clampsToUnit;
 
         public SetVec(ParticleDefinitionParser parse) : base(parse)
         {
@@ -20,26 +21,54 @@ namespace ValveResourceFormat.Particles.Operators
             setMethod = parse.Enum<ParticleSetMethod>("m_nSetMethod", setMethod);
             lerp = parse.NumberProvider("m_Lerp", lerp);
             normalizedOutput = parse.Boolean("m_bNormalizedOutput", normalizedOutput);
+            clampsToUnit = outputField is ParticleField.Color or ParticleField.GlowRgb;
 
+            AddInitialReadOf(parse, setMethod, outputField);
         }
+
+        /// <inheritdoc/>
+        public override ulong StoredFields => outputField.Mask();
+
         public override void Operate(ParticleCollection particles, float frameTime, ParticleSystemState particleSystemState, float strength)
         {
-            foreach (ref var particle in particles.Current)
+            var current = particles.Current;
+            var values = value.Prepare(current, particleSystemState);
+            var lerps = lerp.Fill(current, particleSystemState);
+
+            foreach (var (offset, block, lane) in current.InputBlocks())
             {
-                var value = this.value.NextVector(ref particle, particleSystemState);
-                var lerp = MathUtils.Saturate(this.lerp.NextNumber(ref particle, particleSystemState) * strength);
+                value.FillPerBlock(block, lane, particleSystemState, values[offset..]);
+            }
 
-                var currentValue = particle.ModifyVectorBySetMethod(particles, outputField, value, setMethod);
-                var initialValue = particle.GetVector(outputField);
+            if (!ParticleBuffer.IsVector(outputField))
+            {
+                return;
+            }
 
-                value = Vector3.Lerp(initialValue, currentValue, lerp);
+            var output = current.Vectors(outputField);
+            var initial = particles.Initial.ReadVectors(outputField);
+            var deltaTime = particleSystemState.CurrentStep;
 
-                if (normalizedOutput && value != Vector3.Zero)
+            for (var i = 0; i < output.Length; i++)
+            {
+                var lerpAmount = MathUtils.Saturate(lerps[i] * strength);
+
+                var currentValue = output[i];
+                var target = ParticleFieldExtensions.ApplySetMethod(values[i], initial[i], currentValue, deltaTime, setMethod);
+
+                if (clampsToUnit)
                 {
-                    value = MathUtils.SafeNormalize(value);
+                    target = Vector3.Clamp(target, Vector3.Zero, Vector3.One);
                 }
 
-                particle.SetVector(outputField, value);
+                var result = Vector3.Lerp(currentValue, target, lerpAmount);
+
+                if (normalizedOutput && result != Vector3.Zero)
+                {
+                    result = MathUtils.SafeNormalize(result);
+                }
+
+                output[i] = result;
             }
         }
     }

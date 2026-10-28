@@ -3,6 +3,7 @@ using Microsoft.Extensions.Logging;
 using ValveResourceFormat.Blocks;
 using ValveResourceFormat.Renderer.SceneNodes;
 using ValveResourceFormat.Renderer.Utils;
+using ValveResourceFormat.Renderer.World;
 using ValveResourceFormat.ResourceTypes;
 using ValveResourceFormat.Serialization.KeyValues;
 using Entity = ValveResourceFormat.ResourceTypes.EntityLump.Entity;
@@ -10,15 +11,13 @@ using Entity = ValveResourceFormat.ResourceTypes.EntityLump.Entity;
 namespace ValveResourceFormat.Renderer.Entities;
 
 /// <summary>
-/// Everything <see cref="EntityFactory"/> needs to spawn an entity: its keyvalues, the transform of its
-/// spawner, its visibility layer, and its scene.
+/// Everything <see cref="EntityFactory"/> needs to spawn an entity: its keyvalues, its visibility layer, and
+/// the spawn group spawning it.
 /// </summary>
 /// <param name="Data">The entity's keyvalues, as authored in the map.</param>
-/// <param name="ParentTransform">Transform of the spawner (a template or spawn group placement, identity for map entities), applied to the authored origin and angles.</param>
 /// <param name="LayerName">Visibility layer for this entity and every node it creates.</param>
-/// <param name="Scene">The scene the entity's nodes render into.</param>
-/// <param name="NameFixup">What the spawning group puts in place of the markers in the entity's names.</param>
-public readonly record struct EntitySpawnInfo(Entity Data, Matrix4x4 ParentTransform, string? LayerName, Scene Scene, EntityNameFixup NameFixup);
+/// <param name="SpawnGroup">The spawn group spawning the entity, whose scene its nodes render into and whose placement moves its authored origin and angles.</param>
+public readonly record struct EntitySpawnInfo(Entity Data, string? LayerName, SpawnGroup SpawnGroup);
 
 /// <summary>
 /// The base of the simulated entities. Ticks inside <see cref="EntitySystem"/> and owns the scene nodes
@@ -67,6 +66,12 @@ public abstract class BaseEntity
 
     /// <summary>Gets what the spawning group put in place of the markers in this entity's names.</summary>
     public EntityNameFixup NameFixup { get; } = EntityNameFixup.None;
+
+    /// <summary>
+    /// Gets the spawn group that owns the entity and removes it when it unloads, or <see langword="null"/> for
+    /// an entity created at runtime.
+    /// </summary>
+    public SpawnGroup? SpawnGroup { get; }
 
     /// <summary>
     /// Gets <see cref="SpawnData"/>, throwing for an entity created at runtime. A class that can be
@@ -124,8 +129,8 @@ public abstract class BaseEntity
     private const float PushStepSize = 18f;
 
     /// <summary>
-    /// Resolves <c>parentname</c> once everything has spawned, making the authored world pose local to the
-    /// parent.
+    /// Resolves <c>parentname</c> once the spawn group has created its entities, making the authored world
+    /// pose local to the parent. An attachment is linked later, by <see cref="LinkMoveParentAttachment"/>.
     /// </summary>
     internal void ResolveMoveParent()
     {
@@ -155,11 +160,14 @@ public abstract class BaseEntity
 
         foreach (var candidate in EntitySystem.FindAllByTargetNameInWorldGroup(parentName, Scene))
         {
-            if (candidate != this)
-            {
-                MoveParent = candidate;
-                break;
-            }
+            MoveParent = candidate;
+            break;
+        }
+
+        if (MoveParent == this)
+        {
+            EntitySystem.Logger.LogWarning("{Classname} '{TargetName}' is parented to itself", Classname, TargetName);
+            MoveParent = null;
         }
 
         if (MoveParent == null)
@@ -170,53 +178,74 @@ public abstract class BaseEntity
         // Its world pose has to be final before this one is made relative to it
         EntitySystem.ResolveMoveParentChain(MoveParent);
 
-        var data = Data!;
-        var useLocalOffset = data.GetBooleanProperty("uselocaloffset");
-        var authoredLocalOrigin = data.GetVector3Property("local.origin");
-        var authoredLocalAngles = data.GetVector3Property("local.angles");
-
-        if (!string.IsNullOrEmpty(attachmentName) && attachmentName != "!absorigin"
-            && MoveParent is BaseModelEntity { ModelNode: { } parentModel } && parentModel.HasAttachmentOrBone(attachmentName))
+        if (IsMoveAncestor(MoveParent))
         {
-            parentFrameKind = ParentFrameKind.Attachment;
-            parentAttachmentName = attachmentName;
-
-            // Snapped onto the attachment unless an offset from it was authored
-            if (useLocalOffset)
-            {
-                SetPose(authoredLocalOrigin, authoredLocalAngles);
-            }
-            else
-            {
-                SetPose(Vector3.Zero, Vector3.Zero);
-            }
-
-            AttachToParentModel(parentModel);
+            EntitySystem.Logger.LogWarning("{Classname} '{TargetName}' is parented to '{ParentName}', which is parented back to it",
+                Classname, TargetName, MoveParent.TargetName);
+            MoveParent = null;
+            return;
         }
-        else
+
+        var data = Data!;
+        var world = RigidTransform;
+
+        parentFrameKind = ParentFrameKind.Entity;
+
+        if (data.GetBooleanProperty("uselocaloffset"))
         {
-            if (!string.IsNullOrEmpty(attachmentName) && attachmentName != "!absorigin")
-            {
-                EntitySystem.Logger.LogWarning("{Classname} '{TargetName}' is parented to {AttachmentName} on '{ParentName}', which has no such attachment or bone",
-                    Classname, TargetName, attachmentName, MoveParent.TargetName);
-            }
+            SetPose(data.GetVector3Property("local.origin"), data.GetVector3Property("local.angles"));
+        }
+        else if (!data.GetBooleanProperty("positioninlocalspace"))
+        {
+            // Keeps the authored world pose, now relative to the parent
+            SetWorldPose(world);
+        }
 
-            var world = RigidTransform;
-
-            parentFrameKind = ParentFrameKind.Entity;
-
-            if (useLocalOffset)
-            {
-                SetPose(authoredLocalOrigin, authoredLocalAngles);
-            }
-            else if (!data.GetBooleanProperty("positioninlocalspace"))
-            {
-                // Keeps the authored world pose, now relative to the parent
-                SetWorldPose(world);
-            }
+        // The parent's model only exists once it has spawned, so the attachment is linked as this one spawns
+        if (!string.IsNullOrEmpty(attachmentName) && attachmentName != "!absorigin")
+        {
+            parentAttachmentName = attachmentName;
         }
 
         MoveParent.moveChildren.Add(this);
+
+        SnapInterpolation();
+    }
+
+    /// <summary>
+    /// Snaps onto the attachment named by <c>parentattachmentname</c>, once the parent has spawned and this
+    /// entity has built its own nodes.
+    /// </summary>
+    private void LinkMoveParentAttachment()
+    {
+        if (parentAttachmentName == null || MoveParent == null)
+        {
+            return;
+        }
+
+        if (MoveParent is not BaseModelEntity { ModelNode: { } parentModel } || !parentModel.HasAttachmentOrBone(parentAttachmentName))
+        {
+            EntitySystem.Logger.LogWarning("{Classname} '{TargetName}' is parented to {AttachmentName} on '{ParentName}', which has no such attachment or bone",
+                Classname, TargetName, parentAttachmentName, MoveParent.TargetName);
+            parentAttachmentName = null;
+            return;
+        }
+
+        parentFrameKind = ParentFrameKind.Attachment;
+
+        var data = Data!;
+
+        // Snapped onto the attachment unless an offset from it was authored
+        if (data.GetBooleanProperty("uselocaloffset"))
+        {
+            SetPose(data.GetVector3Property("local.origin"), data.GetVector3Property("local.angles"));
+        }
+        else
+        {
+            SetPose(Vector3.Zero, Vector3.Zero);
+        }
+
+        AttachToParentModel(parentModel);
 
         SnapInterpolation();
     }
@@ -314,8 +343,8 @@ public abstract class BaseEntity
     public bool IsTrigger { get; set; }
 
     /// <summary>
-    /// Gets or sets whether the entity's geometry is drawn. Every node it owns follows through
-    /// <see cref="SceneNode.Visible"/>.
+    /// Gets or sets whether the game draws the entity's geometry. Every node it owns follows through
+    /// <see cref="SceneNode.Visible"/>, unless a stopped <see cref="EntitySystem.Enabled"/> keeps it shown.
     /// </summary>
     public bool IsDrawn
     {
@@ -326,10 +355,13 @@ public abstract class BaseEntity
 
             foreach (var node in ownedNodes)
             {
-                node.Visible = value;
+                node.Visible = IsShown;
             }
         }
     } = true;
+
+    /// <summary>Gets whether the entity's geometry ends up shown, which in an editor it is even while the game hides it.</summary>
+    public bool IsShown => IsDrawn || !EntitySystem.Enabled;
 
     /// <summary>
     /// Gets whether the entity currently takes part in collision traces, which are only made in the main
@@ -361,12 +393,15 @@ public abstract class BaseEntity
     /// <summary>Initializes the entity from its keyvalues.</summary>
     protected BaseEntity(EntitySystem system, EntitySpawnInfo spawnInfo)
     {
+        var spawnGroup = spawnInfo.SpawnGroup;
+
         EntitySystem = system;
-        Scene = spawnInfo.Scene;
+        Scene = spawnGroup.Scene;
         Data = spawnInfo.Data;
-        NameFixup = spawnInfo.NameFixup;
+        NameFixup = spawnGroup.NameFixup;
+        SpawnGroup = spawnGroup.Owner ?? spawnGroup;
         SpawnData = NameFixup.Apply(spawnInfo.Data);
-        SpawnTransform = spawnInfo.ParentTransform;
+        SpawnTransform = spawnGroup.Transform;
         var data = SpawnData;
 
         Classname = data.GetStringProperty("classname") ?? string.Empty;
@@ -377,12 +412,13 @@ public abstract class BaseEntity
         ModelName = data.GetStringProperty("model");
 
         // Authored in the world of the map they were compiled in, and moved with whatever placed it
-        var authored = EntityTransformHelper.ToRigidTransformationMatrix(data.GetVector3Property("angles"), data.GetVector3Property("origin"))
-            * spawnInfo.ParentTransform;
+        var authoredAngles = data.GetVector3Property("angles");
+        var authored = EntityTransformHelper.ToRigidTransformationMatrix(authoredAngles, data.GetVector3Property("origin"))
+            * SpawnTransform;
 
         origin = authored.Translation;
-        angles = spawnInfo.ParentTransform.IsIdentity
-            ? data.GetVector3Property("angles")
+        angles = SpawnTransform.IsIdentity
+            ? authoredAngles
             : EntityTransformHelper.ToEulerAngles(Quaternion.CreateFromRotationMatrix(authored));
         previousOrigin = origin;
         previousAngles = angles;
@@ -390,15 +426,6 @@ public abstract class BaseEntity
         LayerName = spawnInfo.LayerName;
 
         UpdateTransform();
-
-        // Last, so the override reads a fully built entity. Only the field initializers of the deriving
-        // class have run by now, which is all any override here needs.
-        RootNode = CreateRootNode();
-
-        if (RootNode != null)
-        {
-            AddNode(RootNode);
-        }
     }
 
     /// <summary>
@@ -454,30 +481,45 @@ public abstract class BaseEntity
     /// <param name="playedByEntity">Whether the entity sets the control points, rather than the effect's own configuration.</param>
     /// <returns>The effect, or <see langword="null"/> when there is none or it failed to load.</returns>
     protected ParticleSceneNode? CreateEffect(string? effectName, ParticleSnapshot? snapshot = null, bool playedByEntity = true)
+        => CreateEffect(Scene, effectName, Transform, snapshot, playedByEntity, Classname, TargetName);
+
+    /// <summary>Loads an effect on the particles layer of a scene, for an entity of a class.</summary>
+    /// <param name="scene">The scene the effect is for.</param>
+    /// <param name="effectName">The effect, or <see langword="null"/> or empty for none.</param>
+    /// <param name="transform">Where the effect is placed.</param>
+    /// <param name="snapshot">A snapshot the effect starts from, such as a rope's points.</param>
+    /// <param name="playedByEntity">Whether the entity sets the control points, rather than the effect's own configuration.</param>
+    /// <param name="classname">Classname of the entity, for the log.</param>
+    /// <param name="targetName">Name of the entity, for the log.</param>
+    /// <returns>The effect, or <see langword="null"/> when there is none or it failed to load.</returns>
+    internal static ParticleSceneNode? CreateEffect(Scene scene, string? effectName, in Matrix4x4 transform, ParticleSnapshot? snapshot,
+        bool playedByEntity, string classname, string? targetName)
     {
         if (string.IsNullOrEmpty(effectName))
         {
             return null;
         }
 
-        if (EntitySystem.FileLoader.LoadFileCompiled(effectName)?.DataBlock is not ParticleSystem particleSystem)
+        var rendererContext = scene.RendererContext;
+
+        if (rendererContext.FileLoader.LoadFileCompiled(effectName)?.DataBlock is not ParticleSystem particleSystem)
         {
-            EntitySystem.Logger.LogWarning("{Classname} '{TargetName}' failed to load effect \"{Effect}\"", Classname, TargetName, effectName);
+            rendererContext.Logger.LogWarning("{Classname} '{TargetName}' failed to load effect \"{Effect}\"", classname, targetName, effectName);
             return null;
         }
 
         try
         {
-            return new ParticleSceneNode(Scene, particleSystem, snapshot, playedByEntity: playedByEntity)
+            return new ParticleSceneNode(scene, particleSystem, snapshot, playedByEntity: playedByEntity)
             {
                 Name = effectName,
-                Transform = Transform,
+                Transform = transform,
                 LayerName = Scene.ParticlesLayerName,
             };
         }
-        catch (Exception e)
+        catch (Exception e) when (e is not OperationCanceledException)
         {
-            EntitySystem.Logger.LogError(e, "{Classname} '{TargetName}' failed to set up effect \"{Effect}\"", Classname, TargetName, effectName);
+            rendererContext.Logger.LogError(e, "{Classname} '{TargetName}' failed to set up effect \"{Effect}\"", classname, targetName, effectName);
             return null;
         }
     }
@@ -492,15 +534,27 @@ public abstract class BaseEntity
         => (SpawnFlags & Unsafe.BitCast<TSpawnFlags, uint>(flags)) != 0;
 
     /// <summary>
-    /// Sets up the entity (model, class keyvalues, first think). Called by <see cref="EntityFactory"/>
-    /// right after construction, before the entity enters the world.
+    /// Sets up the entity (model, class keyvalues, first think). Called once its spawn group has created all of
+    /// its entities, after its move parent has spawned.
     /// </summary>
+    /// <remarks>
+    /// An override calls this first: it builds the node from <see cref="CreateRootNode"/> and snaps the entity
+    /// onto its parent's attachment, which the rest of the override reads.
+    /// </remarks>
     public virtual void Spawn()
     {
+        RootNode = CreateRootNode();
+
+        if (RootNode != null)
+        {
+            AddNode(RootNode);
+        }
+
+        LinkMoveParentAttachment();
     }
 
     /// <summary>
-    /// Called once every entity in the map has spawned, to resolve other entities by name.
+    /// Called once every entity of its spawn group has spawned, to resolve other entities by name.
     /// </summary>
     public virtual void Activate()
     {
@@ -886,6 +940,19 @@ public abstract class BaseEntity
 
             return root;
         }
+    }
+
+    private bool IsMoveAncestor(BaseEntity entity)
+    {
+        for (var ancestor = entity; ancestor != null; ancestor = ancestor.MoveParent)
+        {
+            if (ancestor == this)
+            {
+                return true;
+            }
+        }
+
+        return false;
     }
 
     /// <summary>
@@ -1337,7 +1404,7 @@ public abstract class BaseEntity
         }
 
         // Only the hidden state is imposed, so a node that manages its own Visible keeps it while drawn
-        if (!IsDrawn)
+        if (!IsShown)
         {
             node.Visible = false;
         }

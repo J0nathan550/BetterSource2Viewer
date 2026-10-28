@@ -21,8 +21,11 @@ namespace ValveResourceFormat.Renderer
         Water,
         /// <summary>Translucent (alpha-blended) pass.</summary>
         Translucent,
-        /// <summary>Selection outline pass.</summary>
-        Outline,
+        /// <summary>
+        /// Every part of a node at once, whatever pass it would draw in, for drawing chosen nodes again with a
+        /// replacement shader.
+        /// </summary>
+        All,
     }
 
     /// <summary>
@@ -38,6 +41,9 @@ namespace ValveResourceFormat.Renderer
 
         /// <summary>Effects rendered in the bloom buffer.</summary>
         Bloom,
+
+        /// <summary>Effects drawn over the finished scene through the fixed screen-space view.</summary>
+        ScreenSpace,
     }
 
     /// <summary>
@@ -71,6 +77,15 @@ namespace ValveResourceFormat.Renderer
         /// instead of the scene, so the geometry only shows as glow.
         /// </summary>
         EffectsBloom = 1 << 5,
+
+        /// <summary>Draws in the tools pass, over the final image after post processing.</summary>
+        Tools = 1 << 6,
+
+        /// <summary>
+        /// Draws in the translucent pass of the screen-space layer, over the finished scene and through the
+        /// fixed screen-space view rather than the scene camera. Such a node is never culled.
+        /// </summary>
+        ScreenSpace = 1 << 7,
 
         /// <summary>Draws in the opaque and translucent passes, the default for a node that draws itself.</summary>
         Default = Opaque | Translucent,

@@ -6,6 +6,11 @@ namespace ValveResourceFormat.Particles.Operators
     /// Drives a vector field to <c>m_vecOutput</c> over <c>m_flLerpTime</c>, starting from whatever each
     /// particle held on the operator's first endcap frame.
     /// </summary>
+    /// <remarks>
+    /// Only the X component is captured at the start of the endcap; Y and Z lerp from the particle's
+    /// spawn value. The run strength compounds along the particle list, so particle <c>i</c> lerps by
+    /// <c>t * strength^(i + 1)</c>.
+    /// </remarks>
     /// <seealso href="https://s2v.app/SchemaExplorer/cs2/particles/C_OP_LerpEndCapVector">C_OP_LerpEndCapVector</seealso>
     class LerpEndCapVector : ParticleFunctionOperator
     {
@@ -20,12 +25,20 @@ namespace ValveResourceFormat.Particles.Operators
             outputField = parse.ParticleField("m_nFieldOutput", outputField);
             output = parse.Vector3("m_vecOutput", output);
             lerpTime = parse.Float("m_flLerpTime", lerpTime);
+
+            parse.AddInitialRead(outputField);
         }
 
         public override void Reset()
         {
             startAge = -1f;
         }
+
+        /// <inheritdoc/>
+        public override ulong StoredFields => outputField.Mask();
+
+        /// <inheritdoc/>
+        public override ulong InitialWrittenFields => outputField.Mask();
 
         public override void Operate(ParticleCollection particles, float frameTime, ParticleSystemState particleSystemState, float strength)
         {
@@ -34,13 +47,21 @@ namespace ValveResourceFormat.Particles.Operators
                 return;
             }
 
+            if (!ParticleBuffer.IsVector(outputField))
+            {
+                return;
+            }
+
+            var values = particles.Current.Vectors(outputField);
+            var initialValues = particles.Initial.Vectors(outputField);
+
             if (startAge < 0f)
             {
                 startAge = particleSystemState.Age;
 
-                foreach (ref var particle in particles.Current)
+                for (var i = 0; i < values.Length; i++)
                 {
-                    particle.SetInitialVector(particles, outputField, particle.GetVector(outputField));
+                    initialValues[i].X = values[i].X;
                 }
             }
 
@@ -52,9 +73,10 @@ namespace ValveResourceFormat.Particles.Operators
                 return;
             }
 
-            foreach (ref var particle in particles.Current)
+            for (var i = 0; i < values.Length; i++)
             {
-                particle.SetVector(outputField, Vector3.Lerp(particle.GetInitialVector(particles, outputField), output, t * strength));
+                t *= strength;
+                values[i] = MathUtils.Lerp(initialValues[i], output, t);
             }
         }
     }

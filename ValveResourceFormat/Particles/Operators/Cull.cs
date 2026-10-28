@@ -1,3 +1,5 @@
+using ValveResourceFormat.Particles.Utils;
+
 namespace ValveResourceFormat.Particles.Operators
 {
     /// <summary>
@@ -22,20 +24,28 @@ namespace ValveResourceFormat.Particles.Operators
 
         public override void Operate(ParticleCollection particles, float frameTime, ParticleSystemState particleSystemState, float strength)
         {
-            foreach (ref var particle in particles.Current)
+            var chance = strength * cullPercentage;
+
+            var current = particles.Current;
+            var ages = current.ReadAges();
+            var lifetimes = current.ReadFloats(ParticleField.LifeDuration);
+
+            for (var i = 0; i < current.Length; i++)
             {
                 // Both draws are taken for every particle, whether or not it goes on to be culled
                 var cullChance = particleSystemState.Random.Next();
                 var cullTime = particleSystemState.Random.NextWithExponentBetween(cullExponent, cullStart, cullEnd);
 
-                if (cullChance >= cullPercentage)
+                if (cullChance > chance)
                 {
                     continue;
                 }
 
-                if (particle.NormalizedAge >= cullTime)
+                var age = ParticleMath.ClampToUnit(ages[i] / lifetimes[i]);
+
+                if (age >= cullStart && cullEnd >= age && age >= cullTime)
                 {
-                    particle.Kill();
+                    KillCulled(particles, i, particleSystemState);
                 }
             }
         }

@@ -84,8 +84,8 @@ namespace Tests.Formats
             {
                 await Assert.That(deserializedBinaryKV3.SerializationVersion).IsEqualTo(version);
                 await Assert.That(deserializedBinaryKV3.SerializationCompressionMethod).IsEqualTo(compressionMethod);
-                await Assert.That(deserializedBinaryKV3.Data.Root["smallBlob"].AsBlob()).IsEquivalentTo(smallBlob, CollectionOrdering.Matching);
-                await Assert.That(deserializedBinaryKV3.Data.Root["largeBlob"].AsBlob()).IsEquivalentTo(largeBlob, CollectionOrdering.Matching);
+                await Assert.That(deserializedBinaryKV3.Data.Root["smallBlob"].AsBlob()).IsEquivalentTo(smallBlob, EqualityComparer<byte>.Default, CollectionOrdering.Matching);
+                await Assert.That(deserializedBinaryKV3.Data.Root["largeBlob"].AsBlob()).IsEquivalentTo(largeBlob, EqualityComparer<byte>.Default, CollectionOrdering.Matching);
                 await Assert.That(deserializedBinaryKV3.Data.Root["emptyBlob"].AsBlob()).IsEmpty();
                 await Assert.That((string)deserializedBinaryKV3.Data.Root["stringValue"]).IsEqualTo("hello world");
                 await Assert.That(deserializedBinaryKV3.Data.Root["stringThatIsAResourceReference"].Flag).IsEqualTo(KVFlag.Resource);
@@ -100,6 +100,38 @@ namespace Tests.Formats
                 await Assert.That(deserializedBinaryKV3.Data.Root["emptyArray"]).IsEmpty();
                 await Assert.That(deserializedBinaryKV3.Data.Root["emptyObject"]).IsEmpty();
                 await Assert.That(deserializedBinaryKV3.Data.ToKV3String()).IsEqualTo(originalFile.ToKV3String());
+            }
+        }
+
+        [Test]
+        [Arguments("explosion_barrel_kv0_lz4.vpcf_c")]
+        [Arguments("plaster_impact_fx.vpcf_c")]
+        [Arguments("node000_kv3_v2_zstd.vwnod_c")]
+        [Arguments("slork_kv3_v5_zstd.vanmgrph_c")]
+        public async Task TestResourceAnyBlockContents(string fileName)
+        {
+            var file = TestFixtures.Path(fileName);
+            var stored = await File.ReadAllBytesAsync(file);
+            using var resource = new Resource();
+            resource.Read(file);
+
+            using var searchable = new MemoryStream();
+            using var sourceStream = File.OpenRead(file);
+            var found = Resource.AnyBlockContents(sourceStream, buffer =>
+            {
+                searchable.Write(buffer);
+                return false;
+            });
+
+            var binaryKV3 = ReadBinaryKV3Block(sourceStream, resource.DataBlock!);
+            var keys = binaryKV3.Data.Root.Select(static child => Encoding.UTF8.GetBytes(child.Key)).ToList();
+            var searchableBytes = searchable.ToArray();
+
+            using (Assert.Multiple())
+            {
+                await Assert.That(found).IsFalse();
+                await Assert.That(keys.All(key => searchableBytes.AsSpan().IndexOf(key) >= 0)).IsTrue();
+                await Assert.That(keys.Any(key => stored.AsSpan().IndexOf(key) < 0)).IsTrue();
             }
         }
 
@@ -146,7 +178,7 @@ namespace Tests.Formats
 
                 for (var i = 0; i < expectedBlobs.Count; i++)
                 {
-                    await Assert.That(actualBlobs[i]).IsEquivalentTo(expectedBlobs[i], CollectionOrdering.Matching).Because($"Blob {i}");
+                    await Assert.That(actualBlobs[i]).IsEquivalentTo(expectedBlobs[i], EqualityComparer<byte>.Default, CollectionOrdering.Matching).Because($"Blob {i}");
                 }
             }
         }
@@ -233,9 +265,9 @@ namespace Tests.Formats
 
             using (Assert.Multiple())
             {
-                await Assert.That(deserializedBinaryKV3.Data.Root[0]!.AsBlob()).IsEquivalentTo(firstBlob, CollectionOrdering.Matching);
-                await Assert.That(deserializedBinaryKV3.Data.Root[1]!.AsBlob()).IsEquivalentTo(secondBlob, CollectionOrdering.Matching);
-                await Assert.That(deserializedBinaryKV3.Data.Root[2]!.AsBlob()).IsEquivalentTo(thirdBlob, CollectionOrdering.Matching);
+                await Assert.That(deserializedBinaryKV3.Data.Root[0]!.AsBlob()).IsEquivalentTo(firstBlob, EqualityComparer<byte>.Default, CollectionOrdering.Matching);
+                await Assert.That(deserializedBinaryKV3.Data.Root[1]!.AsBlob()).IsEquivalentTo(secondBlob, EqualityComparer<byte>.Default, CollectionOrdering.Matching);
+                await Assert.That(deserializedBinaryKV3.Data.Root[2]!.AsBlob()).IsEquivalentTo(thirdBlob, EqualityComparer<byte>.Default, CollectionOrdering.Matching);
             }
         }
 
@@ -287,7 +319,7 @@ namespace Tests.Formats
             {
                 await Assert.That(firstFrameContentSize).IsEqualTo((ulong)sizeUncompressed);
                 await Assert.That(secondFrameContentSize).IsEqualTo(4UL);
-                await Assert.That(deserializedBinaryKV3.Data.Root["blob"].AsBlob()).IsEquivalentTo(new byte[] { 1, 2, 3, 4 }, CollectionOrdering.Matching);
+                await Assert.That(deserializedBinaryKV3.Data.Root["blob"].AsBlob()).IsEquivalentTo(new byte[] { 1, 2, 3, 4 }, EqualityComparer<byte>.Default, CollectionOrdering.Matching);
                 await Assert.That((string)deserializedBinaryKV3.Data.Root["value"]).IsEqualTo("hello");
             }
         }

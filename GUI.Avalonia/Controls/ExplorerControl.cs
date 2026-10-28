@@ -197,14 +197,7 @@ namespace GUI.Controls
                     return false;
                 }
 
-                if (!Regexes.VpkNumberArchive().IsMatch(entry.FileName))
-                {
-                    return true;
-                }
-
-                // If we matched dota_683.vpk, make sure dota_dir.vpk exists before excluding it from results
-                var fixedPackage = $"{entry.ToFullPath()[..^8]}_dir.vpk";
-                return !File.Exists(fixedPackage);
+                return !PackageFileNames.IsArchiveChunk(entry.ToFullPath());
             }
 
             var games = SteamGames.DistinctBy(static game => game.GamePath, StringComparer.OrdinalIgnoreCase).ToList();

@@ -1,6 +1,4 @@
 using System.Linq;
-using System.Runtime.InteropServices;
-using SharpGLTF.Memory;
 using SharpGLTF.Schema2;
 using ValveResourceFormat.ResourceTypes.ModelAnimation;
 
@@ -32,9 +30,8 @@ public partial class GltfModelExporter
     {
         var (translation, rotation) = BakeConversion(bone.Position, bone.Angle, isRoot);
 
-        var node = parent.CreateNode(bone.Name)
-            .WithLocalTranslation(translation)
-            .WithLocalRotation(rotation);
+        var node = parent.CreateNode(bone.Name);
+        node.LocalTransform = node.LocalTransform.WithTranslation(translation).WithRotation(rotation);
         joints[bone.Index] = node;
 
         foreach (var child in bone.Children)
@@ -43,7 +40,7 @@ public partial class GltfModelExporter
         }
     }
 
-    private static Node CreateSkeletonVisualizationMesh(ModelRoot exportedModel, Scene scene, Skeleton skeleton, Node[] joints)
+    private static void CreateSkeletonVisualizationMesh(ModelRoot exportedModel, Scene scene, Skeleton skeleton, Node[] joints, string skeletonName)
     {
         var positions = new List<Vector3>();
         var normals = new List<Vector3>();
@@ -73,37 +70,33 @@ public partial class GltfModelExporter
 
         var positionAccessor = CreateAccessor(exportedModel, [.. positions]);
         var normalAccessor = CreateAccessor(exportedModel, [.. normals]);
-        var weightsAccessor = CreateAccessor(exportedModel, [.. boneWeights]);
-
-        // Create JOINTS accessor with UInt16 format
-        var jointsBufferView = exportedModel.CreateBufferView(2 * boneIndicesShort.Count, 8, BufferMode.ARRAY_BUFFER);
-        var bufferViewShorts = MemoryMarshal.Cast<byte, ushort>(((Memory<byte>)jointsBufferView.Content).Span);
-        for (var i = 0; i < boneIndicesShort.Count; i++)
-        {
-            bufferViewShorts[i] = boneIndicesShort[i];
-        }
-
-        var jointsAccessor = exportedModel.CreateAccessor();
-        jointsAccessor.SetVertexData(jointsBufferView, 0, positions.Count, new AttributeFormat(DimensionType.VEC4, EncodingType.UNSIGNED_SHORT));
+        var weightsAccessor = CreateUnorm8Accessor(exportedModel, [.. boneWeights]);
+        var jointsAccessor = CreateJointsAccessor(exportedModel, [.. boneIndicesShort]);
 
         primitive.SetVertexAccessor("POSITION", positionAccessor);
         primitive.SetVertexAccessor("NORMAL", normalAccessor);
         primitive.SetVertexAccessor("JOINTS_0", jointsAccessor);
         primitive.SetVertexAccessor("WEIGHTS_0", weightsAccessor);
 
-        primitive.WithIndicesAccessor(PrimitiveType.POINTS, indices);
+        SetIndices(primitive, PrimitiveType.POINTS, indices);
 
         // Reuse skeleton material if it already exists
         var material = exportedModel.LogicalMaterials.FirstOrDefault(m => m.Name == "skeleton_material");
         if (material == null)
         {
             material = exportedModel.CreateMaterial("skeleton_material");
-            material.WithPBRMetallicRoughness(new Vector4(0.8f, 0.8f, 0.8f, 1.0f), null, metallicFactor: 0.0f);
+            material.InitializePBRMetallicRoughness();
+            SetMetallicRoughness(material, new Vector4(0.8f, 0.8f, 0.8f, 1.0f), metallicFactor: 0.0f);
             material.Alpha = AlphaMode.OPAQUE;
         }
 
-        primitive.WithMaterial(material);
+        primitive.Material = material;
 
-        return scene.CreateNode().WithSkinnedMesh(mesh, Matrix4x4.Identity, joints);
+        var skin = exportedModel.CreateSkin();
+        skin.BindJoints(Matrix4x4.Identity, joints);
+
+        var meshNode = scene.CreateNode($"{skeletonName}.empty_mesh_reference");
+        meshNode.Mesh = mesh;
+        meshNode.Skin = skin;
     }
 }

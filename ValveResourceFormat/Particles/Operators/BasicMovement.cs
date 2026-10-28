@@ -1,3 +1,5 @@
+using ValveResourceFormat.Particles.Utils;
+
 namespace ValveResourceFormat.Particles.Operators
 {
     /// <summary>
@@ -12,16 +14,36 @@ namespace ValveResourceFormat.Particles.Operators
     {
         private readonly IVectorProvider gravity = new LiteralVectorProvider(Vector3.Zero);
         private readonly INumberProvider drag = new LiteralNumberProvider(0);
+        private readonly int maxConstraintPasses = 3;
 
         public BasicMovement(ParticleDefinitionParser parse) : base(parse)
         {
             gravity = parse.VectorProvider("m_Gravity", gravity);
             drag = parse.NumberProvider("m_fDrag", drag);
+            maxConstraintPasses = parse.Int32("m_nMaxConstraintPasses", maxConstraintPasses);
         }
+
+        /// <inheritdoc/>
+        public override ulong StoredFields => ParticleField.Position.Mask() | ParticleField.PositionPrevious.Mask();
 
         public override void Operate(ParticleCollection particles, float frameTime, ParticleSystemState particleSystemState, float strength)
         {
-            // Force generators run from here and add to ForceAccumulator before integration.
+            // Gravity is set up before the drag is evaluated and read after it, so only an input drawing per block
+            // draws after the drag
+            var setUpGravity = gravity.DrawsPerBlock ? Vector3.Zero : gravity.NextVector(particleSystemState);
+
+            var timeStepSquared = frameTime * frameTime;
+            var dragValue = Math.Clamp(drag.NextNumber(particleSystemState), 0f, 1f - ParticleMath.FloatEpsilon);
+            var stepRatio = particleSystemState.PreviousStep > 0f ? frameTime / particleSystemState.PreviousStep : 1f;
+            var dragFactor = stepRatio * MathF.Pow(1f - dragValue, frameTime * 30f);
+
+            var gravityAcceleration = gravity.DrawsPerBlock ? gravity.NextVector(particleSystemState) : setUpGravity;
+
+            var current = particles.Current;
+            var forces = ParticleScratch.Vectors(current.Length);
+            forces.Clear();
+
+            // Force generators run from here and add into the accumulator before integration.
             var forceGenerators = particleSystemState.Data?.ForceGenerators;
             if (forceGenerators != null)
             {
@@ -34,33 +56,26 @@ namespace ValveResourceFormat.Particles.Operators
                         continue;
                     }
 
-                    forceGenerator.GenerateForces(particles, frameTime, particleSystemState, forceStrength);
+                    forceGenerator.MovementGravity = gravityAcceleration;
+                    forceGenerator.GenerateForces(particles, forces, frameTime, particleSystemState, forceStrength);
                 }
             }
 
-            var timeStepSquared = frameTime * frameTime;
-            var gravityMovement = gravity.NextVector(particleSystemState) * timeStepSquared;
-            var dragValue = Math.Clamp(drag.NextNumber(particleSystemState), 0.0f, 0.9999999f);
-            var dragFactor = MathF.Exp(MathF.Log(1.0f - dragValue) / (1.0f / 30.0f) * frameTime);
-            // Scale the inertia term by the current-to-previous step ratio so momentum stays
-            // framerate-independent; the ratio is 1 whenever the step is fixed (pre-simulation) or steady.
-            if (particles.PreviousFrameTime > 0f)
-            {
-                dragFactor *= frameTime / particles.PreviousFrameTime;
-            }
+            var positions = current.Vectors(ParticleField.Position);
+            var previousPositions = current.Vectors(ParticleField.PositionPrevious);
+            var forceScales = current.ReadFloats(ParticleField.ForceScale);
 
-            foreach (ref var particle in particles.Current)
+            for (var i = 0; i < current.Length; i++)
             {
                 // ForceScale (per-particle) weights the applied forces; 0 = pinned/immovable.
-                var forces = gravityMovement + (particle.ForceAccumulator * timeStepSquared);
-                var step = (particle.ForceScale * forces) + dragFactor * (particle.Position - particle.PositionPrevious);
-                // Velocity is exposed in units per second so readers (MaxVelocity, RemapSpeed, providers)
-                // compare against authored per-second values; it is (pos - prev)/dt.
-                particle.Velocity = step / frameTime;
-                particle.ForceAccumulator = Vector3.Zero;
-                particle.PositionPrevious = particle.Position;
-                particle.Position += step;
+                var position = positions[i];
+                var acceleration = gravityAcceleration + forces[i];
+                var step = ((position - previousPositions[i]) * dragFactor) + (forceScales[i] * (timeStepSquared * acceleration));
+                previousPositions[i] = position;
+                positions[i] = position + step;
             }
+
+            particleSystemState.Data?.RunConstraints(particles, frameTime, maxConstraintPasses);
         }
     }
 }

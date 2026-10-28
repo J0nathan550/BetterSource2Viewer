@@ -27,11 +27,12 @@ uniform vec4 g_vInputTextureSize;
 
 #define YCoCg_Conversion (1 << 0)
 #define RGBM (1 << 1)
-#define HemiOctIsoRoughness_RG_B (1 << 2)
+#define HemiOctNormal (1 << 2)
 #define NormalizeNormals (1 << 3)
 #define Dxt5nm_AlphaGreen (1 << 4)
 #define ColorSpace_Linear (1 << 5)
 #define ColorSpace_Srgb (1 << 6)
+#define BlueToAlpha (1 << 8)
 
 uniform int g_nSelectedMip;
 uniform int g_nSelectedDepth;
@@ -243,18 +244,20 @@ void main()
         vColor.rgba = vColor.agbr;
     }
 
-    if ((g_nDecodeFlags & HemiOctIsoRoughness_RG_B) != 0)
+    if ((g_nDecodeFlags & BlueToAlpha) != 0)
     {
-        float flRoughness = vColor.b;
+        vColor.a = vColor.b;
+    }
+
+    if ((g_nDecodeFlags & HemiOctNormal) != 0)
+    {
         vColor.rgb = PackToColor(hemi_oct_to_float32x3(vec2(vColor.x + vColor.y - 1.003922, vColor.x - vColor.y)));
-        vColor.a = flRoughness;
     }
 
     if ((g_nDecodeFlags & NormalizeNormals) != 0)
     {
         vec2 normalXy = UnpackFromColor(vColor.rg);
-        float derivedZ = sqrt(1.0 - (normalXy.x * normalXy.x) - (normalXy.y * normalXy.y));
-        derivedZ = mix(derivedZ, 1.0, isnan(derivedZ)); // todo: becomes NaN if we are out of bounds
+        float derivedZ = sqrt(max(0.0, 1.0 - dot(normalXy, normalXy)));
         vColor.rgb = PackToColor(vec3(normalXy.xy, derivedZ));
     }
 
@@ -325,7 +328,7 @@ void main()
 
         if (bWithinImageBounds)
         {
-            flBackgroundMix -= vColorOutput.a;
+            flBackgroundMix -= g_bCapturingScreenshot ? 1.0 : vColorOutput.a;
         }
 
         vColorOutput.rgb = mix(vColorOutput.rgb, vBackgroundColor, flBackgroundMix);

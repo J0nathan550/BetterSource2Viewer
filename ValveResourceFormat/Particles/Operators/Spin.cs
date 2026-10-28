@@ -1,3 +1,5 @@
+using System.Numerics.Tensors;
+
 namespace ValveResourceFormat.Particles.Operators
 {
     /// <summary>
@@ -6,9 +8,9 @@ namespace ValveResourceFormat.Particles.Operators
     /// <seealso href="https://s2v.app/SchemaExplorer/cs2/particles/CGeneralSpin">CGeneralSpin</seealso>
     abstract class CGeneralSpin : ParticleFunctionOperator
     {
-        protected readonly int spinRateDegrees;
-        protected readonly int spinRateMinDegrees;
-        protected readonly float spinRateStopTime;
+        private readonly int spinRateDegrees;
+        private readonly int spinRateMinDegrees;
+        private readonly float spinRateStopTime;
 
         protected CGeneralSpin(ParticleDefinitionParser parse) : base(parse)
         {
@@ -17,34 +19,93 @@ namespace ValveResourceFormat.Particles.Operators
             spinRateStopTime = parse.Float("m_fSpinRateStopTime", spinRateStopTime);
         }
 
+        /// <summary>The angle this spin turns.</summary>
+        protected abstract ParticleField SpinField { get; }
+
+        /// <inheritdoc/>
+        public override ulong StoredFields => spinRateDegrees == 0 ? 0 : SpinField.Mask();
+
         /// <summary>
-        /// Spin rate in degrees per second at the given particle age: the strength-scaled rate decays
-        /// linearly toward the min floor over the stop time, a fraction of the particle's lifetime; a
-        /// stop time of 0 means no decay. The min floor itself is not scaled by strength.
+        /// Advances the spin angle of every particle by this step's spin. The rate is in degrees
+        /// per second, and the converted rate is scaled by an extra 2*pi (57 deg/s spins roughly one full
+        /// turn per second). Strength scales the rate, and a zero result spins nothing. With a stop time,
+        /// the step decays linearly to 0 over that fraction of the particle's lifetime; without one, a
+        /// step longer than a turn wraps. The minimum rate, which strength does not scale, floors the
+        /// step either way. The angle itself is kept within one turn either side of 0, except while the
+        /// step is one the drawing layer blends back from, so the blend never crosses a wrap.
         /// </summary>
-        private float GetSpinRate(float age, float lifetime, float strength)
+        public override void Operate(ParticleCollection particles, float frameTime, ParticleSystemState particleSystemState, float strength)
         {
-            if (spinRateStopTime == 0f)
+            var rate = strength * float.DegreesToRadians(spinRateDegrees);
+
+            if (rate == 0f)
             {
-                return spinRateDegrees * strength;
+                return;
             }
 
-            var stopAge = lifetime * spinRateStopTime;
-            var remaining = stopAge != 0f ? MathF.Max(0f, 1f - (age / stopAge)) : 0f;
-            var decayed = spinRateDegrees * strength * remaining;
+            var wrap = particleSystemState.Data?.TryGetRenderBlend(out _) != true;
 
-            return spinRateDegrees >= 0
-                ? MathF.Max(decayed, spinRateMinDegrees)
-                : MathF.Min(decayed, spinRateMinDegrees);
+            var step = MathF.Abs(rate * MathF.Tau) * frameTime;
+
+            if (spinRateStopTime == 0f)
+            {
+                step %= MathF.Tau;
+            }
+
+            if (rate < 0f)
+            {
+                step = -step;
+            }
+
+            var minimumStep = float.DegreesToRadians(spinRateMinDegrees) * MathF.Tau * frameTime;
+
+            var current = particles.Current;
+            var angles = current.Floats(SpinField);
+
+            if (spinRateStopTime == 0f)
+            {
+                var delta = rate >= 0f ? MathF.Max(step, minimumStep) : MathF.Min(step, minimumStep);
+                TensorPrimitives.Add(angles, delta, angles);
+            }
+            else
+            {
+                var stopAges = ParticleScratch.Floats(angles.Length);
+                var deltas = current.ReadAges();
+
+                // The step decays linearly from the full step at birth to 0 at the stop age
+                TensorPrimitives.Multiply(current.ReadFloats(ParticleField.LifeDuration), spinRateStopTime, stopAges);
+                TensorPrimitives.Divide(deltas, stopAges, deltas);
+                TensorPrimitives.Subtract(1f, deltas, deltas);
+                TensorPrimitives.MaxNumber(deltas, 0f, deltas);
+
+                // A particle with no lifetime to stop over does not spin
+                for (var i = 0; i < deltas.Length; i++)
+                {
+                    if (stopAges[i] == 0f)
+                    {
+                        deltas[i] = 0f;
+                    }
+                }
+
+                TensorPrimitives.Multiply(deltas, step, deltas);
+
+                if (rate >= 0f)
+                {
+                    TensorPrimitives.Max(deltas, minimumStep, deltas);
+                }
+                else
+                {
+                    TensorPrimitives.Min(deltas, minimumStep, deltas);
+                }
+
+                TensorPrimitives.Add(angles, deltas, angles);
+            }
+
+            if (wrap)
+            {
+                TensorPrimitives.Remainder(angles, MathF.Tau, angles);
+            }
         }
-
-        /// <summary>
-        /// This frame's rotation increment in radians. Rotation is stored in radians, the spin rate
-        /// in degrees per second; the engine scales the converted rate by an extra 2*pi
-        /// (57 deg/s spins roughly one full turn per second).
-        /// </summary>
-        protected float GetSpinDelta(in Particle particle, float frameTime, float strength)
-            => float.DegreesToRadians(GetSpinRate(particle.Age, particle.Lifetime, strength)) * MathF.Tau * frameTime;
     }
 
     /// <summary>
@@ -58,13 +119,7 @@ namespace ValveResourceFormat.Particles.Operators
         {
         }
 
-        public override void Operate(ParticleCollection particles, float frameTime, ParticleSystemState particleSystemState, float strength)
-        {
-            foreach (ref var particle in particles.Current)
-            {
-                particle.SetScalar(ParticleField.Roll, particle.Rotation.Z + GetSpinDelta(particle, frameTime, strength));
-            }
-        }
+        protected override ParticleField SpinField => ParticleField.Roll;
     }
 
     /// <summary>
@@ -78,12 +133,6 @@ namespace ValveResourceFormat.Particles.Operators
         {
         }
 
-        public override void Operate(ParticleCollection particles, float frameTime, ParticleSystemState particleSystemState, float strength)
-        {
-            foreach (ref var particle in particles.Current)
-            {
-                particle.SetScalar(ParticleField.Yaw, particle.Rotation.X + GetSpinDelta(particle, frameTime, strength));
-            }
-        }
+        protected override ParticleField SpinField => ParticleField.Yaw;
     }
 }

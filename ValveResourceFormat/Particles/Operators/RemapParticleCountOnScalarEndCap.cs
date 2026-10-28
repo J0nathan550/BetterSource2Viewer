@@ -30,17 +30,24 @@ namespace ValveResourceFormat.Particles.Operators
             backwards = parse.Boolean("m_bBackwards", backwards);
             setMethod = parse.Enum<ParticleSetMethod>("m_nSetMethod", setMethod);
 
-            if (outputField is ParticleField.Alpha or ParticleField.AlphaAlternate)
+            if (outputField.IsAlpha())
             {
                 outputMin = MathUtils.Saturate(outputMin);
                 outputMax = MathUtils.Saturate(outputMax);
             }
+
+            AddInitialReadOf(parse, setMethod, outputField);
         }
 
         public override void Reset()
         {
             hasRun = false;
         }
+
+        public override bool IsOrderImportant => true;
+
+        /// <inheritdoc/>
+        public override ulong StoredFields => outputField.Mask();
 
         public override void Operate(ParticleCollection particles, float frameTime, ParticleSystemState particleSystemState, float strength)
         {
@@ -51,6 +58,14 @@ namespace ValveResourceFormat.Particles.Operators
 
             hasRun = true;
 
+            if (!ParticleBuffer.IsScalar(outputField))
+            {
+                return;
+            }
+
+            var output = particles.Current.Floats(outputField);
+            var initial = particles.Initial.ReadFloats(outputField);
+
             var rangeStart = Math.Clamp(backwards ? particles.Count - inputMax - 1 : inputMin, 0, particles.Count);
             var rangeEnd = Math.Clamp(backwards ? particles.Count - inputMin : inputMax, 0, particles.Count);
 
@@ -60,13 +75,11 @@ namespace ValveResourceFormat.Particles.Operators
 
             for (var i = rangeStart; i < rangeEnd; i++)
             {
-                ref var particle = ref particles.Current[i];
-
                 var finalValue = MathUtils.RemapValClamped(i, rangeStart, inputEnd, first, last);
 
-                finalValue = particle.ModifyScalarBySetMethod(particles, outputField, finalValue, setMethod);
+                finalValue = ParticleFieldExtensions.ApplySetMethod(finalValue, initial[i], output[i], particleSystemState.CurrentStep, setMethod);
 
-                particle.SetScalar(outputField, float.Lerp(particle.GetScalar(outputField), finalValue, strength));
+                output[i] = MathUtils.Lerp(output[i], finalValue, strength);
             }
         }
     }

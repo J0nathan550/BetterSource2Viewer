@@ -54,6 +54,8 @@ namespace ValveResourceFormat.IO
         /// <summary>Gets the list of physics meshes.</summary>
         public List<PhysMeshData> PhysicsMeshes { get; } = [];
 
+        private readonly Dictionary<MeshDescriptor, PhysMeshData> PhysicsMeshByDescriptor = new(ReferenceEqualityComparer.Instance);
+
         // a physics triangle is covered when it lies in the plane of a render triangle, within this distance and its centre falls inside that triangle
         private const float PlaneDistance = 0.125f;
 
@@ -67,9 +69,17 @@ namespace ValveResourceFormat.IO
         {
             for (var i = 0; i < meshes.Length; i++)
             {
-                PhysicsMeshes.Add(new PhysMeshData(meshes[i]));
+                var meshData = new PhysMeshData(meshes[i]);
+                PhysicsMeshes.Add(meshData);
+                PhysicsMeshByDescriptor.TryAdd(meshes[i], meshData);
             }
         }
+
+        /// <summary>
+        /// Gets the covered triangles of a physics mesh, or <see langword="null"/> when the mesh was not given to this matcher.
+        /// </summary>
+        public HashSet<int>? GetDeletedTriangles(MeshDescriptor mesh)
+            => PhysicsMeshByDescriptor.GetValueOrDefault(mesh)?.DeletedTriangles;
 
         record struct RnMeshNodeWithIndex(int Index, Node Node);
 
@@ -279,10 +289,15 @@ namespace ValveResourceFormat.IO
         public Func<string, Vector2?>? TextureSizeProvider { get; init; }
 
         /// <summary>
-        /// Texture size assumed for a projected face when <see cref="TextureSizeProvider"/> gives none: a texture
-        /// that repeats every 128 units at <see cref="PolygonMesh.DefaultTextureScale"/>, the usual Hammer world mapping.
+        /// Units one texel spans on a projected face, the game's <c>Hammer/DefaultTextureScale</c>.
         /// </summary>
-        public Vector2 DefaultProjectedTextureSize { get; init; } = new(128f / PolygonMesh.DefaultTextureScale);
+        public float DefaultTextureScale { get; init; } = PolygonMesh.DefaultTextureScale;
+
+        /// <summary>
+        /// Texture size assumed for a projected face when <see cref="TextureSizeProvider"/> gives none: a texture
+        /// that repeats every 128 units at <see cref="DefaultTextureScale"/>, the usual Hammer world mapping.
+        /// </summary>
+        public Vector2 DefaultProjectedTextureSize => new(128f / DefaultTextureScale);
 
         /// <summary>
         /// Writes everything added so far out as a Hammer mesh.
@@ -505,9 +520,10 @@ namespace ValveResourceFormat.IO
         /// <returns>Index of the first added vertex, to add to the indices handed to <see cref="AddFace"/>.</returns>
         public int AddVertices(ReadOnlySpan<Vector3> positions) => AddVertices(positions, Matrix4x4.Identity);
 
-        /// <inheritdoc cref="AddVertices(ReadOnlySpan{Vector3})"/>
+        /// <inheritdoc cref="AddVertices(ReadOnlySpan{Vector3})" path="/summary"/>
         /// <param name="positions">Vertex positions.</param>
         /// <param name="transform">Transform applied to every position.</param>
+        /// <inheritdoc cref="AddVertices(ReadOnlySpan{Vector3})" path="/returns"/>
         public int AddVertices(ReadOnlySpan<Vector3> positions, Matrix4x4 transform)
         {
             var baseVertex = Vertices.Count;
@@ -649,7 +665,7 @@ namespace ValveResourceFormat.IO
 
             if (missingTexCoords)
             {
-                Mesh.TextureAlignToGrid(hFace, textureSize);
+                Mesh.TextureAlignToGrid(hFace, textureSize, DefaultTextureScale);
             }
             else
             {
@@ -723,13 +739,12 @@ namespace ValveResourceFormat.IO
         public void AddPhysHull(HullDescriptor desc, PhysAggregateData phys, Func<string, string> materialNameProvider, Matrix4x4 transform, string? materialOverride = null)
         {
             var attributes = phys.CollisionAttributes[desc.CollisionAttributeIndex];
-            var tags = PhysAggregateData.GetInteractAsTags(attributes);
             var group = attributes.GetStringProperty("m_CollisionGroupString");
-            var material = materialOverride ?? MapExtract.GetToolTextureNameForCollisionTags(new SurfaceTagCombo(group, tags));
+            var surfaceProperty = StringToken.GetKnownString(phys.SurfacePropertyHashes[desc.SurfacePropertyIndex]);
+            var material = materialOverride ?? ToolsMaterials.GetForCollision(attributes, surfaceProperty) ?? ToolsMaterials.Nodraw;
 
             if (group == "Default")
             {
-                var surfaceProperty = StringToken.GetKnownString(phys.SurfacePropertyHashes[desc.SurfacePropertyIndex]);
                 material = materialNameProvider.Invoke(surfaceProperty);
             }
 
@@ -773,11 +788,9 @@ namespace ValveResourceFormat.IO
             Matrix4x4 transform, string? materialOverride = null)
         {
             var attributes = phys.CollisionAttributes[desc.CollisionAttributeIndex];
-            var tags = PhysAggregateData.GetInteractAsTags(attributes);
             var group = attributes.GetStringProperty("m_CollisionGroupString");
-            var material = materialOverride ?? MapExtract.GetToolTextureNameForCollisionTags(new SurfaceTagCombo(group, tags));
-
             var physicsSurfaceNames = phys.SurfacePropertyHashes.Select(StringToken.GetKnownString).ToArray();
+            var material = materialOverride ?? ToolsMaterials.GetForCollision(attributes, physicsSurfaceNames[desc.SurfacePropertyIndex]) ?? ToolsMaterials.Nodraw;
 
             var mesh = desc.Shape;
             var meshTriangles = mesh.GetTriangles();
@@ -832,7 +845,7 @@ namespace ValveResourceFormat.IO
 
                     // default is just nodraw, ignore it
                     material = surfaceProperty.Equals("default", StringComparison.OrdinalIgnoreCase)
-                        ? "materials/tools/toolsnodraw.vmat"
+                        ? ToolsMaterials.Nodraw
                         : materialNameProvider.Invoke(surfaceProperty);
                 }
 
@@ -1091,21 +1104,12 @@ namespace ValveResourceFormat.IO
 
         internal static IList<T>? GetElementArraySafe<T>(Element Element, string elementName)
         {
-            if (Element.ContainsKey(elementName))
+            if (!Element.TryGetValue(elementName, out var arrayElement))
             {
-                Element.TryGetValue(elementName, out var arrayElement);
-                if (arrayElement == null)
-                {
-                    return null;
-                }
-
-                if (arrayElement is IList<T> typedArrayElement)
-                {
-                    return typedArrayElement;
-                }
+                return null;
             }
 
-            return null;
+            return arrayElement as IList<T>;
         }
     }
 }

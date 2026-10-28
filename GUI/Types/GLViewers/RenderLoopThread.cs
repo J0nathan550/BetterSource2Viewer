@@ -23,7 +23,10 @@ namespace GUI.Types.GLViewers
 #endif
         }
 
-        private static void OnAppActivated(object? sender, EventArgs e)
+        /// <summary>
+        /// Resumes the render loop while the app was in the background.
+        /// </summary>
+        public static void OnAppActivated(object? sender, EventArgs e)
         {
             if (currentGLControl != null)
             {
@@ -211,9 +214,23 @@ namespace GUI.Types.GLViewers
             {
                 isPaused = true;
                 renderSignal.Reset();
+                KeepDrawingForFrameRequests(ref isPaused);
             }
 
-            return control.Draw(isPaused);
+            OnFrameStarting(control);
+
+            var presented = control.Draw(isPaused);
+
+            OnFrameDrawn(control);
+
+            return presented;
         }
+
+        // Implemented by automation in debug builds only; elsewhere these calls are compiled out
+        static partial void KeepDrawingForFrameRequests(ref bool isPaused);
+
+        static partial void OnFrameStarting(GLBaseControl control);
+
+        static partial void OnFrameDrawn(GLBaseControl control);
     }
 }

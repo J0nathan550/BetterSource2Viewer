@@ -161,7 +161,6 @@ namespace ValveResourceFormat.ResourceTypes
                 }
 
                 var rectData = new Vector4[height * width];
-                rectData.Initialize();
 
                 foreach (var rect in morphData.GetArray("m_morphRectDatas") ?? [])
                 {
@@ -179,8 +178,12 @@ namespace ValveResourceFormat.ResourceTypes
 
                         var rectU = (int)MathF.Round(bundleData.GetFloatProperty("m_flULeftSrc") * texWidth, 0);
                         var rectV = (int)MathF.Round(bundleData.GetFloatProperty("m_flVTopSrc") * texHeight, 0);
-                        var ranges = new Vector4(bundleData.GetFloatArray("m_ranges"));
-                        var offsets = new Vector4(bundleData.GetFloatArray("m_offsets"));
+                        var ranges = bundleData.GetSubCollection("m_ranges").ToVector4();
+                        var offsets = bundleData.GetSubCollection("m_offsets").ToVector4();
+
+                        // Offsets put zero on a quantization level, but decoding that level leaves float
+                        // rounding of up to about 1e-7. Only that level decodes within half a step of zero.
+                        var zeroThreshold = Vector4.Abs(ranges) / 510f;
 
                         for (var row = rectV; row < rectV + placement.Height; row++)
                         {
@@ -206,7 +209,11 @@ namespace ValveResourceFormat.ResourceTypes
                                 vec *= ranges;
                                 vec += offsets;
 
-                                rectData[(dstI * width) + dstJ] = vec;
+                                rectData[(dstI * width) + dstJ] = new Vector4(
+                                    SnapToZero(vec.X, zeroThreshold.X),
+                                    SnapToZero(vec.Y, zeroThreshold.Y),
+                                    SnapToZero(vec.Z, zeroThreshold.Z),
+                                    SnapToZero(vec.W, zeroThreshold.W));
                             }
                         }
                     }
@@ -217,6 +224,8 @@ namespace ValveResourceFormat.ResourceTypes
 
             return flexData;
         }
+
+        private static float SnapToZero(float value, float threshold) => MathF.Abs(value) < threshold ? 0f : value;
 
         /// <summary>
         /// Gets the names of the flexes <see cref="GetFlexVertexData()"/> returns deltas for, without

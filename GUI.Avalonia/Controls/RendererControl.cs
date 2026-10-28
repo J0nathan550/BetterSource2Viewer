@@ -187,9 +187,28 @@ sealed class RendererControl : Grid
         return selectionControl;
     }
 
-    public GLViewerSliderControl AddTrackBar(Action<float> changeCallback, float defaultValue = 0f)
+    /// <summary>
+    /// Adds a box of checkable items nested by their paths, see <see cref="GLViewerTreeSelectionControl"/>.
+    /// </summary>
+    /// <param name="name">The title of the box.</param>
+    /// <param name="paths">The paths of the items. Each group a path passes through gets an item too.</param>
+    /// <param name="changeCallback">Called with the paths of the checked items whenever one changes.</param>
+    /// <param name="initiallyChecked">Whether the items start checked.</param>
+    /// <param name="foldGroups">Whether the groups start folded away, but for a lone item at the top, which lists them.</param>
+    public GLViewerTreeSelectionControl AddTreeSelection(string name, IEnumerable<string> paths, Action<IEnumerable<string>> changeCallback, bool initiallyChecked = true, bool foldGroups = false)
+    {
+        var selectionControl = new GLViewerTreeSelectionControl(name, paths, initiallyChecked, foldGroups);
+        selectionControl.CheckedPathsChanged += changeCallback;
+
+        AddControl(selectionControl);
+
+        return selectionControl;
+    }
+
+    public GLViewerSliderControl AddTrackBar(string name, Action<float> changeCallback, float defaultValue = 0f)
     {
         var trackBar = new GLViewerSliderControl();
+        Avalonia.Automation.AutomationProperties.SetName(trackBar.Slider.Native, name);
         trackBar.Slider.Value = defaultValue;
         trackBar.Slider.ValueChanged = changeCallback;
 

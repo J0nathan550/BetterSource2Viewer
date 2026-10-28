@@ -106,6 +106,19 @@ namespace ValveResourceFormat.Renderer
             RecalculateDirectionVectors();
 
             CameraViewMatrix = Matrix4x4.CreateLookAt(location, location + Forward, Up);
+            UpdateViewProjection();
+        }
+
+        /// <summary>Sets the view and projection matrices, leaving <see cref="Location"/> and the orientation unchanged.</summary>
+        public void SetViewProjection(Matrix4x4 view, Matrix4x4 projection)
+        {
+            CameraViewMatrix = view;
+            ProjectionMatrix = projection;
+            UpdateViewProjection();
+        }
+
+        private void UpdateViewProjection()
+        {
             ViewProjectionMatrix = CameraViewMatrix * ProjectionMatrix;
 
             // The view is a rotation and a translation, so inverting its rotation is transposing it
@@ -154,6 +167,38 @@ namespace ValveResourceFormat.Renderer
             }
 
             return (forward, up, right);
+        }
+
+        /// <summary>
+        /// Gets the direction from the camera through a point of its viewport.
+        /// </summary>
+        /// <param name="screenPoint">The point, in pixels from the top left of the viewport.</param>
+        public Vector3 ScreenPointToDirection(Vector2 screenPoint)
+        {
+            var ndcX = (2f * screenPoint.X / WindowSize.X) - 1f;
+            var ndcY = 1f - (2f * screenPoint.Y / WindowSize.Y);
+
+            return Vector3.Normalize(Forward
+                + (Right * (ndcX / ProjectionMatrix.M11))
+                + (Up * (ndcY / ProjectionMatrix.M22)));
+        }
+
+        /// <summary>
+        /// Gets where a point of the world is in the viewport.
+        /// </summary>
+        /// <param name="position">The point.</param>
+        /// <returns>The point in pixels from the top left of the viewport, or <see langword="null"/> when it is behind the camera.</returns>
+        public Vector2? WorldToScreenPoint(Vector3 position)
+        {
+            var clip = Vector4.Transform(new Vector4(position, 1f), ViewProjectionMatrix);
+
+            if (clip.W <= 0f)
+            {
+                return null;
+            }
+
+            var ndc = new Vector2(clip.X, clip.Y) / clip.W;
+            return new Vector2((ndc.X + 1f) * 0.5f * WindowSize.X, (1f - ndc.Y) * 0.5f * WindowSize.Y);
         }
 
         /// <summary>
@@ -216,6 +261,31 @@ namespace ValveResourceFormat.Renderer
         public void CreateProjectionMatrix()
         {
             ProjectionMatrix = CreatePerspectiveFieldOfView_ReverseZ(GetFOV(), AspectRatio, NearPlane, FarPlane);
+        }
+
+        /// <summary>
+        /// Replaces <see cref="ProjectionMatrix"/> with a reverse-Z orthographic projection centred on the
+        /// view axis, until the next <see cref="CreateProjectionMatrix"/>. Call <see cref="RecalculateMatrices"/>
+        /// after it.
+        /// </summary>
+        /// <param name="width">The width of the view volume.</param>
+        /// <param name="height">The height of the view volume.</param>
+        /// <param name="nearPlane">Distance along the view direction to the near plane, which may be behind the eye.</param>
+        /// <param name="farPlane">Distance along the view direction to the far plane.</param>
+        public void SetOrthographicProjection(float width, float height, float nearPlane, float farPlane)
+        {
+            var range = farPlane - nearPlane;
+
+            // A point d along the view direction sits at view z -d and lands at ndc z (far - d) / range,
+            // so the near plane maps to 1 and the far plane to 0
+            ProjectionMatrix = new Matrix4x4
+            {
+                M11 = 2f / width,
+                M22 = 2f / height,
+                M33 = 1f / range,
+                M43 = farPlane / range,
+                M44 = 1f,
+            };
         }
 
         /// <summary>
@@ -410,7 +480,7 @@ namespace ValveResourceFormat.Renderer
             return MathF.Max(distance, NearPlane - nearestCorner);
         }
 
-        /// <inheritdoc cref="GetFramingDistance(Vector3, Vector3, Vector3)"/>
+        /// <inheritdoc cref="GetFramingDistance(Vector3, Vector3, Vector3)" path="/summary"/>
         /// <param name="size">The box's dimensions.</param>
         /// <param name="forward">Unit direction the camera looks along, in place of its own.</param>
         public float GetFramingDistance(Vector3 size, Vector3 forward)

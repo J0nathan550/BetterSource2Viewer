@@ -4,6 +4,9 @@ namespace ValveResourceFormat.Particles.Initializers
 {
     /// <summary>
     /// Initializes particles from a parent particle stream, mapping child particles to parent indices.
+    /// Each new particle is bound to a parent and placed along the parent's step for this frame. The
+    /// previous position is pulled toward the parent's by <c>m_flVelocityScale</c>, so 0 leaves the
+    /// particle at rest and 1 keeps the parent's motion from the start of the step to the birth point.
     /// </summary>
     /// <seealso href="https://s2v.app/SchemaExplorer/cs2/particles/C_INIT_CreateFromParentParticles">C_INIT_CreateFromParentParticles</seealso>
     class CreateFromParentParticles : ParticleFunctionInitializer
@@ -21,7 +24,7 @@ namespace ValveResourceFormat.Particles.Initializers
         /// </summary>
         private readonly bool fractionalIncrement;
 
-        /// <summary>The parent particle index attribute is only written from behavior version 9.</summary>
+        /// <summary>The parent particle attributes are only written from behavior version 9.</summary>
         private readonly bool writeParentIndex;
 
         private float currentParentIndex;
@@ -46,85 +49,87 @@ namespace ValveResourceFormat.Particles.Initializers
             fractionalIncrement = increment != MathF.Floor(increment);
         }
 
-        /// <summary>
-        /// Binds the new particle to a parent and places it along the parent's step for this frame,
-        /// keeping the share of the parent's velocity left once the particle is born. The emit path
-        /// encodes that velocity back into Position/PositionPrevious after initializers run.
-        /// </summary>
-        public override ulong WrittenFields => FieldMask(ParticleField.Position) | FieldMask(ParticleField.LifeDuration) | FieldMask(ParticleField.PositionPrevious)
-            | FieldMask(ParticleField.ParentParticleIndex) | FieldMask(ParticleField.ParentParticleId)
-            | (setRopeSegmentID ? FieldMask(ParticleField.RopeSegmentId) : 0);
+        public override ulong WrittenFields => ParticleField.Position.Mask() | ParticleField.LifeDuration.Mask() | ParticleField.PositionPrevious.Mask()
+            | ParticleField.ParentParticleIndex.Mask() | ParticleField.ParentParticleId.Mask()
+            | (setRopeSegmentID ? ParticleField.RopeSegmentId.Mask() : 0);
 
-        public override Particle Initialize(ref Particle particle, ParticleCollection particles, ParticleSystemState particleSystemState)
+        protected override void InitializeCall(ParticleSpan run, ParticleCollection particles, ParticleSystemState particleSystemState)
         {
+            var positions = run.Vectors(ParticleField.Position);
+            var previous = run.Vectors(ParticleField.PositionPrevious);
+
             var parentData = particleSystemState.ParentSystem?.Data;
             if (parentData == null)
             {
-                return particle;
+                positions.Clear();
+                previous.Clear();
+                return;
             }
 
             var parentParticles = parentData.CurrentParticles;
             if (parentParticles.Length == 0)
             {
-                // A child with no parent to bind to is born dead rather than left at the origin
-                particle.Lifetime = 0f;
-                return particle;
+                run.Floats(ParticleField.LifeDuration).Clear();
+                positions.Clear();
+                previous.Clear();
+                return;
             }
 
+            var creationTimes = run.ReadFloats(ParticleField.CreationTime);
+            var parentIndices = writeParentIndex ? run.Integers(ParticleField.ParentParticleIndex) : default;
+            var parentIds = writeParentIndex ? run.Integers(ParticleField.ParentParticleId) : default;
+            var ropeSegmentIds = writeParentIndex && setRopeSegmentID ? run.Integers(ParticleField.RopeSegmentId) : default;
             var lastIndex = parentParticles.Length - 1;
-            var walkIndex = NextParentIndex(lastIndex, particleSystemState);
-            var parentIndex = Math.Clamp((int)MathF.Floor(walkIndex), 0, lastIndex);
+            var parentParticleIds = parentParticles.ReadIntegers(ParticleField.ParticleId);
+            var parentPositions = parentParticles.ReadVectors(ParticleField.Position);
+            var parentPreviousPositions = parentParticles.ReadVectors(ParticleField.PositionPrevious);
 
-            if (writeParentIndex)
+            for (var i = 0; i < run.Length; i++)
             {
-                particle.ParentParticleIndex = parentIndex;
+                var walkIndex = NextParentIndex(lastIndex, particleSystemState);
+                var parentIndex = Math.Clamp((int)MathF.Floor(walkIndex), 0, lastIndex);
+
+                if (writeParentIndex)
+                {
+                    parentIndices[i] = parentIndex;
+                    parentIds[i] = parentParticleIds[parentIndex];
+
+                    if (setRopeSegmentID)
+                    {
+                        ropeSegmentIds[i] = parentParticleIds[parentIndex];
+                    }
+                }
+
+                var parentPosition = parentPositions[parentIndex];
+                var parentPositionPrevious = parentPreviousPositions[parentIndex];
+
+                if (fractionalIncrement)
+                {
+                    var nextIndex = Math.Clamp((int)MathF.Ceiling(walkIndex), 0, lastIndex);
+                    var blend = MathUtils.Fract(walkIndex);
+                    parentPosition = Vector3.Lerp(parentPosition, parentPositions[nextIndex], blend);
+                    parentPositionPrevious = Vector3.Lerp(parentPositionPrevious, parentPreviousPositions[nextIndex], blend);
+                }
+
+                var birthFraction = subFrame ? GetBirthFraction(creationTimes[i], particleSystemState) : 1f;
+
+                var position = MathUtils.Lerp(parentPositionPrevious, parentPosition, birthFraction);
+
+                positions[i] = position;
+                previous[i] = MathUtils.Lerp(position, parentPositionPrevious, velocityScale);
             }
-
-            ref var parent = ref parentParticles[parentIndex];
-
-            particle.ParentParticleId = parent.ParticleId;
-
-            if (setRopeSegmentID)
-            {
-                particle.RopeSegmentId = parent.ParticleId;
-            }
-
-            var parentPosition = parent.Position;
-            var parentPositionPrevious = parent.PositionPrevious;
-
-            if (fractionalIncrement)
-            {
-                ref var nextParent = ref parentParticles[Math.Clamp((int)MathF.Ceiling(walkIndex), 0, lastIndex)];
-                var blend = MathUtils.Fract(walkIndex);
-                parentPosition = Vector3.Lerp(parentPosition, nextParent.Position, blend);
-                parentPositionPrevious = Vector3.Lerp(parentPositionPrevious, nextParent.PositionPrevious, blend);
-            }
-
-            var birthFraction = subFrame ? GetBirthFraction(particle, particles, particleSystemState) : 1f;
-
-            particle.Position = Vector3.Lerp(parentPositionPrevious, parentPosition, birthFraction);
-
-            var parentStep = parentPosition - parentPositionPrevious;
-            var parentFrameTime = parentData.CurrentFrameTime;
-            var parentVelocity = parentFrameTime > 0f
-                ? parentStep / parentFrameTime
-                : parent.Velocity;
-
-            particle.Velocity = parentVelocity * birthFraction * velocityScale;
-
-            return particle;
         }
 
         /// <summary>
         /// Where inside the step being simulated the particle was born, as a fraction of it. A step of
         /// no duration counts as fully elapsed unless the particle is stamped in the past.
         /// </summary>
-        private static float GetBirthFraction(in Particle particle, ParticleCollection particles, ParticleSystemState particleSystemState)
+        private static float GetBirthFraction(float creationTime, ParticleSystemState particleSystemState)
         {
             var currentTime = particleSystemState.Age;
-            var previousTime = currentTime - particles.CurrentFrameTime;
+            var previousTime = currentTime - particleSystemState.CurrentStep;
 
-            return MathUtils.RemapValClamped(particle.CreationTime, previousTime, currentTime, 0f, 1f);
+            return MathUtils.RemapValClamped(creationTime, previousTime, currentTime, 0f, 1f);
         }
 
         /// <summary>
@@ -138,9 +143,7 @@ namespace ValveResourceFormat.Particles.Initializers
         {
             if (randomDistribution)
             {
-                var sample = randomSeed != 0
-                    ? ParticleRandom.ForSample(particleSystemState.Random.Seed + randomSeed + randomCounter++)
-                    : particleSystemState.Random.Next();
+                var sample = particleSystemState.Random.NextOrSeeded(randomSeed, ref randomCounter);
 
                 currentParentIndex = fractionalIncrement
                     ? sample * lastIndex

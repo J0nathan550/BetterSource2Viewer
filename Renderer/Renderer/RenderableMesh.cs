@@ -18,6 +18,7 @@ namespace ValveResourceFormat.Renderer
         public AABB BoundingBox { get; }
 
         private readonly RendererContext renderContext;
+        private readonly bool isAggregate;
 
         /// <summary>Gets the list of meshlets for GPU-driven indirect culling.</summary>
         public List<Meshlet> Meshlets { get; } = [];
@@ -75,10 +76,9 @@ namespace ValveResourceFormat.Renderer
             IReadOnlyDictionary<string, byte>? shaderArguments = null)
         {
             renderContext = scene.RendererContext;
+            this.isAggregate = isAggregate;
 
             Name = mesh.Name;
-
-            var vbib = mesh.VBIB;
 
             if (model != null)
             {
@@ -87,6 +87,9 @@ namespace ValveResourceFormat.Renderer
             }
 
             BoneWeightCount = mesh.BoneWeightCount;
+
+            var gpuVbib = renderContext.MeshBufferCache.CreateVertexIndexBuffers(mesh);
+            var vbib = gpuVbib.Layout;
             Skinning = GetSkinning(vbib, BoneWeightCount);
 
             mesh.GetBounds();
@@ -94,7 +97,7 @@ namespace ValveResourceFormat.Renderer
             MeshIndex = meshIndex;
 
             var meshSceneObjects = mesh.Data.GetArray("m_sceneObjects");
-            ConfigureDrawCalls(scene, vbib, meshSceneObjects, initialMaterialTable, isAggregate, shaderArguments);
+            ConfigureDrawCalls(scene, vbib, gpuVbib, meshSceneObjects, initialMaterialTable, isAggregate, shaderArguments);
 
             // Without an atlas of deltas there is nothing for the composite to sample.
             if (morph?.TextureResource != null)
@@ -195,6 +198,33 @@ namespace ValveResourceFormat.Renderer
             drawCall.SetNewMaterial(renderContext.MaterialLoader.GetMaterial(replacementName, dynamicParams));
         }
 
+        /// <summary>
+        /// Replaces the material of every draw call <paramref name="shouldReplace"/> accepts, and moves each
+        /// draw call into the opaque, overlay or blended list its material now belongs in.
+        /// </summary>
+        /// <param name="replacementName">Name of the replacement material.</param>
+        /// <param name="shouldReplace">Decides from a draw call's current material whether to replace it.</param>
+        public void ReplaceMaterials(string replacementName, Func<RenderMaterial, bool> shouldReplace)
+        {
+            ArgumentNullException.ThrowIfNull(shouldReplace);
+
+            var drawCalls = DrawCalls.ToList();
+
+            DrawCallsOpaque.Clear();
+            DrawCallsOverlay.Clear();
+            DrawCallsBlended.Clear();
+
+            foreach (var drawCall in drawCalls)
+            {
+                if (shouldReplace(drawCall.Material))
+                {
+                    ReplaceMaterial(drawCall, replacementName);
+                }
+
+                AddDrawCall(drawCall, isAggregate);
+            }
+        }
+
         /// <summary>Replaces all draw call materials with a single material resource for use in the material viewer.</summary>
         /// <param name="resourceMaterial">The material resource to apply to all draw calls.</param>
         public void SetMaterialForMaterialViewer(Resource resourceMaterial)
@@ -260,15 +290,13 @@ namespace ValveResourceFormat.Renderer
             return boneWeightCount > 4 ? MeshSkinning.EightBones : MeshSkinning.FourBones;
         }
 
-        private void ConfigureDrawCalls(Scene scene, VBIB vbib, IReadOnlyList<KVObject> sceneObjects, Dictionary<string, string>? materialReplacementTable, bool isAggregate,
+        private void ConfigureDrawCalls(Scene scene, VBIB vbib, GPUMeshBuffers gpuVbib, IReadOnlyList<KVObject> sceneObjects, Dictionary<string, string>? materialReplacementTable, bool isAggregate,
             IReadOnlyDictionary<string, byte>? extraShaderArguments)
         {
             if (vbib.VertexBuffers.Count == 0)
             {
                 return;
             }
-
-            var gpuVbib = renderContext.MeshBufferCache.CreateVertexIndexBuffers(Name, vbib);
 
             // Scene objects are flattened into one mesh. Unsure when there can be more than one.
 
@@ -601,6 +629,39 @@ namespace ValveResourceFormat.Renderer
             };
 
             mesh.DrawCallsOpaque.Add(drawCall);
+            return mesh;
+        }
+
+        /// <summary>
+        /// Creates a renderable mesh with a single material over vertex and index buffers the caller owns and
+        /// may rewrite every frame. The draw call starts empty; the caller sets its <see cref="DrawCall.IndexCount"/>
+        /// to the indices it uploads, which are 32 bit.
+        /// </summary>
+        /// <param name="name">Name for the mesh.</param>
+        /// <param name="material">Material to assign to the single draw call.</param>
+        /// <param name="vertexBuffer">The vertex buffer and its layout.</param>
+        /// <param name="indexBuffer">OpenGL handle of the index buffer.</param>
+        /// <param name="renderContext">Renderer context the buffers belong to.</param>
+        /// <returns>A new <see cref="RenderableMesh"/> with one draw call, translucent when the material is.</returns>
+        public static RenderableMesh CreateMesh(string name, RenderMaterial material, VertexDrawBuffer vertexBuffer, int indexBuffer, RendererContext renderContext)
+        {
+            var mesh = new RenderableMesh(name, new AABB(), renderContext);
+
+            var drawCall = new DrawCall
+            {
+                Material = material,
+                MeshBuffers = renderContext.MeshBufferCache,
+                MeshName = name,
+                PrimitiveType = PrimitiveType.Triangles,
+                IndexType = DrawElementsType.UnsignedInt,
+                VertexBuffers = [vertexBuffer],
+                IndexBuffer = new IndexDrawBuffer()
+                {
+                    Handle = indexBuffer,
+                },
+            };
+
+            mesh.AddDrawCall(drawCall, isAggregate: false);
             return mesh;
         }
     }

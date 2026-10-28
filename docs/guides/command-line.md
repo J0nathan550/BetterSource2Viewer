@@ -1,3 +1,7 @@
+---
+description: Reference for Source2Viewer-CLI, the Windows, Linux and macOS tool for decompiling Source 2 resources and working with VPK files.
+---
+
 # Command-line utility
 
 While Source 2 Viewer is a GUI application for Windows, there is also a command-line utility available for all of Windows, Linux, and macOS.
@@ -16,17 +20,19 @@ The binary name is `Source2Viewer-CLI`.
 | `--vpk_filepath` (or `-f`)       | File path filter(s), matching the start of the path inside the VPK or relative to the input folder (case-insensitive), or the full path when using `*` and `?` wildcards. Example: `"panorama/,sounds/"` or `"*/entities/*"`.                                                                                    |
 | `--vpk_cache`                    | Use a cached VPK manifest to keep track of updates, only changed files are written to disk. Requires `--output`.                                                                                                                                                                                                 |
 | `--vpk_verify`                   | Verify checksums and signatures of the given VPK, or of every VPK in the given folder.                                                                                                                                                                                                                           |
-| `--vpk_create`                   | Pack all files in the input folder and its subfolders into a VPK at the given path, example: `"pak01_dir.vpk"`. File paths are lowercased, and file extension and path filters apply.                                                                                                                            |
-| `--vpk_create_chunk_size`        | When using `--vpk_create`, split file data into chunk files of this many megabytes (1 to 1024) next to the VPK, which must be named `"*_dir.vpk"`. By default everything is written into a single file.                                                                                                          |
+| `--vpk_create`                   | Pack all files in the input folder and its subfolders into a VPK at the given path, example: `"pak01.vpk"`. A split VPK must be named `"*_dir.vpk"`, see `--vpk_create_chunk_size`. File paths are lowercased, and file extension and path filters apply.                                                        |
+| `--vpk_create_chunk_size`        | When using `--vpk_create`, split file data into chunk files of this many MiB (1 to 1024) next to the VPK, which must be named `"*_dir.vpk"`. By default everything is written into a single file, which may also be named `"*_dir.vpk"`.                                                                         |
 | **Output**                       |                                                                                                                                                                                                                                                                                                                  |
 | `--output` (or `-o`)             | Output path to write to. Treated as a folder when it is an existing folder, ends with a path separator, or has no file extension, otherwise it names the file to write, which requires the input to be a single file or the filters to match one file. Use `-` to print decompiled files to the console instead. |
 | `--all` (or `-a`)                | Print the content of each resource block in the file.                                                                                                                                                                                                                                                            |
 | `--block` (or `-b`)              | Print the content of specific block(s), example: `"DATA"` or `"RERL,RED2"`.                                                                                                                                                                                                                                      |
 | `--vpk_decompile` (or `-d`)      | Decompile supported resource files. Requires `--output`.                                                                                                                                                                                                                                                         |
-| `--texture_decode_flags`         | Decompile textures with the specified decode flags, example: `"none"`, `"auto"` (default), `"ForceLDR"`. Requires `--output`.                                                                                                                                                                                    |
+| `--texture_decode_flags`         | Decompile textures with the specified decode flags, example: `"none"`, `"auto"` (default), `"ForceLDR"` (on top of the automatic flags). Requires `--output`.                                                                                                                                                    |
 | `--skip_softbody_reconstruction` | Skip reconstructing soft-body (cloth) physics when decompiling models.                                                                                                                                                                                                                                           |
 | `--vpk_list` (or `-l`)           | List all files in the given VPK or folder. File extension and path filters apply.                                                                                                                                                                                                                                |
 | `--vpk_dir`                      | Same as `--vpk_list`, but also print the archive index, offset and metadata size of each file.                                                                                                                                                                                                                   |
+| `--vpk_search`                   | Print the paths of files in the given VPK, or in the VPKs of the given folder, whose contents contain this text (case-insensitive), with compiled files searched in their decompressed KV3 data. File extension and path filters apply.                                                                          |
+| `--vpk_search_options`           | Options for `--vpk_search`, comma-separated: `case` (letter case has to match), `word` (whole words only), `regex` (the text is a regular expression), or `hex` alone (the text is bytes, such as `"56 42 4B 56"`, searched in the stored files).                                                                |
 | `--kv_flatten`                   | Print a KeyValues1 or KeyValues3 text file as one `path = value` line per value, for comparing two versions of a file with a line diff. Use `-i -` to read from stdin.                                                                                                                                           |
 | **Type specific export**         |                                                                                                                                                                                                                                                                                                                  |
 | `--gltf_export_format`           | Export meshes and models in the given glTF format, `"gltf"` or `"glb"`. Implies `--vpk_decompile`.                                                                                                                                                                                                               |
@@ -35,8 +41,9 @@ The binary name is `Source2Viewer-CLI`.
 | `--gltf_mesh_list`               | Meshes to include in the glTF, example: `"mesh1,mesh2"`. By default all meshes are included.                                                                                                                                                                                                                     |
 | `--gltf_animation_list`          | Animations to include in the glTF, example: `"idle,dropped"`. Implies `--gltf_export_animations`. By default all animations are included.                                                                                                                                                                        |
 | `--gltf_textures_adapt`          | Perform glTF spec adaptations on exported textures (e.g. split metallic map). Implies `--gltf_export_materials`.                                                                                                                                                                                                 |
-| `--gltf_export_extras`           | Export additional mesh properties into glTF extras.                                                                                                                                                                                                                                                              |
+| `--gltf_export_extras`           | Export entity properties into glTF node extras.                                                                                                                                                                                                                                                                  |
 | `--gltf_compose_additive`        | Compose additive animations over the bind pose instead of exporting their delta tracks.                                                                                                                                                                                                                          |
+| `--gltf_keep_all_keyframes`      | Write an animation key for every frame instead of dropping keys that linear interpolation reproduces within a small tolerance.                                                                                                                                                                                   |
 | `--shader_list_combos`           | List every compiled variant of a shader with its combo values and bytecode hash. For a material, only the variants of its shader that the material selects.                                                                                                                                                      |
 | `--shader_combo`                 | Decompile the shader variant matching these combo values, example: `"S_ALPHA_TEST=1,D_BLEND_WEIGHT_COUNT=4"`. A bare name means `=1`, omitted combos stay at their minimum. For a material, the static combos it selects are used.                                                                               |
 | `--tools_asset_info_short`       | Print only file paths for tools_asset_info files.                                                                                                                                                                                                                                                                |
@@ -51,12 +58,12 @@ There are also `--test` and `--test_*` options for running every file through th
 
 ### Exit codes
 
-The exit code is `0` on success, `1` for invalid arguments, and `2` when any file failed to process. Errors for individual files are printed to stderr and appended to `exceptions.txt` in the current working directory.
+The exit code is `0` on success, `2` when any file failed to process, and `1` for invalid arguments or when there is nothing to process, such as a missing input or a folder without matching files. Errors are printed to stderr, and exceptions are also appended to `exceptions.txt` in the current working directory, or to `exceptions.<extension>.txt` with `--test`.
 
 ### Good to know
 
-- Only one of `--output`, `--vpk_list` (or `--vpk_dir`), `--vpk_verify`, `--vpk_create`, `--block` (or `--all`), `--test`, `--kv_flatten`, and the shader options can be used at a time.
-- Paths starting with `steam:<appid>/` are relative to the installation folder of that Steam app, so `-i steam:730/game/csgo/pak01_dir.vpk` works on any computer with Counter-Strike 2 installed. **Copy URL** in Source 2 Viewer copies `vpk:` links in this form, which can be passed to `--input` to process the file or folder they point to.
+- Only one of `--output`, `--vpk_list` (or `--vpk_dir`), `--vpk_search`, `--vpk_verify`, `--vpk_create`, `--block` (or `--all`), `--test`, `--kv_flatten`, and the shader options can be used at a time.
+- Paths starting with `steam:<appid>/` are relative to the installation folder of that Steam app, so `-i steam:730/game/csgo/pak01_dir.vpk` works on any computer with Counter-Strike 2 installed. **Copy URL** in Source 2 Viewer copies `vpk:` links in this form, which can be passed to `--input` to process the file or folder they point to, unless they point into a VPK inside of another VPK.
 - Pass the `_dir.vpk` of a multi-chunk package (`pak01_dir.vpk`), not one of the numbered `pak01_000.vpk` chunks.
 - Use `--vpk_list` to find the exact path of a file, then filter on it with `--vpk_filepath`. The filter matches the start of the path, so `models/chicken/` works but `chicken` does not, use `*chicken*` instead.
 - For VPK input, `--output` without `--vpk_decompile` writes the compiled files as they are stored. A single compiled file on disk is decompiled whenever `--output` is given.
@@ -65,7 +72,7 @@ The exit code is `0` on success, `1` for invalid arguments, and `2` when any fil
 - References to other files (materials, meshes, textures) are loaded from the game the input belongs to. A file copied out of the game folder will be missing them unless you pass `--game` (see [game search paths](./game-search-paths.md)).
 - `--block` output starts with a summary of the file (type, external references, block list) before the block contents.
 - Folder input does not look inside VPK files unless `--recursive_vpk` is given. This is the easiest way to process all maps of a game, for example `-i <game>/maps --recursive_vpk -e vents_c`.
-- VPKs inside other VPKs (such as 3D skybox prefabs inside map VPKs, or map VPKs inside workshop items) are only processed by `--test`. Otherwise they are treated as regular files, so extract them first with `--vpk_extensions vpk --output <folder>` and run the CLI on the extracted files.
+- VPKs inside other VPKs (such as 3D skybox prefabs inside map VPKs, or map VPKs inside workshop items) are only processed by `--block` and `--all`, by `--test` with `--recursive_vpk`, and by the shader options when `--vpk_extensions` includes `vpk`. Otherwise they are treated as regular files, so extract them first with `--vpk_extensions vpk --output <folder>` and run the CLI on the extracted files.
 - Compiled shaders are split into multiple files (`<name>_<platform>_<model>_features.vcs`, `_vs.vcs`, `_ps.vcs`, ...). Decompiling to `.vfx` only works from the shader VPK, which writes one `.vfx` per shader from the highest shader model among the matched files. A loose `.vcs` file only prints a summary.
 - All `--gltf_*` options require `--gltf_export_format`.
 
@@ -81,6 +88,21 @@ Use `--vpk_dir` to also print file metadata.
 
 ```powershell
 ./Source2Viewer-CLI.exe -i "core/pak01_dir.vpk" --vpk_list
+```
+
+### Search the contents of a VPK
+
+Print the particle systems that draw sprites:
+
+```powershell
+./Source2Viewer-CLI.exe -i "steam:730/game/csgo/pak01_dir.vpk" --vpk_search "C_OP_RenderSprites" --vpk_extensions "vpcf_c"
+```
+
+Search for bytes, or with a regular expression:
+
+```powershell
+./Source2Viewer-CLI.exe -i "steam:730/game/csgo/pak01_dir.vpk" --vpk_search "56 42 4B 56" --vpk_search_options hex
+./Source2Viewer-CLI.exe -i "steam:730/game/csgo/pak01_dir.vpk" --vpk_search "C_OP_Render(Sprites|Trails)" --vpk_search_options regex
 ```
 
 ### Export the entire VPK as is
@@ -105,7 +127,9 @@ Pack compiled map files into a map VPK. The input folder contains the files at t
 ./Source2Viewer-CLI.exe -i "de_example" --vpk_create "maps/de_example.vpk"
 ```
 
-Large packages can be split into 100 MB chunk files (`pak01_000.vpk`, `pak01_001.vpk`, ...) next to the directory file:
+Files and folders starting with a dot are skipped. Nothing is written if a path can not be stored in a VPK, two files would end up at the same path, or the files are too large for a single-file VPK.
+
+Large packages can be split into chunk files of 100 MiB (`pak01_000.vpk`, `pak01_001.vpk`, ...) next to the directory file, which must be named `*_dir.vpk`:
 
 ```powershell
 ./Source2Viewer-CLI.exe -i "my_addon" --vpk_create "pak01_dir.vpk" --vpk_create_chunk_size 100
@@ -174,7 +198,7 @@ Decompile a single file from a VPK to a specific path:
 Export a model with only specific animations included:
 
 ```powershell
-./Source2Viewer-CLI.exe -i "model.vmdl_c" -o "output.glb" -d --gltf_export_format glb --gltf_export_animations --gltf_animation_list "idle,walk,run"
+./Source2Viewer-CLI.exe -i "steam:570/game/dota/pak01_dir.vpk" -f models/creeps/roshan/roshan.vmdl_c -o "roshan/roshan.glb" --gltf_export_format glb --gltf_textures_adapt --gltf_animation_list "roshan_idle,roshan_run"
 ```
 
 ### Test all files in Steam libraries

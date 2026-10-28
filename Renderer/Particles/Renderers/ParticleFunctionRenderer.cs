@@ -1,13 +1,14 @@
 using OpenTK.Graphics.OpenGL;
 using ValveResourceFormat.Particles;
 using ValveResourceFormat.ResourceTypes;
+using ValveResourceFormat.Serialization.KeyValues;
 
 namespace ValveResourceFormat.Renderer.Particles.Renderers
 {
     /// <summary>
     /// Base class for particle renderers, which draw a particle collection each frame.
     /// </summary>
-    /// <seealso href="https://s2v.app/SchemaExplorer/cs2/particles/CBaseRendererSource2">CBaseRendererSource2</seealso>
+    /// <seealso href="https://s2v.app/SchemaExplorer/cs2/particles/CParticleFunctionRenderer">CParticleFunctionRenderer</seealso>
     abstract class ParticleFunctionRenderer : ParticleFunction
     {
         /// <summary>Scales the radius every particle is drawn at.</summary>
@@ -16,53 +17,32 @@ namespace ValveResourceFormat.Renderer.Particles.Renderers
         /// <summary>Scales the alpha every particle is drawn at.</summary>
         protected INumberProvider AlphaScale { get; } = new LiteralNumberProvider(1f);
 
-        /// <summary>Scales the colour every particle is drawn at.</summary>
+        /// <summary>Scales the roll every particle is drawn at.</summary>
+        protected INumberProvider RollScale { get; } = new LiteralNumberProvider(1f);
+
+        /// <summary>Scales the colour every particle is drawn at, combined as <see cref="ColorBlendType"/> asks.</summary>
         protected IVectorProvider ColorScale { get; } = new LiteralVectorProvider(Vector3.One);
 
-        /// <summary>Multiplies the luminance-weighted blend the output alpha is scaled by.</summary>
-        protected INumberProvider OverbrightFactor { get; } = new LiteralNumberProvider(1f);
+        /// <summary>How <see cref="ColorScale"/> combines with each particle's colour.</summary>
+        protected ParticleColorBlendType ColorBlendType { get; }
 
-        /// <summary>Scales the scene light a particle is lit by.</summary>
-        protected INumberProvider DiffuseAmount { get; } = new LiteralNumberProvider(1f);
+        /// <summary>The attribute that scales each particle's alpha alongside its own, or <see cref="ParticleField.NoneDisabled"/> for none.</summary>
+        protected ParticleField Alpha2Field { get; } = ParticleField.AlphaAlternate;
 
-        /// <summary>Added on top of the scene light, unlit.</summary>
-        protected INumberProvider SelfIllumAmount { get; } = new LiteralNumberProvider(0f);
+        /// <summary>
+        /// The bit mask over <see cref="ParticleField"/> of the attributes this renderer blends between
+        /// two steps besides those every renderer blends: its <see cref="Alpha2Field"/>.
+        /// </summary>
+        public virtual ulong BlendedFields => ParticleBuffer.IsScalar(Alpha2Field) ? Alpha2Field.Mask() : 0;
 
-        /// <summary>Fraction by which the sampled colour is pulled toward its own luminance.</summary>
-        protected INumberProvider Desaturation { get; } = new LiteralNumberProvider(0f);
+        /// <summary>How the camera's view of a control point scales the draw, and how far particles are drawn toward the camera.</summary>
+        private readonly ParticleVisibilityInputs visibility = new();
+
+        /// <summary>How far each particle is drawn moved toward the camera, in world units.</summary>
+        protected float CameraBias => visibility.CameraBias;
 
         /// <summary>Control point carrying a hue shift, saturation and lightness scale. Negative for none.</summary>
         protected int HsvShiftControlPoint { get; } = -1;
-
-        /// <summary>
-        /// The source alpha values that map to 0 and 1. The engine writes both unconditionally and the
-        /// shader honours the remap whenever the first is below the second, so it is live by default.
-        /// </summary>
-        protected INumberProvider SourceAlphaValueToMapToZero { get; } = new LiteralNumberProvider(0f);
-
-        /// <inheritdoc cref="SourceAlphaValueToMapToZero"/>
-        protected INumberProvider SourceAlphaValueToMapToOne { get; } = new LiteralNumberProvider(1f);
-
-        /// <summary>Whether the vertex colour is decoded from gamma space in the shader.</summary>
-        protected bool GammaCorrectVertexColors { get; } = true;
-
-        /// <summary>Whether sheet frame blending keeps the brighter of the two frames per channel.</summary>
-        protected bool MaxLuminanceFrameBlend { get; }
-
-        /// <summary>Additive self-colour laid over the alpha blend; uploaded as 1 + amount.</summary>
-        protected INumberProvider AddSelfAmount { get; } = new LiteralNumberProvider(0f);
-
-        /// <summary>Shifts the drawn quad within its own plane, in radii.</summary>
-        protected INumberProvider CenterXOffset { get; } = new LiteralNumberProvider(0f);
-
-        /// <inheritdoc cref="CenterXOffset"/>
-        protected INumberProvider CenterYOffset { get; } = new LiteralNumberProvider(0f);
-
-        /// <summary>
-        /// Distance along the view direction the depth is re-taken from, in world units, leaving the
-        /// drawn position alone. Pulls a card in front of geometry it would otherwise intersect.
-        /// </summary>
-        protected INumberProvider DepthBias { get; } = new LiteralNumberProvider(0f);
 
         /// <summary>The order the particles are drawn in.</summary>
         private ParticleSortingChoiceList SortMethod { get; }
@@ -76,20 +56,17 @@ namespace ValveResourceFormat.Renderer.Particles.Renderers
         /// <summary>Whether what this renderer draws is an image; the water effects map takes data instead.</summary>
         protected bool OutputIsColor => !OnlyRenderInEffectsWaterPass;
 
-        // ON_OPTIONAL and ON_REQUIRED currently treated the same
-        private ParticleDepthFeatheringMode FeatheringMode { get; }
-
-        /// <summary>How far a fragment stands off the opaque scene before it draws at full strength.</summary>
-        private INumberProvider FeatheringMinDist { get; } = new LiteralNumberProvider(0f);
-
-        /// <inheritdoc cref="FeatheringMinDist"/>
-        private INumberProvider FeatheringMaxDist { get; } = new LiteralNumberProvider(0f);
-
-        /// <summary>Widens the fade by how transparent and how off-centre a fragment already is.</summary>
-        private INumberProvider FeatheringFilter { get; } = new LiteralNumberProvider(1f);
+        /// <summary>
+        /// The view a screen-space system is drawn through, which camera-facing geometry turns to, or null
+        /// when the system draws in the world. The camera handed to each call stays the scene camera.
+        /// </summary>
+        public Camera? ScreenSpaceCamera { get; set; }
 
         /// <summary>Whether this renderer samples the opaque scene depth.</summary>
-        public bool WantsSceneDepth => FeatheringMode != ParticleDepthFeatheringMode.PARTICLE_DEPTH_FEATHERING_OFF;
+        public virtual bool WantsSceneDepth => false;
+
+        /// <summary>Whether this renderer samples the opaque scene colour.</summary>
+        public virtual bool WantsSceneColor => false;
 
         private readonly Scene? scene;
 
@@ -97,7 +74,7 @@ namespace ValveResourceFormat.Renderer.Particles.Renderers
         private bool LitByScene => scene != null && OutputIsColor;
 
         /// <summary>Whether this renderer is lit from the scene's light probes.</summary>
-        private bool LitByProbes => LitByScene && scene!.LightingInfo.HasValidLightProbes;
+        protected bool LitByProbes => LitByScene && scene!.LightingInfo.HasValidLightProbes;
 
         protected ParticleFunctionRenderer(ParticleDefinitionParser parse, Scene? scene = null) : base(parse)
         {
@@ -105,30 +82,20 @@ namespace ValveResourceFormat.Renderer.Particles.Renderers
 
             OnlyRenderInEffectsWaterPass = parse.Boolean("m_bOnlyRenderInEffectsWaterPass", false);
             OnlyRenderInEffectsBloomPass = parse.Boolean("m_bOnlyRenderInEffectsBloomPass", false);
-            LightingMode = parse.Enum("m_nLightingMode", LightingMode);
             RadiusScale = parse.NumberProvider("m_flRadiusScale", RadiusScale);
             AlphaScale = parse.NumberProvider("m_flAlphaScale", AlphaScale);
+            RollScale = parse.NumberProvider("m_flRollScale", RollScale);
             ColorScale = parse.VectorProvider("m_vecColorScale", ColorScale);
-            OverbrightFactor = parse.NumberProvider("m_flOverbrightFactor", OverbrightFactor);
-            AddSelfAmount = parse.NumberProvider("m_flAddSelfAmount", AddSelfAmount);
-            DepthBias = parse.NumberProvider("m_flDepthBias", DepthBias);
-            SortMethod = parse.Enum("m_nSortMethod", SortMethod);
-            DiffuseAmount = parse.NumberProvider("m_flDiffuseAmount", DiffuseAmount);
-            SelfIllumAmount = parse.NumberProvider("m_flSelfIllumAmount", SelfIllumAmount);
-            Desaturation = parse.NumberProvider("m_flDesaturation", Desaturation);
-            HsvShiftControlPoint = parse.Int32("m_nHSVShiftControlPoint", HsvShiftControlPoint);
-            SourceAlphaValueToMapToZero = parse.NumberProvider("m_flSourceAlphaValueToMapToZero", SourceAlphaValueToMapToZero);
-            SourceAlphaValueToMapToOne = parse.NumberProvider("m_flSourceAlphaValueToMapToOne", SourceAlphaValueToMapToOne);
-            GammaCorrectVertexColors = parse.Boolean("m_bGammaCorrectVertexColors", GammaCorrectVertexColors);
-            MaxLuminanceFrameBlend = parse.Boolean("m_bMaxLuminanceBlendingSequence0", MaxLuminanceFrameBlend);
-            CenterXOffset = parse.NumberProvider("m_flCenterXOffset", CenterXOffset);
-            CenterYOffset = parse.NumberProvider("m_flCenterYOffset", CenterYOffset);
-            FeatheringMode = parse.Enum("m_nFeatheringMode", FeatheringMode);
-            FeatheringMinDist = parse.NumberProvider("m_flFeatheringMinDist", FeatheringMinDist);
-            FeatheringMaxDist = parse.NumberProvider("m_flFeatheringMaxDist", FeatheringMaxDist);
-            FeatheringFilter = parse.NumberProvider("m_flFeatheringFilter", FeatheringFilter);
+            ColorBlendType = parse.Enum("m_nColorBlendType", ColorBlendType);
+            Alpha2Field = parse.ParticleField("m_nAlpha2Field", Alpha2Field);
 
-            GammaCorrectVertexColors &= OutputIsColor;
+            if (parse.Data.GetSubCollection("VisibilityInputs") is { } visibilityInputs)
+            {
+                visibility = new ParticleVisibilityInputs(parse.Nested(visibilityInputs));
+            }
+
+            SortMethod = parse.Enum("m_nSortMethod", SortMethod);
+            HsvShiftControlPoint = parse.Int32("m_nHSVShiftControlPoint", HsvShiftControlPoint);
         }
 
         /// <summary>Creates the static combos for this renderer's shader, lit from the scene when it draws an image.</summary>
@@ -137,61 +104,136 @@ namespace ValveResourceFormat.Renderer.Particles.Renderers
 
         /// <summary>
         /// The hue shift, saturation and lightness scale carried by <see cref="HsvShiftControlPoint"/>,
-        /// or the identity when no control point is bound.
+        /// or the identity when no control point is bound. The control point holds the two scales
+        /// less one, so a zeroed one is the identity too.
         /// </summary>
         protected Vector3 GetHsvShift(ParticleSystemState systemState)
             => HsvShiftControlPoint >= 0
-                ? systemState.GetControlPoint(HsvShiftControlPoint).Position
+                ? systemState.GetControlPoint(HsvShiftControlPoint).Position + new Vector3(0f, 1f, 1f)
                 : new Vector3(0f, 1f, 1f);
 
-        /// <summary>
-        /// The remap the shader applies to the sampled alpha, as the pair the shader expects.
-        /// </summary>
-        protected Vector2 GetAlphaRemapRange(ParticleSystemState systemState)
-            => new(SourceAlphaValueToMapToZero.NextNumber(systemState),
-                SourceAlphaValueToMapToOne.NextNumber(systemState));
+        /// <summary>The renderer scales, evaluated once for a draw of the whole collection.</summary>
+        /// <param name="Radius">Scales every particle's radius.</param>
+        /// <param name="Alpha">Scales every particle's alpha.</param>
+        /// <param name="Roll">Scales every particle's roll.</param>
+        /// <param name="Color">The colour scale converted for <see cref="ParticleColorBlend.Apply"/>, with the alpha scale in w.</param>
+        /// <param name="VisibleAlpha">Scales every particle's alpha by how the camera sees the visibility control point, before the alpha is clamped.</param>
+        protected readonly record struct RendererScales(float Radius, float Alpha, float Roll, Vector4 Color, float VisibleAlpha = 1f);
 
-        /// <summary>
-        /// The state a spritecard draw runs under. The translucent pass leaves blend and depth to each
-        /// draw, so blending is enabled and depth writes stopped or the card renders opaque; an opaque
-        /// renderer keeps the pass defaults instead. Modulate-2x scales what is behind it and so needs
-        /// its own factors, while everything else composites premultiplied. Both faces are drawn,
-        /// since a card or ribbon can turn either one toward the camera.
-        /// </summary>
-        protected static RenderPassScope SpritecardStateScope(ParticleBlendMode blendMode, bool opaque = false)
+        /// <summary>Evaluates the renderer scales for one draw.</summary>
+        protected RendererScales EvaluateScales(ParticleSystemState systemState)
         {
-            var renderState = GraphicsContext.RenderState;
+            var alpha = AlphaScale.NextNumber(systemState);
 
-            if (opaque)
-            {
-                return renderState.Scope(cullMode: RsCullMode.None);
-            }
-
-            var mod2x = blendMode == ParticleBlendMode.PARTICLE_OUTPUT_BLEND_MODE_MOD2X;
-
-            return renderState.Scope(blend: true, depthWrite: false, cullMode: RsCullMode.None,
-                srcBlend: mod2x ? RsBlendMode.DestColor : RsBlendMode.One,
-                dstBlend: mod2x ? RsBlendMode.SrcColor : RsBlendMode.InvSrcAlpha);
+            return new RendererScales(
+                RadiusScale.NextNumber(systemState),
+                alpha,
+                RollScale.NextNumber(systemState),
+                new Vector4(ParticleColorBlend.ConvertScale(ColorBlendType, ColorScale.NextVector(systemState)), alpha));
         }
 
         /// <summary>
-        /// Whether the particles are drawn farthest from the camera first rather than as stored, which
-        /// is oldest first.
+        /// Evaluates the renderer scales for one draw, with the radius scaled and
+        /// <see cref="RendererScales.VisibleAlpha"/> set by how <paramref name="camera"/> sees the
+        /// visibility control point.
         /// </summary>
-        protected bool SortsByDistance(ParticleBlendMode blendMode)
-            // Additive and modulate cards composite to the same result in any order
-            => SortMethod == ParticleSortingChoiceList.PARTICLE_SORTING_NEAREST
-                && blendMode is not (ParticleBlendMode.PARTICLE_OUTPUT_BLEND_MODE_ADD or ParticleBlendMode.PARTICLE_OUTPUT_BLEND_MODE_MOD2X);
+        protected RendererScales EvaluateScales(ParticleSystemState systemState, Camera camera)
+        {
+            var scales = EvaluateScales(systemState);
+            var (visibleAlpha, visibleRadius) = visibility.Evaluate(systemState, camera);
+
+            return scales with
+            {
+                Radius = scales.Radius * visibleRadius,
+                VisibleAlpha = visibleAlpha,
+            };
+        }
+
+        /// <summary>
+        /// The alpha and radius scales of the visibility control point as <paramref name="camera"/> sees
+        /// it, or 1 for both when no visibility control point is set.
+        /// </summary>
+        protected (float Alpha, float Radius) EvaluateControlPointVisibility(ParticleSystemState systemState, Camera camera)
+            => visibility.HasControlPoint ? visibility.Evaluate(systemState, camera) : (1f, 1f);
+
+        /// <summary>
+        /// The particles as they stand at the time the system was asked to reach. That is
+        /// <see cref="ParticleCollection.Current"/>, unless the last step carried the system past that
+        /// time: then each particle is blended back from its state before the step, and the ones created
+        /// during the step get no alpha.
+        /// </summary>
+        protected static ParticleSpan GetBlendedParticles(ParticleCollection particles, ParticleSystemState systemState)
+        {
+            if (particles.Count == 0 || systemState.Data?.TryGetRenderBlend(out var fraction) != true)
+            {
+                return particles.Current;
+            }
+
+            return particles.Blended(fraction);
+        }
+
+        /// <summary>
+        /// How much of the view a sphere fills, from 0 to 1: its radius over its distance, scaled by the
+        /// projection, or all of it when the camera is inside the sphere.
+        /// </summary>
+        protected static float ScreenSizeFraction(Vector3 center, float radius, Camera camera)
+        {
+            var distanceSquared = Vector3.DistanceSquared(center, camera.Location);
+
+            if (radius * radius > distanceSquared)
+            {
+                return 1f;
+            }
+
+            return MathUtils.Saturate(radius * camera.ProjectionMatrix.M22 / MathF.Sqrt(distanceSquared));
+        }
+
+        /// <summary>A particle's position moved toward the camera by <see cref="CameraBias"/>.</summary>
+        protected Vector3 BiasTowardCamera(Vector3 position, Vector3 cameraPosition)
+            => CameraBias == 0f
+                ? position
+                : position + (MathUtils.SafeNormalize(cameraPosition - position) * CameraBias);
+
+        /// <summary>The <see cref="Alpha2Field"/> of every particle in <paramref name="particles"/>, or 1 for each when none is set.</summary>
+        protected ReadOnlySpan<float> ReadAlpha2(ParticleSpan particles)
+        {
+            if (Alpha2Field is ParticleField.NoneDisabled or < 0)
+            {
+                var ones = ParticleScratch.Floats(particles.Length);
+                ones.Fill(1f);
+                return ones;
+            }
+
+            return particles.ReadFloats(Alpha2Field);
+        }
+
+        /// <summary>
+        /// A particle's colour and alpha combined with the colour and alpha scale, in 0 to 1. The alpha
+        /// is taken with its <see cref="Alpha2Field"/> value <paramref name="alpha2"/>,
+        /// <paramref name="alphaPrescale"/> and the visible alpha, and both are clamped to bytes before
+        /// they combine.
+        /// </summary>
+        protected Vector4 BlendColor(Vector3 color, float alpha, float alpha2, in RendererScales scales, float alphaPrescale = 1f)
+            => ParticleColorBlend.Apply(ColorBlendType,
+                ParticleColorBlend.ToBytes(color, alphaPrescale * alpha * alpha2 * scales.VisibleAlpha),
+                scales.Color) / 255f;
+
+        /// <summary>
+        /// Whether the particles are drawn farthest from the camera first rather than newest first.
+        /// </summary>
+        protected bool SortsByDistance => SortMethod == ParticleSortingChoiceList.PARTICLE_SORTING_NEAREST;
 
         /// <summary>
         /// Fills <paramref name="order"/> with one entry per particle, farthest from the camera first.
         /// The low half of an entry is the particle's index.
         /// </summary>
-        protected static void SortBackToFront(ReadOnlySpan<Particle> particles, Vector3 cameraPosition, Span<ulong> order)
+        protected static void SortBackToFront(ParticleSpan particles, Vector3 cameraPosition, Span<ulong> order)
         {
+            var positions = particles.ReadVectors(ParticleField.Position);
+
             for (var i = 0; i < order.Length; i++)
             {
-                var distance = Vector3.DistanceSquared(particles[i].Position, cameraPosition);
+                var distance = Vector3.DistanceSquared(positions[i], cameraPosition);
 
                 // A distance is never negative, so its bits order as an integer, and inverting them
                 // puts the farthest first. The index below them keeps coincident particles in a
@@ -202,41 +244,8 @@ namespace ValveResourceFormat.Renderer.Particles.Renderers
             order.Sort();
         }
 
-        /// <summary>
-        /// Uploads the shared source 2 renderer state every particle shader reads.
-        /// </summary>
-        protected void SetSharedUniforms(Shader shader, ParticleSystemState systemState)
-        {
-            shader.SetUniform1("uOverbrightFactor", OverbrightFactor.NextNumber(systemState));
-            shader.SetUniform1("uAddSelfAmount", 1f + AddSelfAmount.NextNumber(systemState));
-            shader.SetUniform1("uDiffuseAmount", DiffuseAmount.NextNumber(systemState));
-            shader.SetUniform1("uSelfIllumAmount", SelfIllumAmount.NextNumber(systemState));
-            shader.SetUniform1("uDesaturation", Desaturation.NextNumber(systemState));
-            shader.SetUniform3("uHsvShift", GetHsvShift(systemState));
-            shader.SetUniform2("uAlphaRemapRange", GetAlphaRemapRange(systemState));
-            shader.SetUniform3("uColorScale", ColorScale.NextVector(systemState));
-            shader.SetUniform1("uGammaCorrectVertexColors", GammaCorrectVertexColors);
-            shader.SetUniform1("uDepthBias", DepthBias.NextNumber(systemState));
-            shader.SetUniform1("uMaxLuminanceFrameBlend", MaxLuminanceFrameBlend);
-            shader.SetUniform1("uLightingMode", (int)LightingMode);
-            shader.SetUniform1("g_tSceneDepth", (int)ReservedTextureSlots.SceneDepth);
-
-            if (LitByProbes && OwnerNode != null)
-            {
-                shader.SetUniform1("uObjectIndex", OwnerNode.Id);
-            }
-
-            shader.SetUniform2("uFeatheringRange", WantsSceneDepth
-                ? new Vector2(FeatheringMinDist.NextNumber(systemState), FeatheringMaxDist.NextNumber(systemState))
-                : Vector2.Zero);
-            shader.SetUniform1("uFeatheringFilter", FeatheringFilter.NextNumber(systemState));
-        }
-
         /// <summary>The pass this renderer draws in.</summary>
         public RenderPass Pass { get; protected set; } = RenderPass.Translucent;
-
-        /// <summary>Where scene lighting is sampled.</summary>
-        protected ParticleLightingQuality LightingMode { get; } = ParticleLightingQuality.PARTICLE_LIGHTING_PER_PARTICLE;
 
         /// <summary>
         /// The scene node the system this belongs to renders under, when it was created for one.
@@ -244,10 +253,36 @@ namespace ValveResourceFormat.Renderer.Particles.Renderers
         /// </summary>
         public SceneNode? OwnerNode { get; set; }
 
-        /// <summary>Called as the system finishes a step. Runs on the pool, so touch only what this renderer owns.</summary>
+        /// <summary>Called as the system finishes each step of a frame. Runs on the pool, so touch only what this renderer owns.</summary>
         /// <param name="particles">The system's particles, as the step left them.</param>
         /// <param name="systemState">The state the system's functions read it through.</param>
         public virtual void Simulate(ParticleCollection particles, ParticleSystemState systemState)
+        {
+        }
+
+        /// <summary>
+        /// Called once the initializers have run over particles the system just created. Runs on the
+        /// pool, so touch only what this renderer owns.
+        /// </summary>
+        /// <param name="particles">The system's particles.</param>
+        /// <param name="systemState">The state the system's functions read it through.</param>
+        /// <param name="first">The index of the first new particle.</param>
+        /// <param name="count">How many particles were created.</param>
+        public virtual void InitializeParticles(ParticleCollection particles, ParticleSystemState systemState, int first, int count)
+        {
+        }
+
+        /// <summary>The particle events this renderer wants through <see cref="OnParticleEvent"/>.</summary>
+        public virtual ParticleEventType ObservedEvents => ParticleEventType.PARTICLE_EVENT_TYPE_MASK_NONE;
+
+        /// <summary>
+        /// Called when particles of the system raise an event, during the step. Runs on the pool, so
+        /// touch only what this renderer owns.
+        /// </summary>
+        /// <param name="particles">The system's particles; particles being killed are still in place.</param>
+        /// <param name="eventType">The event, a single flag.</param>
+        /// <param name="indices">The indices of the particles that raised it, ascending.</param>
+        public virtual void OnParticleEvent(ParticleCollection particles, ParticleEventType eventType, ReadOnlySpan<int> indices)
         {
         }
 
@@ -261,9 +296,10 @@ namespace ValveResourceFormat.Renderer.Particles.Renderers
         /// <summary>
         /// Called in place of <see cref="Act"/> while the system does not draw: hidden, on a disabled
         /// layer, stopped, out of draw distance or faded out. Renderers that place nodes or decals in the
-        /// scene take them away here.
+        /// scene take them away here, and still let go of what the particles that died held.
         /// </summary>
-        public virtual void Hide()
+        /// <param name="particles">The system's particles.</param>
+        public virtual void Hide(ParticleCollection particles)
         {
         }
 
@@ -295,7 +331,7 @@ namespace ValveResourceFormat.Renderer.Particles.Renderers
         public virtual bool CanRenderReplacement => false;
 
         /// <summary>
-        /// Draws with a pass replacement shader, for the picking buffer and the outline mask.
+        /// Draws with a pass replacement shader, such as the one picking draws with.
         /// </summary>
         /// <param name="replacement">The program the pass replaced the material shaders with.</param>
         /// <param name="objectId">The owning scene node's id, drawn as the instancing base.</param>
@@ -303,8 +339,8 @@ namespace ValveResourceFormat.Renderer.Particles.Renderers
         {
         }
 
-        /// <summary>Draws indexed geometry with the object id as the instancing base, which is how the
-        /// picking and outline programs read it.</summary>
+        /// <summary>Draws indexed geometry with the object id as the instancing base, which is how
+        /// replacement shaders read it.</summary>
         protected static void DrawReplacement(Shader replacement, uint objectId, int vaoHandle, int indexCount, DrawElementsType indexType)
         {
             if (indexCount == 0)
@@ -323,60 +359,16 @@ namespace ValveResourceFormat.Renderer.Particles.Renderers
         /// </summary>
         public virtual Texture.SpritesheetData? SpriteSheet => null;
 
-        /// <summary>A sheet frame rectangle as the shader reads it: minimum in xy, maximum in zw.</summary>
-        /// <param name="min">Lower corner.</param>
-        /// <param name="max">Upper corner.</param>
-        protected static Vector4 Rect(Vector2 min, Vector2 max) => new(min.X, min.Y, max.X, max.Y);
-
-        /// <summary>
-        /// The two sheet frames a particle sits between and how far it has crossed from the first to
-        /// the second. The particle's age and animation type give the playback position, which
-        /// <see cref="Texture.SpritesheetData.Sequence.GetFrameAtPosition"/> then resolves to frames.
-        /// </summary>
-        protected static (int Frame, int NextFrame, float Blend) GetSheetFrame(ref Particle particle,
-            Texture.SpritesheetData.Sequence sequence, float animationRate, ParticleAnimationType animationType, bool animateInFps)
-        {
-            var frameCount = sequence.Frames.Length;
-
-            if (frameCount < 2)
-            {
-                return (0, 0, 0f);
-            }
-
-            var totalTime = sequence.EffectiveTotalTime;
-
-            float passes;
-
-            if (animationType == ParticleAnimationType.ANIMATION_TYPE_MANUAL_FRAMES)
-            {
-                passes = particle.ManualAnimationFrame;
-            }
-            else
-            {
-                // The animation time is chosen by type first; animating in FPS only changes how the
-                // rate is interpreted afterwards, it does not replace the type
-                var animationTime = animationType switch
-                {
-                    ParticleAnimationType.ANIMATION_TYPE_FIT_LIFETIME => particle.NormalizedAge,
-                    _ => particle.Age,
-                };
-
-                passes = animateInFps
-                    ? animationTime * animationRate / totalTime
-                    : animationTime * animationRate;
-            }
-
-            var position = totalTime * (sequence.Clamp
-                ? MathUtils.Saturate(passes)
-                : MathUtils.Fract(passes));
-
-            return sequence.GetFrameAtPosition(position);
-        }
-
         /// <summary>
         /// Replaces the texture this renderer draws with.
         /// </summary>
         public virtual void SetTextureOverride(RenderTexture texture) { }
+
+        /// <summary>
+        /// Replaces the texture this renderer draws with by the texture of that name, loaded the way the
+        /// texture it replaces is.
+        /// </summary>
+        public virtual void SetTextureOverride(string textureName) { }
 
         /// <summary>
         /// Replaces the material this renderer draws with, for renderers that draw with one.

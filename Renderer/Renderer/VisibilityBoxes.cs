@@ -32,6 +32,9 @@ public sealed class VisibilityBox(VisibilityBoxMode mode, Vector3 size)
     /// <summary>Gets whether the box culls.</summary>
     public bool IsEnabled { get; private set; }
 
+    // Counts placements, so a box disabled and enabled elsewhere within a frame still reads as changed
+    internal int Placement { get; private set; }
+
     /// <summary>
     /// Enables the box at a placement. An enabled box keeps its planes, so a new placement only takes
     /// effect after <see cref="Disable"/>.
@@ -67,6 +70,7 @@ public sealed class VisibilityBox(VisibilityBoxMode mode, Vector3 size)
         }
 
         IsEnabled = true;
+        Placement++;
     }
 
     /// <summary>Disables the box.</summary>
@@ -163,6 +167,44 @@ public sealed class VisibilityBoxCuller
         }
     }
 
+    /// <summary>Whether the split matches one saved by <see cref="CopySplitTo"/>.</summary>
+    internal bool MatchesSplit(List<(VisibilityBox Box, int Placement, bool Inside)> split)
+    {
+        if (split.Count != inside.Count + outside.Count)
+        {
+            return false;
+        }
+
+        for (var i = 0; i < split.Count; i++)
+        {
+            var (box, placement, isInside) = split[i];
+            var current = i < inside.Count ? inside[i] : outside[i - inside.Count];
+
+            if (current != box || current.Placement != placement || isInside != i < inside.Count)
+            {
+                return false;
+            }
+        }
+
+        return true;
+    }
+
+    /// <summary>Saves the split, to tell later whether a box was enabled, disabled or moved since.</summary>
+    internal void CopySplitTo(List<(VisibilityBox Box, int Placement, bool Inside)> split)
+    {
+        split.Clear();
+
+        foreach (var box in inside)
+        {
+            split.Add((box, box.Placement, true));
+        }
+
+        foreach (var box in outside)
+        {
+            split.Add((box, box.Placement, false));
+        }
+    }
+
     /// <summary>Whether this view's boxes hide an object with the given world bounds.</summary>
     public bool IsCulled(in AABB bounds)
     {
@@ -200,9 +242,6 @@ public sealed class VisibilityBoxSet
     private readonly List<VisibilityBox> boxes = [];
     private Vector3? viewEye;
 
-    /// <summary>Gets or sets whether the boxes cull at all.</summary>
-    public bool Enabled { get; set; } = true;
-
     /// <summary>Gets how many boxes the scene has, enabled or not.</summary>
     public int Count => boxes.Count;
 
@@ -222,8 +261,17 @@ public sealed class VisibilityBoxSet
     /// <param name="eye">Where the view is, or <see langword="null"/> when nothing may be culled this frame.</param>
     public void PrepareView(Vector3? eye)
     {
-        viewEye = Enabled ? eye : null;
+        viewEye = eye;
         View.Build(boxes, viewEye);
+    }
+
+    /// <summary>Splits the boxes into a culler for one view of the scene, which may see it from elsewhere than <see cref="View"/>.</summary>
+    /// <param name="culler">The culler to fill.</param>
+    /// <param name="eye">Where the view is, or <see langword="null"/> when nothing may be culled this frame.</param>
+    public void BuildView(VisibilityBoxCuller culler, Vector3? eye)
+    {
+        ArgumentNullException.ThrowIfNull(culler);
+        culler.Build(boxes, eye);
     }
 
     /// <summary>Splits the boxes into <see cref="SecondaryView"/> for another eye, culling nothing when <see cref="PrepareView"/> culled nothing.</summary>

@@ -7,6 +7,7 @@ using Avalonia.Interactivity;
 using Avalonia.Layout;
 using Avalonia.Media;
 using GUI.Utils;
+using ValveResourceFormat.IO;
 
 namespace GUI.Controls
 {
@@ -52,7 +53,7 @@ namespace GUI.Controls
 
                 var fileName = files[0];
 
-                if (Regexes.VpkNumberArchive().IsMatch(fileName))
+                if (PackageFileNames.IsArchiveChunk(fileName))
                 {
                     fileName = $"{fileName[..^8]}_dir.vpk";
                 }

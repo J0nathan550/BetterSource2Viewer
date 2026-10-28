@@ -44,10 +44,28 @@ namespace ValveResourceFormat.Renderer
             return a.RenderOrder - b.RenderOrder;
         }
 
-        /// <summary>Compares two requests by distance from camera, furthest first (back-to-front).</summary>
+        /// <summary>Compares two requests by distance from camera, furthest first (back-to-front), with ties in a stable order.</summary>
         public static int CompareCameraDistance(Request a, Request b)
         {
-            return -a.DistanceFromCamera.CompareTo(b.DistanceFromCamera);
+            var byDistance = b.DistanceFromCamera.CompareTo(a.DistanceFromCamera);
+            if (byDistance != 0)
+            {
+                return byDistance;
+            }
+
+            var byNode = a.Node.Id.CompareTo(b.Node.Id);
+            if (byNode != 0 || a.Call == null || b.Call == null)
+            {
+                return byNode;
+            }
+
+            var byMesh = a.Mesh.MeshIndex.CompareTo(b.Mesh.MeshIndex);
+            if (byMesh != 0)
+            {
+                return byMesh;
+            }
+
+            return a.Call.Index.CompareTo(b.Call.Index);
         }
 
         /// <summary>Compares two requests by draw stage first, then by shader program sort ID.</summary>
@@ -118,8 +136,6 @@ namespace ValveResourceFormat.Renderer
 
         private ref struct Uniforms
         {
-            public int EnvmapTexture = -1;
-            public int LPVIrradianceTexture = -1;
             public int MeshId = -1;
             public int ShaderId = -1;
             public int ShaderProgramId = -1;
@@ -129,16 +145,7 @@ namespace ValveResourceFormat.Renderer
 
         private ref struct Config
         {
-            public bool NeedsCubemapBinding;
-            public int LightmapGameVersionNumber;
             public bool IndirectDraw;
-            public LightProbeType LightProbeType;
-        }
-
-        /// <summary>Binds a per-draw texture over its reserved unit.</summary>
-        private static void BindInstanceTexture(ReservedTextureSlots slot, RenderTexture texture)
-        {
-            GL.BindTextureUnit((int)slot, texture.Handle);
         }
 
         /// <summary>Picks the program a draw runs with: the pass's replacement shader, the material's mode for this pass, or the material's own.</summary>
@@ -172,9 +179,6 @@ namespace ValveResourceFormat.Renderer
             Uniforms uniforms = new();
             Config config = new()
             {
-                NeedsCubemapBinding = context.Scene.LightingInfo.CubemapType == CubemapType.IndividualCubemaps,
-                LightmapGameVersionNumber = context.Scene.LightingInfo.LightmapGameVersionNumber,
-                LightProbeType = context.Scene.LightingInfo.LightProbeType,
                 IndirectDraw = context.Scene.DrawMeshletsIndirect
                     && context.RenderPass is RenderPass.DepthOnly or RenderPass.OpaqueAggregate or RenderPass.StaticOverlay,
             };
@@ -185,21 +189,13 @@ namespace ValveResourceFormat.Renderer
             {
                 if (request.Call == null)
                 {
-                    if (context.RenderPass is RenderPass.Opaque or RenderPass.Translucent or RenderPass.Outline or RenderPass.DepthOnly)
+                    if (context.RenderPass is RenderPass.Opaque or RenderPass.Translucent or RenderPass.All or RenderPass.DepthOnly)
                     {
                         material?.PostRender();
-
-                        if (config.LightProbeType == LightProbeType.IndividualProbes && request.Node.LightProbeBinding is { } lightProbe)
-                        {
-                            request.Node.Scene.LightingInfo.BindInstanceLightProbeTextures(lightProbe);
-                        }
 
                         // Custom nodes render themselves and may issue several draws internally; count them as one draw call.
                         counters.Count(Counter.DrawCall);
                         request.Node.Render(context);
-
-                        // Custom nodes bind over the reserved units, so restore them.
-                        BindReservedTextures(context);
 
                         if (context.ReplacementShader?.IgnoreMaterialData == true)
                         {
@@ -233,16 +229,6 @@ namespace ValveResourceFormat.Renderer
                     {
                         shader = requestShader;
                         uniforms = new Uniforms();
-
-                        if (shader.Parameters.ContainsKey("S_SCENE_CUBEMAP_TYPE"))
-                        {
-                            uniforms.EnvmapTexture = shader.GetUniformLocation("g_tEnvironmentMap");
-                        }
-
-                        if (shader.Parameters.ContainsKey("D_BAKED_LIGHTING_FROM_PROBE"))
-                        {
-                            uniforms.LPVIrradianceTexture = shader.GetUniformLocation("g_tLPV_Irradiance");
-                        }
 
                         if (shader.Name == "picking")
                         {
@@ -315,18 +301,6 @@ namespace ValveResourceFormat.Renderer
                     GL.MultiDrawElementsIndirect(request.Call.PrimitiveType, request.Call.IndexType, agg.IndirectDrawByteOffset, agg.IndirectDrawCount, 0);
                     return;
                 }
-            }
-
-            if (config.NeedsCubemapBinding && uniforms.EnvmapTexture != -1 && request.Node.EnvMaps.Count > 0)
-            {
-                var envmap = request.Node.EnvMaps[0];
-                BindInstanceTexture(ReservedTextureSlots.EnvironmentMap, envmap.EnvMapTexture);
-            }
-
-            if (config.LightProbeType == LightProbeType.IndividualProbes && uniforms.LPVIrradianceTexture != -1
-                && request.Node.LightProbeBinding is { } lightProbe)
-            {
-                request.Node.Scene.LightingInfo.BindInstanceLightProbeTextures(lightProbe);
             }
 
             if (request.Node is SceneClutter clutter)

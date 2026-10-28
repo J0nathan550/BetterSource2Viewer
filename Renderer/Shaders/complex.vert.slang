@@ -45,7 +45,7 @@ uniform int F_TEXTURE_ANIMATION_MODE; // csgo_complex, csgo_static_overlay, csgo
 
 #if D_BAKED_LIGHTING_FROM_LIGHTMAP == 1
     in vec2 vLightmapUV;
-    centroid out vec3 vLightmapUVScaled;
+    centroid out vec4 vLightmapUVScaled;
 #elif D_BAKED_LIGHTING_FROM_VERTEX_STREAM == 1
     in vec4 vPerVertexLighting;
     out vec3 vPerVertexLightingOut;
@@ -139,7 +139,7 @@ uniform int F_TEXTURE_ANIMATION_MODE; // csgo_complex, csgo_static_overlay, csgo
     }
 #endif
 
-#if (F_SECONDARY_UV == 1) || (F_FORCE_UV2 == 1)
+#if defined(secondary_uv_vfx_common)
     in vec4 vTEXCOORD1;
     out vec2 vTexCoord2;
 #endif
@@ -151,8 +151,7 @@ uniform int F_TEXTURE_ANIMATION_MODE; // csgo_complex, csgo_static_overlay, csgo
 centroid out vec4 vVertexColorOut;
 out vec3 vFragPosition;
 out vec3 vNormalOut;
-out vec3 vTangentOut;
-out vec3 vBitangentOut;
+out vec4 vTangentOut;
 centroid out vec3 vCentroidNormalOut;
 out vec2 vTexCoordOut;
 
@@ -225,7 +224,7 @@ vec4 GetTintColorLinear(vec4 vTint)
     vec4 TintFade = vec4(1.0);
     if (F_NOTINT == 0)
     {
-        TintFade.rgb = mix(vec3(1.0), SrgbGammaToLinear(vTint.rgb) * g_vColorTint.rgb, g_flModelTintAmount);
+        TintFade.rgb = mix(vec3(1.0), SrgbGammaToLinear(vTint.rgb), g_flModelTintAmount) * g_vColorTint.rgb;
     }
     TintFade.a = pow(vTint.a, max(g_flFadeExponent, 0.0001));
     return TintFade;
@@ -238,7 +237,7 @@ vec4 GetTintColorLinear(vec4 vTint)
     uniform vec2 g_vDetailTexCoordScale = vec2(1.0);
     out vec2 vDetailTexCoords;
 
-    #if (F_SECONDARY_UV == 1) || (F_FORCE_UV2 == 1)
+    #if defined(secondary_uv_vfx_common)
         uniform bool g_bUseSecondaryUvForDetailTexture = false; // this doesn't always show up
     #endif
 
@@ -287,7 +286,7 @@ void main()
     vec4 tangent;
     GetOptionallyCompressedNormalTangent(normal, tangent);
     normal = applyMorphNormal(normal);
-    ComputeWorldTangentFrame(skinTransform, normal, tangent, vNormalOut, vTangentOut, vBitangentOut);
+    ComputeWorldTangentFrame(skinTransform, normal, tangent, vNormalOut, vTangentOut);
 
     #if defined(foliage_vfx_common)
         // Interpolate out for debug visualization
@@ -341,7 +340,7 @@ void main()
 #endif
 
 #if (D_BAKED_LIGHTING_FROM_LIGHTMAP == 1)
-    vLightmapUVScaled = vec3(vLightmapUV * g_vLightmapUvScale.xy, 0);
+    vLightmapUVScaled = GetLightmapCoordinates(vLightmapUV);
 #elif (D_BAKED_LIGHTING_FROM_VERTEX_STREAM == 1)
     vec3 Light = vPerVertexLighting.rgb * 6.0 * vPerVertexLighting.a;
     vPerVertexLightingOut = pow2(Light);
@@ -358,12 +357,12 @@ void main()
     #endif
 #endif
 
-#if (F_SECONDARY_UV == 1) || (F_FORCE_UV2 == 1)
+#if defined(secondary_uv_vfx_common)
     vTexCoord2 = vTEXCOORD1.xy;
 #endif
 
 #if defined(detail_texture_vfx_common) || CS2_CHARACTER_ADJUSTMENTS
-    #if (F_SECONDARY_UV == 1) || (F_FORCE_UV2 == 1)
+    #if defined(secondary_uv_vfx_common)
         vec2 detailCoords = (g_bUseSecondaryUvForDetailTexture || (F_FORCE_UV2 == 1)) ? vTexCoord2 : vTexCoordOut;
     #else
         #define detailCoords vTexCoordOut

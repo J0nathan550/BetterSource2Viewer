@@ -7,6 +7,9 @@ namespace GUI.Controls;
 /// </summary>
 sealed class OwningDecorator(params IDisposable[] owned) : Decorator, IDisposable
 {
+    /// <summary>What this decorator disposes along with itself, such as the viewer of the tab it fills.</summary>
+    public IReadOnlyList<IDisposable> Owned => owned;
+
     public void Dispose()
     {
         foreach (var disposable in owned)

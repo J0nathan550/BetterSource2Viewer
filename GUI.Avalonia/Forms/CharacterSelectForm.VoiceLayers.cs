@@ -230,7 +230,7 @@ namespace GUI.Forms
             try
             {
                 using var resource = new Resource { FileName = entry.GetFullPath() };
-                resource.Read(GameFileLoader.GetPackageEntryStream(package, entry));
+                resource.Read(package.GetMemoryMappedStreamIfPossible(entry));
 
                 if (AudioPlayer.CreateWaveStream(resource) is not { } audio)
                 {

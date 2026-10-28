@@ -172,18 +172,22 @@ namespace GUI.Utils
             {
                 Log.Error(nameof(Settings), $"Failed to parse '{SettingsFilePath}', is it corrupted?{Environment.NewLine}{e}");
 
-                try
+                // A run driven by automation keeps settings in memory and leaves the file alone
+                if (!Automation.Automation.IsEnabled)
                 {
-                    var corruptedPath = Path.ChangeExtension(SettingsFilePath, $".corrupted-{DateTimeOffset.Now.ToUnixTimeSeconds()}.txt");
-                    File.Move(SettingsFilePath, corruptedPath);
+                    try
+                    {
+                        var corruptedPath = Path.ChangeExtension(SettingsFilePath, $".corrupted-{DateTimeOffset.Now.ToUnixTimeSeconds()}.txt");
+                        File.Move(SettingsFilePath, corruptedPath);
 
-                    Log.Error(nameof(Settings), $"Corrupted '{Path.GetFileName(SettingsFilePath)}' has been renamed to '{Path.GetFileName(corruptedPath)}'.");
+                        Log.Error(nameof(Settings), $"Corrupted '{Path.GetFileName(SettingsFilePath)}' has been renamed to '{Path.GetFileName(corruptedPath)}'.");
 
-                    Save();
-                }
-                catch
-                {
-                    //
+                        Save();
+                    }
+                    catch
+                    {
+                        //
+                    }
                 }
             }
 
@@ -350,9 +354,15 @@ namespace GUI.Utils
 
         /// <summary>
         /// Serializes the current <see cref="Config"/> to disk, writing atomically via a temp file.
+        /// A run driven by automation keeps every change in memory instead.
         /// </summary>
         public static void Save()
         {
+            if (Automation.Automation.IsEnabled)
+            {
+                return;
+            }
+
             var tempFile = Path.GetTempFileName();
 
             using (var stream = new FileStream(tempFile, FileMode.Create, FileAccess.Write, FileShare.None))
@@ -365,7 +375,8 @@ namespace GUI.Utils
 
         /// <summary>
         /// Appends <paramref name="path"/> to the end of the recent files list (most recent last),
-        /// removing any duplicate entry, trimming the oldest entries to <see cref="RecentFilesLimit"/>, then saves.
+        /// removing any duplicate entry and trimming the oldest entries to <see cref="RecentFilesLimit"/>.
+        /// The caller is responsible for calling <see cref="Save"/>.
         /// </summary>
         /// <param name="path">The absolute file path to record as recently opened.</param>
         public static void TrackRecentFile(string path)
@@ -377,8 +388,6 @@ namespace GUI.Utils
             {
                 Config.RecentFiles.RemoveRange(0, Config.RecentFiles.Count - RecentFilesLimit);
             }
-
-            Save();
         }
 
         /// <summary>

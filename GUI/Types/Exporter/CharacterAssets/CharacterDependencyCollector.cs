@@ -2668,7 +2668,7 @@ namespace GUI.Types.Exporter.CharacterAssets
                 try
                 {
                     using var resource = new Resource { FileName = path };
-                    resource.Read(GameFileLoader.GetPackageEntryStream(package, entry));
+                    resource.Read(package.GetMemoryMappedStreamIfPossible(entry));
 
                     if (resource.DataBlock == null)
                     {

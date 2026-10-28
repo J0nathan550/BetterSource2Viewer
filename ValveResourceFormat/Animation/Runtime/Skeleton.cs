@@ -1,3 +1,4 @@
+using System.Runtime.InteropServices;
 using ValveKeyValue;
 using ValveResourceFormat.Serialization.KeyValues;
 
@@ -127,7 +128,7 @@ partial class Skeleton
                 for (var i = numBonesInChain - 2; i > 0; i--)
                 {
                     var percentageThrough = (float)i / (numBonesInChain - 1);
-                    weights[boneChainIndices[i]] = startWeight != UnsetWeight ? float.Lerp(endWeight, startWeight, percentageThrough) : 0f;
+                    weights[boneChainIndices[i]] = startWeight != UnsetWeight ? MathUtils.Lerp(endWeight, startWeight, percentageThrough) : 0f;
                 }
             }
         }
@@ -153,7 +154,7 @@ partial class Skeleton
     }
 
     /// <summary>Gets the index of a bone, or -1 if not found.</summary>
-    public int GetBoneIndex(StringToken boneID) => Array.IndexOf(BoneIDs, boneID);
+    public int GetBoneIndex(StringToken boneID) => MemoryMarshal.Cast<StringToken, uint>(BoneIDs).IndexOf(boneID.Token);
 
     /// <summary>Gets the parent index of a bone, or -1 for roots and invalid bones.</summary>
     public int GetParentBoneIndex(int boneIdx) => boneIdx >= 0 ? ParentIndices[boneIdx] : -1;

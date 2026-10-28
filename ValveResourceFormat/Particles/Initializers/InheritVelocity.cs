@@ -11,25 +11,36 @@ namespace ValveResourceFormat.Particles.Initializers
 
         public InheritVelocity(ParticleDefinitionParser parse) : base(parse)
         {
-            controlPointNumber = parse.Int32("m_nControlPointNumber", controlPointNumber);
+            controlPointNumber = parse.ControlPoint("m_nControlPointNumber", controlPointNumber);
             velocityScale = parse.Float("m_flVelocityScale", velocityScale);
         }
 
-        public override ulong WrittenFields => FieldMask(ParticleField.PositionPrevious);
+        public override ulong WrittenFields => ParticleField.PositionPrevious.Mask();
 
-        public override Particle Initialize(ref Particle particle, ParticleCollection particles, ParticleSystemState particleSystemState)
+        protected override void InitializeCall(ParticleSpan run, ParticleCollection particles, ParticleSystemState particleSystemState)
         {
-            // The inherited velocity comes from the control point's motion over the last frame; a move
-            // of 100+ units is treated as a teleport and skipped.
-            var controlPoint = particleSystemState.GetControlPoint(controlPointNumber);
+            var frameTime = particleSystemState.CurrentStep;
 
-            if (controlPoint.StepDelta.Length() >= 100f)
+            if (frameTime <= 0f)
             {
-                return particle;
+                return;
             }
 
-            particle.Velocity += controlPoint.Velocity * velocityScale;
-            return particle;
+            // A rescaled move of 100 units or more is treated as a teleport
+            var step = particleSystemState.GetControlPoint(controlPointNumber).StepDelta * particleSystemState.PreviousStep / frameTime;
+
+            if (step.Length() >= 100f)
+            {
+                return;
+            }
+
+            var previous = run.Vectors(ParticleField.PositionPrevious);
+            var scaledStep = step * velocityScale;
+
+            for (var i = 0; i < previous.Length; i++)
+            {
+                previous[i] -= scaledStep;
+            }
         }
     }
 }

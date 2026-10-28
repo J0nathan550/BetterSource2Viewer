@@ -50,11 +50,12 @@ namespace Tests.IO
             using (Assert.Multiple())
             {
                 await Assert.That(VpkLink.IsVpkLink("VPK:file")).IsTrue();
-                await Assert.That(packagePaths).IsEquivalentTo(["steam:730/game/csgo/pak01_dir.vpk", "maps/de_dust2.vpk"]);
+                await Assert.That(packagePaths).IsEquivalentTo(["steam:730/game/csgo/pak01_dir.vpk", "maps/de_dust2.vpk"], StringComparer.Ordinal);
                 await Assert.That(innerPath).IsEqualTo("maps/de_dust2/entities/default_ents.vents_c");
                 await Assert.That(noPackagePaths).IsEmpty();
                 await Assert.That(noPackageInnerPath).IsEqualTo("C:/Some%20Game/file.vmdl_c");
                 await Assert.That(VpkLink.EscapePath("100%.txt")).IsEqualTo("100%25.txt");
+                await Assert.That(VpkLink.Create([@"C:\100%\pak01_dir.vpk", "maps/inner.vpk", "models/x.vmdl_c"])).IsEqualTo("vpk:C:/100%25/pak01_dir.vpk:maps/inner.vpk:models/x.vmdl_c");
             }
         }
 

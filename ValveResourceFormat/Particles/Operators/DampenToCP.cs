@@ -13,10 +13,13 @@ namespace ValveResourceFormat.Particles.Operators
 
         public DampenToCP(ParticleDefinitionParser parse) : base(parse)
         {
-            controlPoint = parse.Int32("m_nControlPointNumber", controlPoint);
+            controlPoint = parse.ControlPoint("m_nControlPointNumber", controlPoint);
             range = parse.Float("m_flRange", range);
             scale = parse.Float("m_flScale", scale);
         }
+
+        /// <inheritdoc/>
+        public override ulong StoredFields => ParticleField.Position.Mask() | ParticleField.PositionPrevious.Mask();
 
         public override void Operate(ParticleCollection particles, float frameTime, ParticleSystemState particleSystemState, float strength)
         {
@@ -27,9 +30,14 @@ namespace ValveResourceFormat.Particles.Operators
 
             var controlPointPosition = particleSystemState.GetControlPoint(controlPoint).Position;
 
-            foreach (ref var particle in particles.Current)
+            var current = particles.Current;
+            var positions = current.Vectors(ParticleField.Position);
+            var previousPositions = current.ReadVectors(ParticleField.PositionPrevious);
+
+            for (var i = 0; i < positions.Length; i++)
             {
-                var distance = Vector3.Distance(particle.Position, controlPointPosition);
+                var position = positions[i];
+                var distance = Vector3.Distance(position, controlPointPosition);
 
                 if (distance > range)
                 {
@@ -39,9 +47,10 @@ namespace ValveResourceFormat.Particles.Operators
                 var dampening = MathF.Pow(distance / range, scale);
 
                 // Motion lives in the Verlet position pair, so shortening the step damps the particle
-                var dampened = particle.PositionPrevious + ((particle.Position - particle.PositionPrevious) * dampening);
+                var previousPosition = previousPositions[i];
+                var dampened = previousPosition + ((position - previousPosition) * dampening);
 
-                particle.Position = Vector3.Lerp(particle.Position, dampened, strength);
+                positions[i] = Vector3.Lerp(position, dampened, strength);
             }
         }
     }

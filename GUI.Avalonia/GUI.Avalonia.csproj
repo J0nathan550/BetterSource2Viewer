@@ -100,7 +100,6 @@
   </ItemGroup>
 
   <ItemGroup>
-    <Compile Include="..\GUI\Forms\SearchType.cs" Link="Shared\Forms\%(Filename)%(Extension)" />
     <Compile Include="..\GUI\Types\Exporter\ExportData.cs" Link="Shared\Types\Exporter\%(Filename)%(Extension)" />
     <Compile Include="..\GUI\Types\Exporter\ExportFile.cs" Link="Shared\Types\Exporter\%(Filename)%(Extension)" />
     <Compile Include="..\GUI\Types\Exporter\PackageExporter.cs" Link="Shared\Types\Exporter\%(Filename)%(Extension)" />
@@ -135,7 +134,6 @@
     <Compile Include="..\GUI\Types\Exporter\CharacterAssets\VpcfColorEditor.cs" Link="Shared\Types\Exporter\CharacterAssets\%(Filename)%(Extension)" />
     <Compile Include="..\GUI\Types\PackageViewer\IBetterBaseItem.cs" Link="Shared\Types\PackageViewer\%(Filename)%(Extension)" />
     <Compile Include="..\GUI\Types\PackageViewer\NavigationHistory.cs" Link="Shared\Types\PackageViewer\%(Filename)%(Extension)" />
-    <Compile Include="..\GUI\Types\PackageViewer\PackageContentSearch.cs" Link="Shared\Types\PackageViewer\%(Filename)%(Extension)" />
     <Compile Include="..\GUI\Types\PackageViewer\PackageRecovery.cs" Link="Shared\Types\PackageViewer\%(Filename)%(Extension)" />
     <Compile Include="..\GUI\Types\PackageViewer\VirtualPackageNode.cs" Link="Shared\Types\PackageViewer\%(Filename)%(Extension)" />
   </ItemGroup>
@@ -148,7 +146,6 @@
     <Compile Include="..\GUI\Types\Graphs\Core\GraphPalette.cs" Link="Shared\Types\Graphs\Core\%(Filename)%(Extension)" />
     <Compile Include="..\GUI\Types\Graphs\Core\GraphView.cs" Link="Shared\Types\Graphs\Core\%(Filename)%(Extension)" />
     <Compile Include="..\GUI\Types\Graphs\Core\GraphView.Render.cs" Link="Shared\Types\Graphs\Core\%(Filename)%(Extension)" />
-    <Compile Include="..\GUI\Types\Graphs\Core\GraphWireGeometry.cs" Link="Shared\Types\Graphs\Core\%(Filename)%(Extension)" />
   </ItemGroup>
 
   <ItemGroup>

@@ -2,6 +2,7 @@ using System.Buffers;
 using System.Collections.Frozen;
 using System.Diagnostics;
 using System.IO.Hashing;
+using System.Linq;
 using System.Reflection;
 using System.Runtime.InteropServices;
 using System.Threading;
@@ -25,10 +26,13 @@ namespace ValveResourceFormat.Renderer.Materials
         private readonly Dictionary<(RsTextureAddressMode AddressU, RsTextureAddressMode AddressV, bool Mipmaps, bool AnisotropicFiltering), int> Samplers = [];
         private readonly RendererContext RendererContext;
         private RenderTexture? ErrorTexture;
+        private RenderMaterial? ErrorMaterial;
         private RenderTexture? DefaultNormal;
         private RenderTexture? DefaultMask;
         private RenderTexture? DefaultColor;
         private RenderTexture? DefaultVolume;
+        private RenderTexture? DefaultBlackVolume;
+        private RenderTexture? DefaultCubeArray;
         private RenderTexture? DefaultTextureArray;
         /// <summary>Gets or sets the maximum anisotropy level applied to newly loaded textures when anisotropic filtering is enabled.</summary>
         public static float MaxTextureMaxAnisotropy { get; set; }
@@ -77,6 +81,7 @@ namespace ValveResourceFormat.Renderer.Materials
             }
 
             OwnedMaterials.Clear();
+            ErrorMaterial = null;
             Materials.Clear();
 
             foreach (var item in Textures)
@@ -243,6 +248,38 @@ namespace ValveResourceFormat.Renderer.Materials
             }
 
             return tex;
+        }
+
+        /// <summary>
+        /// Drops a texture from the cache and deletes it, for one whose contents were copied into another, such as a
+        /// light probe volume packed into an atlas. A texture the cache does not hold is left alone.
+        /// </summary>
+        /// <param name="texture">The texture, as <see cref="GetTexture"/> returned it.</param>
+        /// <returns>Whether the cache held the texture.</returns>
+        public bool EvictTexture(RenderTexture texture)
+        {
+            ArgumentNullException.ThrowIfNull(texture);
+
+            var evicted = false;
+
+            foreach (var cache in (Dictionary<string, RenderTexture>[])[Textures, TexturesSrgb])
+            {
+                foreach (var (name, cached) in cache)
+                {
+                    if (ReferenceEquals(cached, texture))
+                    {
+                        cache.Remove(name);
+                        evicted = true;
+                    }
+                }
+            }
+
+            if (evicted)
+            {
+                texture.Delete();
+            }
+
+            return evicted;
         }
 
         /// <summary>
@@ -629,9 +666,14 @@ namespace ValveResourceFormat.Renderer.Materials
 
         private RenderMaterial GetErrorMaterial()
         {
-            var errorMat = new RenderMaterial(RendererContext.ShaderLoader.LoadShader("error"));
-            OwnedMaterials.Add(errorMat);
-            return errorMat;
+            if (ErrorMaterial != null)
+            {
+                return ErrorMaterial;
+            }
+
+            ErrorMaterial = new RenderMaterial(RendererContext.ShaderLoader.LoadShader("error"));
+            OwnedMaterials.Add(ErrorMaterial);
+            return ErrorMaterial;
         }
 
         /// <summary>Returns a lazily created 4x4 checkerboard error texture used as a fallback for missing textures.</summary>
@@ -687,20 +729,40 @@ namespace ValveResourceFormat.Renderer.Materials
         /// <summary>
         /// Returns a lazily created 1x1x1 white volume texture.
         /// </summary>
-        public RenderTexture GetDefaultVolume()
+        public RenderTexture GetDefaultVolume() => DefaultVolume ??= CreateSolidVolume("DefaultVolume", WhiteTexel);
+
+        /// <summary>
+        /// Returns a lazily created 1x1x1 black volume texture.
+        /// </summary>
+        public RenderTexture GetDefaultBlackVolume() => DefaultBlackVolume ??= CreateSolidVolume("DefaultBlackVolume", BlackTexel);
+
+        /// <summary>
+        /// Returns a lazily created 1x1 black cube map array with a single cube.
+        /// </summary>
+        public RenderTexture GetDefaultCubeArray()
         {
-            if (DefaultVolume == null)
+            if (DefaultCubeArray == null)
             {
-                DefaultVolume = RenderTexture.Create3D(TextureTarget.Texture3D, 1, 1, 1, ImageFormat.RGBA8888, 1, "DefaultVolume");
-                DefaultVolume.SetFiltering(TextureMinFilter.Nearest, TextureMagFilter.Nearest);
-                DefaultVolume.SetWrapMode(RsTextureAddressMode.Clamp);
-                GL.TextureSubImage3D(DefaultVolume.Handle, 0, 0, 0, 0, 1, 1, 1, PixelFormat.Rgb, PixelType.UnsignedByte, WhiteTexel);
+                DefaultCubeArray = RenderTexture.Create3D(TextureTarget.TextureCubeMapArray, 1, 1, 6, ImageFormat.RGBA8888, 1, "DefaultCubeArray");
+                DefaultCubeArray.SetFiltering(TextureMinFilter.Nearest, TextureMagFilter.Nearest);
+                GL.ClearTexImage(DefaultCubeArray.Handle, 0, PixelFormat.Rgba, PixelType.UnsignedByte, IntPtr.Zero);
             }
 
-            return DefaultVolume;
+            return DefaultCubeArray;
+        }
+
+        private static RenderTexture CreateSolidVolume(string label, byte[] texel)
+        {
+            var volume = RenderTexture.Create3D(TextureTarget.Texture3D, 1, 1, 1, ImageFormat.RGBA8888, 1, label);
+            volume.SetFiltering(TextureMinFilter.Nearest, TextureMagFilter.Nearest);
+            volume.SetWrapMode(RsTextureAddressMode.Clamp);
+            GL.TextureSubImage3D(volume.Handle, 0, 0, 0, 0, 1, 1, 1, PixelFormat.Rgb, PixelType.UnsignedByte, texel);
+
+            return volume;
         }
 
         private static readonly byte[] WhiteTexel = [255, 255, 255];
+        private static readonly byte[] BlackTexel = [0, 0, 0];
 
         /// <summary>Returns the readback format appropriate for exporting a rendered image: 8-bit BGRA, or 32-bit float RGBA for HDR.</summary>
         /// <param name="hdr">Whether to use the HDR (32-bit float) format.</param>
@@ -743,32 +805,50 @@ namespace ValveResourceFormat.Renderer.Materials
         }
 
         /// <summary>
-        /// Builds a one-dimensional colour ramp from a list of gradient stops.
+        /// Builds a one-dimensional opaque colour ramp, 64 texels wide, from a list of gradient stops.
         /// </summary>
-        /// <param name="stops">Gradient stops, each a position in 0-1 and its colour. Need not be sorted.</param>
-        public static RenderTexture GenerateGradientTexture(ReadOnlySpan<(float Position, Color32 Color)> stops)
+        /// <param name="stops">Gradient stops, each a position and its colour. Need not be sorted; positions are clamped to 0-1.</param>
+        /// <param name="clamp">Whether the ramp holds its end colours outside 0-1 rather than repeating.</param>
+        public static RenderTexture GenerateGradientTexture(ReadOnlySpan<(float Position, Color32 Color)> stops, bool clamp)
         {
-            const int Width = 256;
+            const int Width = 64;
+            const int MaxInsertionSortStops = 32;
+
+            var sorted = new (float Position, Color32 Color)[stops.Length];
+
+            for (var i = 0; i < stops.Length; i++)
+            {
+                sorted[i] = (Math.Clamp(stops[i].Position, 0f, 1f), stops[i].Color);
+            }
+
+            // Both orderings are stable, so stops sharing a position keep their authored order. How a list
+            // longer than the insertion sort limit is ordered is not established; it is kept stable too.
+            if (sorted.Length <= MaxInsertionSortStops)
+            {
+                InsertionSort(sorted);
+            }
+            else
+            {
+                sorted = [.. sorted.OrderBy(static stop => stop.Position)];
+            }
 
             var texels = new byte[Width * 4];
 
             for (var x = 0; x < Width; x++)
             {
-                var position = x / (Width - 1f);
-                var color = SampleGradient(stops, position);
+                // Texel x samples x / 64, so the ramp never reaches its position of 1
+                var color = SampleGradient(sorted, x / (float)Width);
 
                 texels[(x * 4) + 0] = color.R;
                 texels[(x * 4) + 1] = color.G;
                 texels[(x * 4) + 2] = color.B;
-                texels[(x * 4) + 3] = color.A;
+                texels[(x * 4) + 3] = 255;
             }
 
             var texture = new RenderTexture(TextureTarget.Texture2D, Width, 1, 1, 1, "GeneratedGradient");
 
-            // Clamped and filtered: the ramp is addressed by a luminance, so the ends have to hold rather
-            // than wrap, and the steps between stops should not be visible.
             texture.SetFiltering(TextureMinFilter.Linear, TextureMagFilter.Linear);
-            texture.SetWrapMode(RsTextureAddressMode.Clamp);
+            texture.SetWrapMode(clamp ? RsTextureAddressMode.Clamp : RsTextureAddressMode.Wrap);
 
             // sRGB storage, so a sample lands in linear space like every other layer's texture.
             GL.TextureStorage2D(texture.Handle, 1, SizedInternalFormat.Srgb8Alpha8, Width, 1);
@@ -777,53 +857,93 @@ namespace ValveResourceFormat.Renderer.Materials
             return texture;
         }
 
-        private static Color32 SampleGradient(ReadOnlySpan<(float Position, Color32 Color)> stops, float position)
+        private static void InsertionSort((float Position, Color32 Color)[] stops)
+        {
+            for (var i = 1; i < stops.Length; i++)
+            {
+                var stop = stops[i];
+                var j = i - 1;
+
+                while (j >= 0 && stops[j].Position > stop.Position)
+                {
+                    stops[j + 1] = stops[j];
+                    j--;
+                }
+
+                stops[j + 1] = stop;
+            }
+        }
+
+        /// <summary>
+        /// The colour of sorted gradient stops at a position: the first stop's colour before it, the last
+        /// stop's after it, and otherwise each channel interpolated between the two bracketing stops and
+        /// truncated. Without stops the ramp is white.
+        /// </summary>
+        private static Color32 SampleGradient((float Position, Color32 Color)[] stops, float position)
         {
             if (stops.Length == 0)
             {
                 return new Color32(255, 255, 255);
             }
 
-            // Stops are usually authored in order but nothing guarantees it, so pick the bracketing pair by value, not by index.
-            var lower = stops[0];
-            var upper = stops[0];
-            var hasLower = false;
-            var hasUpper = false;
+            // A bisection that ends at the first stop sitting exactly on the position, and otherwise at the
+            // last stop below it, or -1 when the position precedes every stop. With repeated positions the
+            // stop it lands on is whichever the bisection reaches first.
+            var low = -1;
+            var first = 0;
+            var last = stops.Length - 1;
 
-            foreach (var stop in stops)
+            while (first <= last)
             {
-                if (stop.Position <= position && (!hasLower || stop.Position >= lower.Position))
+                var middle = (first + last) >> 1;
+                var stopPosition = stops[middle].Position;
+
+                if (stopPosition == position)
                 {
-                    lower = stop;
-                    hasLower = true;
+                    low = middle;
+                    break;
                 }
 
-                if (stop.Position >= position && (!hasUpper || stop.Position <= upper.Position))
+                if (stopPosition < position)
                 {
-                    upper = stop;
-                    hasUpper = true;
+                    low = middle;
+                    first = middle + 1;
+                }
+                else
+                {
+                    last = middle - 1;
                 }
             }
 
-            if (!hasLower)
+            if (low == -1)
             {
-                return upper.Color;
+                return stops[0].Color;
             }
 
-            if (!hasUpper)
+            if (low == stops.Length - 1)
+            {
+                return stops[low].Color;
+            }
+
+            var lower = stops[low];
+            var upper = stops[low + 1];
+            var span = upper.Position - lower.Position;
+
+            if (span < 1e-5f)
             {
                 return lower.Color;
             }
 
-            var span = upper.Position - lower.Position;
-            var t = span > 0f ? (position - lower.Position) / span : 0f;
+            var fraction = (position - lower.Position) / span;
 
             return new Color32(
-                (byte)float.Round(float.Lerp(lower.Color.R, upper.Color.R, t)),
-                (byte)float.Round(float.Lerp(lower.Color.G, upper.Color.G, t)),
-                (byte)float.Round(float.Lerp(lower.Color.B, upper.Color.B, t)),
-                (byte)float.Round(float.Lerp(lower.Color.A, upper.Color.A, t)));
+                InterpolateChannel(lower.Color.R, upper.Color.R, fraction),
+                InterpolateChannel(lower.Color.G, upper.Color.G, fraction),
+                InterpolateChannel(lower.Color.B, upper.Color.B, fraction));
         }
+
+        private static byte InterpolateChannel(byte lower, byte upper, float fraction)
+            => (byte)(int)(((upper - lower) * fraction) + lower);
 
         private static RenderTexture GenerateColorTexture(int width, int height, byte[] color)
         {

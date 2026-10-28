@@ -207,12 +207,12 @@ namespace GUI.Types.GLViewers
             if (Bitmap != null)
             {
                 // Image viewer
-                AddChannelsComboBox(HasTranslucentPixels(Bitmap));
+                AddChannelsComboBox();
             }
             else if (Svg != null)
             {
                 // Svg viewer
-                AddChannelsComboBox(transparentByDefault: true);
+                AddChannelsComboBox();
             }
             else if (Resource != null)
             {
@@ -267,7 +267,7 @@ namespace GUI.Types.GLViewers
 
             if (Resource.ResourceType == ResourceType.PanoramaVectorGraphic)
             {
-                AddChannelsComboBox(Svg != null);
+                AddChannelsComboBox();
                 return;
             }
             else if (Resource.ResourceType == ResourceType.PostProcessing && Resource.DataBlock is PostProcessing postProcessingData)
@@ -442,7 +442,7 @@ namespace GUI.Types.GLViewers
 
             using (UiControl.BeginGroup("View"))
             {
-                AddChannelsComboBox(HasTranslucentPixels(textureData, decodeFlags));
+                AddChannelsComboBox();
 
                 var forceSoftwareDecode = textureData.IsRawAnyImage;
                 var projectionBeforeSoftwareDecode = (int)CubemapProjection.Equirectangular;
@@ -541,7 +541,7 @@ namespace GUI.Types.GLViewers
             UiControl.AddCheckBox("Autoplay", IsSpritePlaying, isChecked => IsSpritePlaying = isChecked);
             UiControl.AddCheckBox("Loop", SpriteLoop, isChecked => SpriteLoop = isChecked);
 
-            spriteFrameTrackBar = UiControl.AddTrackBar(value =>
+            spriteFrameTrackBar = UiControl.AddTrackBar("Sprite Frame", value =>
             {
                 var sequence = spriteSheetData.Sequences[SelectedSequence];
                 var frameCount = sequence.Frames.Length;
@@ -563,7 +563,7 @@ namespace GUI.Types.GLViewers
                 UpdateSpriteAnimationRate();
             });
 
-            spriteSpeedTrackBar = UiControl.AddTrackBar(value =>
+            spriteSpeedTrackBar = UiControl.AddTrackBar("Sprite Speed", value =>
             {
                 spriteRateSliderValue = value;
                 UpdateSpriteAnimationRate();
@@ -651,50 +651,7 @@ namespace GUI.Types.GLViewers
             OriginalHeight = Svg.Picture.CullRect.Height;
         }
 
-        private const int TranslucencyScanPixelLimit = 2048 * 2048;
-        private const TextureCodec DataInAlphaCodecs = TextureCodec.YCoCg | TextureCodec.RGBM | TextureCodec.HemiOctRB | TextureCodec.NormalizeNormals | TextureCodec.Dxt5nm;
-
-        private static bool HasTranslucentPixels(Texture textureData, TextureCodec codec)
-        {
-            if (textureData.Format == VTexFormat.UNKNOWN || (codec & DataInAlphaCodecs) != 0)
-            {
-                return false;
-            }
-
-            var mipLevel = Math.Max(textureData.NumMipLevels - 1, 0);
-            var width = MathUtils.MipLevelSize(textureData.Width, mipLevel);
-            var height = MathUtils.MipLevelSize(textureData.Height, mipLevel);
-
-            if (width * height > TranslucencyScanPixelLimit)
-            {
-                return false;
-            }
-
-            using var bitmap = textureData.GenerateBitmap(mipLevel: (uint)mipLevel);
-            return HasTranslucentPixels(bitmap);
-        }
-
-        private static bool HasTranslucentPixels(SKBitmap bitmap)
-        {
-            if (bitmap.ColorType is not (SKColorType.Bgra8888 or SKColorType.Rgba8888))
-            {
-                return false;
-            }
-
-            var pixels = bitmap.GetPixelSpan();
-
-            for (var i = 3; i < pixels.Length; i += 4)
-            {
-                if (pixels[i] != byte.MaxValue)
-                {
-                    return true;
-                }
-            }
-
-            return false;
-        }
-
-        private void AddChannelsComboBox(bool transparentByDefault)
+        private void AddChannelsComboBox()
         {
             Debug.Assert(UiControl != null);
 
@@ -720,8 +677,12 @@ namespace GUI.Types.GLViewers
 
             channelsComboBox.Items.AddRange([.. ChannelsComboBoxOrder.Select(c => (object)c.ChoiceString)]);
 
-            var defaultChannels = transparentByDefault ? ChannelMapping.RGBA : ChannelMapping.RGB;
-            channelsComboBox.SelectedIndex = Array.FindIndex(ChannelsComboBoxOrder, channel => channel.Channels == defaultChannels && channel.ChannelSplitMode == ChannelSplitting.None);
+            var isParticleTexture = Resource?.FileName?.Replace('\\', '/')
+                .Contains("materials/particle/", StringComparison.OrdinalIgnoreCase) == true;
+
+            channelsComboBox.SelectedIndex = Svg != null || isParticleTexture
+                ? Array.FindIndex(ChannelsComboBoxOrder, channel => channel.Channels == ChannelMapping.RGBA)
+                : Array.FindIndex(ChannelsComboBoxOrder, channel => channel.Channels == ChannelMapping.RGB);
 
             var samplingComboBox = UiControl.AddSelection("Sampling", (name, index) =>
             {
@@ -911,6 +872,13 @@ namespace GUI.Types.GLViewers
             // TODO: nonpow2 sizes?
             using var bitmap = ReadPixelsToBitmap();
             using var bitmapPixmap = bitmap.PeekPixels();
+
+            if (format == SKEncodedImageFormat.Jpeg)
+            {
+                bitmapPixmap.Encode(fs, new SKJpegEncoderOptions(100, SKJpegEncoderDownsample.Downsample420, SKJpegEncoderAlphaOption.BlendOnBlack));
+                return;
+            }
+
             bitmapPixmap.Encode(fs, format, 100);
         }
 
@@ -1811,15 +1779,11 @@ namespace GUI.Types.GLViewers
         {
             Debug.Assert(shader != null);
 
-            var mode = SpriteSheetDisplay.FullSheet;
+            var mode = SpriteSheetDisplayMode;
 
-            if (captureFullSizeImage || !TryGetCurrentSpriteFrameRect(out var frameRect))
+            if (!TryGetCurrentSpriteFrameRect(out var frameRect) || (captureFullSizeImage && mode == SpriteSheetDisplay.OutlineFrame))
             {
-                frameRect = new Vector4(0f, 0f, 1f, 1f);
-            }
-            else
-            {
-                mode = SpriteSheetDisplayMode;
+                mode = SpriteSheetDisplay.FullSheet;
             }
 
             shader.SetUniform("g_nSpriteSheetMode", (int)mode);

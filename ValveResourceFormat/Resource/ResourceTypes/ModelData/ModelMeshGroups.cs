@@ -47,6 +47,9 @@ namespace ValveResourceFormat.ResourceTypes.ModelData
         /// </summary>
         public IReadOnlyList<BodyGroup> BodyGroups { get; }
 
+        /// <summary>Gets the mask of the groups that are on by default, bit N for group N.</summary>
+        public ulong DefaultMask => defaultMask;
+
         /// <summary>Gets the group names that are on by default.</summary>
         public IEnumerable<string> Defaults
             => Names.Where((_, index) => index < MaxGroups && (defaultMask & 1UL << index) != 0);
@@ -59,7 +62,7 @@ namespace ValveResourceFormat.ResourceTypes.ModelData
             ArgumentNullException.ThrowIfNull(data);
 
             Names = data.GetArray<string>("m_meshGroups") ?? [];
-            meshMasks = data.GetUnsignedIntegerArray("m_refMeshGroupMasks") ?? [];
+            meshMasks = data.GetUnsignedIntegerArray("m_refMeshGroupMasks");
             defaultMask = data.GetUnsignedIntegerProperty("m_nDefaultMeshGroupMask");
             hiddenInTools = [.. data.GetArray<string>("m_BodyGroupsHiddenInTools") ?? []];
 

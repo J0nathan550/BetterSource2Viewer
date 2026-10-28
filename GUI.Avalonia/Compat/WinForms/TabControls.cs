@@ -17,6 +17,9 @@ public class TabPage : Avalonia.Controls.TabItem
         Header = text;
     }
 
+    /// <summary>The content of the tab, as the one child control a WinForms tab page usually has.</summary>
+    public IEnumerable<object> Controls => Content is { } content ? [content] : [];
+
     protected override Type StyleKeyOverride => typeof(Avalonia.Controls.TabItem);
 }
 
@@ -24,6 +27,8 @@ public class TabPage : Avalonia.Controls.TabItem
 public class TabControl : Avalonia.Controls.TabControl
 {
     protected override Type StyleKeyOverride => typeof(Avalonia.Controls.TabControl);
+
+    public TabPage? SelectedTab => SelectedItem as TabPage;
 
     public void SelectTab(TabPage page) => SelectedItem = page;
 }

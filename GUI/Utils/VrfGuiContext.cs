@@ -16,7 +16,7 @@ namespace GUI.Utils
 {
     public class VrfGuiContext : GameFileLoader
     {
-        public static ILogger Logger { get; } = MakeLogger();
+        public static ILogger Logger { get; } = new GuiLoggerAdapter(nameof(RendererContext));
         private static readonly ILogger FileLoaderLogger = new GuiLoggerAdapter(nameof(GameFileLoader));
 
         public string FileName { get; }
@@ -35,13 +35,37 @@ namespace GUI.Utils
         }
 
         public VrfGuiContext? ParentGuiContext { get; }
+
+        /// <summary>
+        /// The context at the top of the chain of parent contexts, this one when it has no parent.
+        /// </summary>
+        public VrfGuiContext RootContext => ParentGuiContext?.RootContext ?? this;
+
         public ToolsAssetInfo? ToolsAssetInfo { get; private set; }
+
+        /// <summary>
+        /// Whether this context is for a package, rather than for a file opened from one.
+        /// </summary>
+        public bool IsPackage => base.CurrentPackage != null;
+
+        /// <summary>
+        /// Path of the file, as a <c>vpk:</c> link when it is inside of a package.
+        /// </summary>
+        public string DisplayPath
+        {
+            get
+            {
+                var chain = GetPackageChain();
+
+                return chain.Count > 1 ? VpkLink.Create(chain) : chain[0];
+            }
+        }
 
         /// <summary>
         /// File name followed by the chain of parent files it was opened from,
         /// with paths on disk made relative to their Steam app when they are inside of one.
         /// </summary>
-        public string DisplayPath
+        public string OpenedFromPath
         {
             get
             {
@@ -57,15 +81,57 @@ namespace GUI.Utils
         }
 
         /// <summary>
-        /// Converts a path on disk to a path relative to its Steam app when it is inside of one.
+        /// Same as <see cref="DisplayPath"/> for a file inside of the package of this context,
+        /// or for the file of this context itself when it is not a package.
         /// </summary>
-        public static string GetDisplayPath(string path) => Path.IsPathRooted(path) ? GetSteamAppPath(path) ?? path : path;
+        public string GetEntryDisplayPath(string entryPath)
+        {
+            if (!IsPackage)
+            {
+                return DisplayPath;
+            }
+
+            var chain = GetPackageChain();
+            chain.Add(entryPath);
+
+            return VpkLink.Create(chain);
+        }
 
         /// <summary>
-        /// Converts a full path inside of an installed Steam app to a portable <c>steam:&lt;appid&gt;/&lt;path&gt;</c> path.
+        /// Builds the <c>vpk:</c> link to the package of this context, and the packages it is nested in.
         /// </summary>
-        /// <returns>The portable path, or <c>null</c> if the path is not inside of an installed app.</returns>
-        public static string? GetSteamAppPath(string fullPath) => GameFolderLocator.GetSteamAppPath(fullPath, InstalledSteamGames.Games);
+        public string GetVpkLink() => VpkLink.Create(GetPackageChain());
+
+        /// <summary>
+        /// File names from the file on disk down to this file, where each one is inside of the package before it.
+        /// Contexts above the file on disk only opened it, so they are not part of its path.
+        /// The file on disk is relative to its Steam app when it is inside of one, so links work on other computers.
+        /// </summary>
+        private List<string> GetPackageChain()
+        {
+            var chain = new List<string>();
+
+            for (var context = this; context != null; context = context.ParentGuiContext)
+            {
+                if (Path.IsPathRooted(context.FileName))
+                {
+                    chain.Add(GetDisplayPath(context.FileName));
+                    break;
+                }
+
+                chain.Add(context.FileName);
+            }
+
+            chain.Reverse();
+
+            return chain;
+        }
+
+        /// <summary>
+        /// Converts a path on disk to a portable <c>steam:&lt;appid&gt;/&lt;path&gt;</c> path when it is inside of an installed Steam app.
+        /// </summary>
+        public static string GetDisplayPath(string path)
+            => Path.IsPathRooted(path) ? GameFolderLocator.GetSteamAppPath(path, InstalledSteamGames.Games) ?? path : path;
 
         private bool ToolsAssetInfoLoaded;
 
@@ -78,8 +144,17 @@ namespace GUI.Utils
         private int Children;
         private bool WantsToBeDisposed;
         private bool Disposed;
+        private bool KeepsPackageOpen;
         private readonly ConcurrentDictionary<string, Resource> CachedResources = [];
         private readonly ConcurrentQueue<RendererContext> rendererContexts = [];
+        private readonly List<Task> Readers = [];
+        private readonly TaskCompletionSource DisposalCompletion = new(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        /// <summary>
+        /// Completes once this context is disposed and has closed its package and the resources loaded through it.
+        /// Disposing is deferred while contexts opened from this one are still open.
+        /// </summary>
+        public Task DisposalCompleted => DisposalCompletion.Task;
 
 #if DEBUG
         private int TotalChildren;
@@ -95,7 +170,7 @@ namespace GUI.Utils
             FileName = fileName;
             ParentGuiContext = parentGuiContext;
 
-            ParentGuiContext?.AddChildren();
+            ParentGuiContext?.AddChild();
 
             if (ParentGuiContext != null || !loadSearchPaths)
             {
@@ -108,10 +183,10 @@ namespace GUI.Utils
         /// <summary>Adds the game search paths from settings.</summary>
         public void LoadSearchPaths()
         {
-            var paths = Settings.Config.GameSearchPaths.ToList(); // Make a copy
-
             try
             {
+                var paths = Settings.Config.GameSearchPaths.ToList(); // Make a copy
+
                 // Find any gameinfo files specified by the user in settings
                 foreach (var searchPath in paths.Where(searchPath => searchPath.EndsWith("gameinfo.gi", StringComparison.InvariantCulture)).ToList())
                 {
@@ -141,7 +216,7 @@ namespace GUI.Utils
             }
         }
 
-        public void AddChildren()
+        private void AddChild()
         {
             Children++;
 
@@ -150,11 +225,25 @@ namespace GUI.Utils
 #endif
         }
 
-        public void RemoveChildren()
+        private void RemoveChild(VrfGuiContext child)
         {
+            DisposeAfter(child.DisposalCompleted);
+
             if (--Children == 0 && WantsToBeDisposed)
             {
                 Dispose();
+            }
+        }
+
+        /// <summary>
+        /// Keeps the package of this context open and <see cref="DisposalCompleted"/> pending until <paramref name="reader"/> completes.
+        /// </summary>
+        public void DisposeAfter(Task reader)
+        {
+            lock (Readers)
+            {
+                Readers.RemoveAll(static task => task.IsCompleted);
+                Readers.Add(reader);
             }
         }
 
@@ -192,27 +281,6 @@ namespace GUI.Utils
             return ToolsAssetInfo;
         }
 
-        public void ClearCache() => ClearCache(disposeStreamingResources: false);
-
-        /// <param name="disposeStreamingResources">Only safe once all renderer contexts on this loader are disposed, since disposal
-        /// waits for streaming reads still holding these resources.</param>
-        private void ClearCache(bool disposeStreamingResources)
-        {
-            foreach (var (path, resource) in CachedResources)
-            {
-                // Texture mips and sounds are still read on background threads after the scene has loaded
-                if (!disposeStreamingResources && resource is { ResourceType: ResourceType.Texture or ResourceType.Sound })
-                {
-                    continue;
-                }
-
-                resource.Dispose();
-                CachedResources.TryRemove(path, out _);
-            }
-
-            //ShaderLoader.ClearCache();
-        }
-
         [SuppressMessage("Usage", "CA2215:Dispose methods should call base class dispose", Justification = "Deferred to StopLoadingAndDispose, which waits for the loaders first")]
         protected override void Dispose(bool disposing)
         {
@@ -236,9 +304,20 @@ namespace GUI.Utils
             Log.Debug(nameof(VrfGuiContext), $"#{ContextId} Dispose (total children: {TotalChildren}, has parent: {ParentGuiContext != null}, prev: {WantsToBeDisposed})");
 #endif
             Disposed = true;
-            ParentGuiContext?.RemoveChildren();
+            ParentGuiContext?.RemoveChild(this);
 
             StopLoadingAndDispose(disposing);
+        }
+
+        /// <summary>
+        /// Leaves the package of this context open when the context is disposed, for the caller to dispose.
+        /// </summary>
+        /// <returns>The package of this context, not of a parent context.</returns>
+        public Package? ReleasePackage()
+        {
+            KeepsPackageOpen = true;
+
+            return base.CurrentPackage;
         }
 
         public RendererContext CreateRendererContext()
@@ -265,22 +344,51 @@ namespace GUI.Utils
             }
 
             // The wait cannot happen on the thread that closed the tab, so the teardown follows it here
-            Task.Run(() =>
+            Task.Run(async () =>
             {
-                foreach (var context in rendererContexts)
+                try
                 {
-                    context.WaitForLoadingToStop();
-                }
+                    foreach (var context in rendererContexts)
+                    {
+                        context.WaitForLoadingToStop();
+                    }
 
-                if (base.CurrentPackage != null)
-                {
-                    base.CurrentPackage.Dispose();
+                    Task[] pendingReaders;
+
+                    lock (Readers)
+                    {
+                        pendingReaders = [.. Readers];
+                    }
+
+                    try
+                    {
+                        await Task.WhenAll(pendingReaders).ConfigureAwait(false);
+                    }
+                    catch (Exception e)
+                    {
+                        Log.Error(nameof(VrfGuiContext), $"Failed while waiting for readers of \"{FileName}\": {e}");
+                    }
+
+                    if (!KeepsPackageOpen)
+                    {
+                        base.CurrentPackage?.Dispose();
+                    }
+
                     base.CurrentPackage = null;
+
+                    foreach (var resource in CachedResources.Values)
+                    {
+                        resource.Dispose();
+                    }
+
+                    CachedResources.Clear();
+
+                    base.Dispose(disposing);
                 }
-
-                ClearCache(disposeStreamingResources: true);
-
-                base.Dispose(disposing);
+                finally
+                {
+                    DisposalCompletion.TrySetResult();
+                }
             });
         }
 
@@ -306,17 +414,45 @@ namespace GUI.Utils
 
             if (foundFile.Package != null)
             {
-                Debug.Assert(foundFile.Package.FileName is not null);
+                var packageContext = GetPackageContext(foundFile.Package, foundFile.Context ?? this);
 
-                var parentContext = new VrfGuiContext(foundFile.Package.FileName, foundFile.Context ?? this)
-                {
-                    CurrentPackage = foundFile.Package
-                };
-
-                newContext = new VrfGuiContext(foundFile.PackageEntry!.GetFullPath(), parentContext);
+                newContext = new VrfGuiContext(foundFile.PackageEntry!.GetFullPath(), packageContext);
             }
 
             return (newContext, foundFile.PackageEntry);
+        }
+
+        /// <summary>
+        /// Returns <paramref name="context"/> if it holds <paramref name="package"/>, otherwise a new context for the package
+        /// under contexts for the packages it is nested in. The new contexts leave the package open, and are disposed once
+        /// the last context opened from them is disposed.
+        /// </summary>
+        private static VrfGuiContext GetPackageContext(Package package, VrfGuiContext context)
+        {
+            if (context.CurrentPackage == package)
+            {
+                return context;
+            }
+
+            if (package is NestedPackage nested)
+            {
+                return new VrfGuiContext(nested.ParentEntry.GetFullPath(), GetPackageContext(nested.Parent, context))
+                {
+                    CurrentPackage = package,
+                    KeepsPackageOpen = true,
+                    WantsToBeDisposed = true,
+                };
+            }
+
+            var fileName = package.FilePath ?? package.FileName;
+            Debug.Assert(fileName is not null);
+
+            return new VrfGuiContext(fileName, context)
+            {
+                CurrentPackage = package,
+                KeepsPackageOpen = true,
+                WantsToBeDisposed = true,
+            };
         }
 
         // Same as FindFile, but also returns the context and package that the file was found in
@@ -348,6 +484,9 @@ namespace GUI.Utils
             return parent.FindFile(file, logNotFound);
         }
 
+        // A file opened from another one, such as an entry of a package, finds no game of its own
+        protected override GameFileLoader? GameInfoFallback => ParentGuiContext;
+
         // Override to add support for parent file loaders
         protected override ShaderCollection LoadShaderFromDisk(string shaderName)
         {
@@ -370,6 +509,7 @@ namespace GUI.Utils
             public Resource? LoadFileCompiled(string file) => LoadFile(string.Concat(file, CompiledFileSuffix));
             public ShaderCollection? LoadShader(string shaderName) => context.LoadShader(shaderName);
             public Stream? GetFileStream(string file) => context.GetFileStream(file);
+            public GameInfo GameInfo => context.GameInfo;
         }
 
         private Resource? LoadFileUncached(string file) => base.LoadFile(file);
@@ -397,26 +537,5 @@ namespace GUI.Utils
         }
 
         public override Resource? LoadFileCompiled(string file) => LoadFile(string.Concat(file, CompiledFileSuffix));
-
-        private static ILogger MakeLogger()
-        {
-            ILoggerFactory? loggerFactory = null;
-
-            try
-            {
-                loggerFactory = LoggerFactory.Create(static builder =>
-                {
-                    builder.SetMinimumLevel(LogLevel.Debug);
-                    builder.AddProvider(new GuiLoggerProvider());
-                });
-                var logger = loggerFactory.CreateLogger(nameof(RendererContext));
-                loggerFactory = null;
-                return logger;
-            }
-            finally
-            {
-                loggerFactory?.Dispose();
-            }
-        }
     }
 }

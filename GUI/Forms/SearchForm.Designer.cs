@@ -34,11 +34,16 @@ namespace GUI.Forms
             cancelButton = new ThemedButton();
             findTextBox = new System.Windows.Forms.TextBox();
             searchTypeComboBox = new ThemedComboBox();
-            fileTypeLabel = new System.Windows.Forms.Label();
-            fileTypeComboBox = new SearchableComboBox();
             filterKeyLabel = new System.Windows.Forms.Label();
             filterKeyComboBox = new ThemedComboBox();
             filterValueComboBox = new ThemedComboBox();
+            matchCaseCheckBox = new System.Windows.Forms.CheckBox();
+            wholeWordCheckBox = new System.Windows.Forms.CheckBox();
+            regexCheckBox = new System.Windows.Forms.CheckBox();
+            onlyInFolderCheckBox = new System.Windows.Forms.CheckBox();
+            extensionLabel = new System.Windows.Forms.Label();
+            extensionComboBox = new ThemedComboBox();
+            hintLabel = new System.Windows.Forms.Label();
             SuspendLayout();
             // 
             // findButton
@@ -51,12 +56,12 @@ namespace GUI.Forms
             findButton.ForeColor = System.Drawing.Color.Black;
             findButton.HoveredBackColor = System.Drawing.Color.FromArgb(140, 191, 255);
             findButton.LabelFormatFlags = System.Windows.Forms.TextFormatFlags.HorizontalCenter | System.Windows.Forms.TextFormatFlags.VerticalCenter | System.Windows.Forms.TextFormatFlags.EndEllipsis;
-            findButton.Location = new System.Drawing.Point(13, 258);
+            findButton.Location = new System.Drawing.Point(13, 336);
             findButton.Margin = new System.Windows.Forms.Padding(4, 3, 4, 3);
             findButton.Name = "findButton";
             findButton.Size = new System.Drawing.Size(88, 31);
             findButton.Style = true;
-            findButton.TabIndex = 0;
+            findButton.TabIndex = 12;
             findButton.Text = "Find";
             findButton.UseVisualStyleBackColor = false;
             // 
@@ -70,12 +75,12 @@ namespace GUI.Forms
             cancelButton.ForeColor = System.Drawing.Color.Black;
             cancelButton.HoveredBackColor = System.Drawing.Color.FromArgb(140, 191, 255);
             cancelButton.LabelFormatFlags = System.Windows.Forms.TextFormatFlags.HorizontalCenter | System.Windows.Forms.TextFormatFlags.VerticalCenter | System.Windows.Forms.TextFormatFlags.EndEllipsis;
-            cancelButton.Location = new System.Drawing.Point(325, 258);
+            cancelButton.Location = new System.Drawing.Point(325, 336);
             cancelButton.Margin = new System.Windows.Forms.Padding(4, 3, 4, 3);
             cancelButton.Name = "cancelButton";
             cancelButton.Size = new System.Drawing.Size(88, 31);
             cancelButton.Style = true;
-            cancelButton.TabIndex = 1;
+            cancelButton.TabIndex = 13;
             cancelButton.Text = "Cancel";
             cancelButton.UseVisualStyleBackColor = false;
             // 
@@ -85,7 +90,7 @@ namespace GUI.Forms
             findTextBox.Margin = new System.Windows.Forms.Padding(4, 3, 4, 3);
             findTextBox.Name = "findTextBox";
             findTextBox.Size = new System.Drawing.Size(400, 25);
-            findTextBox.TabIndex = 2;
+            findTextBox.TabIndex = 0;
             // 
             // searchTypeComboBox
             // 
@@ -101,37 +106,12 @@ namespace GUI.Forms
             searchTypeComboBox.Margin = new System.Windows.Forms.Padding(4, 3, 4, 3);
             searchTypeComboBox.Name = "searchTypeComboBox";
             searchTypeComboBox.Size = new System.Drawing.Size(400, 26);
-            searchTypeComboBox.TabIndex = 5;
-            // 
-            // fileTypeLabel
-            // 
-            fileTypeLabel.AutoSize = true;
-            fileTypeLabel.Location = new System.Drawing.Point(13, 91);
-            fileTypeLabel.Name = "fileTypeLabel";
-            fileTypeLabel.Size = new System.Drawing.Size(63, 19);
-            fileTypeLabel.TabIndex = 6;
-            fileTypeLabel.Text = "File type:";
-            // 
-            // fileTypeComboBox
-            // 
-            fileTypeComboBox.BackColor = System.Drawing.Color.FromArgb(218, 218, 218);
-            fileTypeComboBox.DrawMode = System.Windows.Forms.DrawMode.OwnerDrawFixed;
-            fileTypeComboBox.DropDownBackColor = System.Drawing.Color.FromArgb(218, 218, 218);
-            fileTypeComboBox.DropDownForeColor = System.Drawing.Color.Black;
-            fileTypeComboBox.DropDownStyle = System.Windows.Forms.ComboBoxStyle.DropDownList;
-            fileTypeComboBox.ForeColor = System.Drawing.Color.Black;
-            fileTypeComboBox.HeaderColor = System.Drawing.Color.FromArgb(188, 188, 188);
-            fileTypeComboBox.HighlightColor = System.Drawing.Color.FromArgb(99, 161, 255);
-            fileTypeComboBox.Location = new System.Drawing.Point(13, 118);
-            fileTypeComboBox.Margin = new System.Windows.Forms.Padding(4, 3, 4, 3);
-            fileTypeComboBox.Name = "fileTypeComboBox";
-            fileTypeComboBox.Size = new System.Drawing.Size(400, 26);
-            fileTypeComboBox.TabIndex = 7;
+            searchTypeComboBox.TabIndex = 1;
             // 
             // filterKeyLabel
             // 
             filterKeyLabel.AutoSize = true;
-            filterKeyLabel.Location = new System.Drawing.Point(13, 156);
+            filterKeyLabel.Location = new System.Drawing.Point(13, 210);
             filterKeyLabel.Name = "filterKeyLabel";
             filterKeyLabel.Size = new System.Drawing.Size(103, 19);
             filterKeyLabel.TabIndex = 8;
@@ -147,7 +127,7 @@ namespace GUI.Forms
             filterKeyComboBox.ForeColor = System.Drawing.Color.Black;
             filterKeyComboBox.HeaderColor = System.Drawing.Color.FromArgb(188, 188, 188);
             filterKeyComboBox.HighlightColor = System.Drawing.Color.FromArgb(99, 161, 255);
-            filterKeyComboBox.Location = new System.Drawing.Point(13, 183);
+            filterKeyComboBox.Location = new System.Drawing.Point(13, 234);
             filterKeyComboBox.Margin = new System.Windows.Forms.Padding(4, 3, 4, 3);
             filterKeyComboBox.Name = "filterKeyComboBox";
             filterKeyComboBox.Size = new System.Drawing.Size(400, 26);
@@ -163,12 +143,90 @@ namespace GUI.Forms
             filterValueComboBox.ForeColor = System.Drawing.Color.Black;
             filterValueComboBox.HeaderColor = System.Drawing.Color.FromArgb(188, 188, 188);
             filterValueComboBox.HighlightColor = System.Drawing.Color.FromArgb(99, 161, 255);
-            filterValueComboBox.Location = new System.Drawing.Point(13, 215);
+            filterValueComboBox.Location = new System.Drawing.Point(13, 266);
             filterValueComboBox.Margin = new System.Windows.Forms.Padding(4, 3, 4, 3);
             filterValueComboBox.Name = "filterValueComboBox";
             filterValueComboBox.Size = new System.Drawing.Size(400, 26);
             filterValueComboBox.TabIndex = 10;
             filterValueComboBox.Visible = false;
+            // 
+            // matchCaseCheckBox
+            // 
+            matchCaseCheckBox.AutoSize = true;
+            matchCaseCheckBox.FlatStyle = System.Windows.Forms.FlatStyle.System;
+            matchCaseCheckBox.Location = new System.Drawing.Point(13, 86);
+            matchCaseCheckBox.Name = "matchCaseCheckBox";
+            matchCaseCheckBox.TabIndex = 2;
+            matchCaseCheckBox.Text = "Match case";
+            matchCaseCheckBox.UseMnemonic = false;
+            matchCaseCheckBox.UseVisualStyleBackColor = true;
+            // 
+            // wholeWordCheckBox
+            // 
+            wholeWordCheckBox.AutoSize = true;
+            wholeWordCheckBox.FlatStyle = System.Windows.Forms.FlatStyle.System;
+            wholeWordCheckBox.Location = new System.Drawing.Point(130, 86);
+            wholeWordCheckBox.Name = "wholeWordCheckBox";
+            wholeWordCheckBox.TabIndex = 3;
+            wholeWordCheckBox.Text = "Whole word";
+            wholeWordCheckBox.UseMnemonic = false;
+            wholeWordCheckBox.UseVisualStyleBackColor = true;
+            // 
+            // regexCheckBox
+            // 
+            regexCheckBox.AutoSize = true;
+            regexCheckBox.FlatStyle = System.Windows.Forms.FlatStyle.System;
+            regexCheckBox.Location = new System.Drawing.Point(247, 86);
+            regexCheckBox.Name = "regexCheckBox";
+            regexCheckBox.TabIndex = 4;
+            regexCheckBox.Text = "Regex";
+            regexCheckBox.UseMnemonic = false;
+            regexCheckBox.UseVisualStyleBackColor = true;
+            // 
+            // onlyInFolderCheckBox
+            // 
+            onlyInFolderCheckBox.AutoEllipsis = true;
+            onlyInFolderCheckBox.Location = new System.Drawing.Point(13, 116);
+            onlyInFolderCheckBox.Name = "onlyInFolderCheckBox";
+            onlyInFolderCheckBox.Size = new System.Drawing.Size(400, 24);
+            onlyInFolderCheckBox.TabIndex = 5;
+            onlyInFolderCheckBox.Text = "Search only in: no folder selected";
+            onlyInFolderCheckBox.UseMnemonic = false;
+            onlyInFolderCheckBox.UseVisualStyleBackColor = true;
+            // 
+            // extensionLabel
+            // 
+            extensionLabel.AutoSize = true;
+            extensionLabel.Location = new System.Drawing.Point(13, 148);
+            extensionLabel.Name = "extensionLabel";
+            extensionLabel.Size = new System.Drawing.Size(70, 19);
+            extensionLabel.TabIndex = 6;
+            extensionLabel.Text = "Extension:";
+            // 
+            // extensionComboBox
+            // 
+            extensionComboBox.BackColor = System.Drawing.Color.FromArgb(218, 218, 218);
+            extensionComboBox.DrawMode = System.Windows.Forms.DrawMode.OwnerDrawFixed;
+            extensionComboBox.DropDownBackColor = System.Drawing.Color.FromArgb(218, 218, 218);
+            extensionComboBox.DropDownForeColor = System.Drawing.Color.Black;
+            extensionComboBox.DropDownStyle = System.Windows.Forms.ComboBoxStyle.DropDownList;
+            extensionComboBox.ForeColor = System.Drawing.Color.Black;
+            extensionComboBox.HeaderColor = System.Drawing.Color.FromArgb(188, 188, 188);
+            extensionComboBox.HighlightColor = System.Drawing.Color.FromArgb(99, 161, 255);
+            extensionComboBox.Location = new System.Drawing.Point(13, 172);
+            extensionComboBox.Margin = new System.Windows.Forms.Padding(4, 3, 4, 3);
+            extensionComboBox.Name = "extensionComboBox";
+            extensionComboBox.Size = new System.Drawing.Size(400, 26);
+            extensionComboBox.TabIndex = 7;
+            // 
+            // hintLabel
+            // 
+            hintLabel.AutoEllipsis = true;
+            hintLabel.Location = new System.Drawing.Point(13, 304);
+            hintLabel.Name = "hintLabel";
+            hintLabel.Size = new System.Drawing.Size(400, 22);
+            hintLabel.TabIndex = 11;
+            hintLabel.UseMnemonic = false;
             // 
             // SearchForm
             // 
@@ -176,12 +234,17 @@ namespace GUI.Forms
             AutoScaleDimensions = new System.Drawing.SizeF(7F, 17F);
             AutoScaleMode = System.Windows.Forms.AutoScaleMode.Font;
             CancelButton = cancelButton;
-            ClientSize = new System.Drawing.Size(427, 303);
+            ClientSize = new System.Drawing.Size(427, 381);
+            Controls.Add(hintLabel);
+            Controls.Add(extensionComboBox);
+            Controls.Add(extensionLabel);
+            Controls.Add(onlyInFolderCheckBox);
+            Controls.Add(regexCheckBox);
+            Controls.Add(wholeWordCheckBox);
+            Controls.Add(matchCaseCheckBox);
             Controls.Add(filterValueComboBox);
             Controls.Add(filterKeyComboBox);
             Controls.Add(filterKeyLabel);
-            Controls.Add(fileTypeComboBox);
-            Controls.Add(fileTypeLabel);
             Controls.Add(searchTypeComboBox);
             Controls.Add(findTextBox);
             Controls.Add(cancelButton);
@@ -207,10 +270,15 @@ namespace GUI.Forms
         private ThemedButton findButton;
         private ThemedButton cancelButton;
         private ThemedComboBox searchTypeComboBox;
-        private System.Windows.Forms.Label fileTypeLabel;
-        private SearchableComboBox fileTypeComboBox;
         private System.Windows.Forms.Label filterKeyLabel;
         private ThemedComboBox filterKeyComboBox;
         private ThemedComboBox filterValueComboBox;
+        private System.Windows.Forms.CheckBox matchCaseCheckBox;
+        private System.Windows.Forms.CheckBox wholeWordCheckBox;
+        private System.Windows.Forms.CheckBox regexCheckBox;
+        private System.Windows.Forms.CheckBox onlyInFolderCheckBox;
+        private System.Windows.Forms.Label extensionLabel;
+        private ThemedComboBox extensionComboBox;
+        private System.Windows.Forms.Label hintLabel;
     }
 }

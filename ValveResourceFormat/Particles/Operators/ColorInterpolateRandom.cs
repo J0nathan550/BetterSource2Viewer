@@ -26,7 +26,12 @@ namespace ValveResourceFormat.Particles.Operators
             fadeEndTime = parse.Float("m_flFadeEndTime", fadeEndTime);
             fieldOutput = parse.ParticleField("m_nFieldOutput", fieldOutput);
             easeInOut = parse.Boolean("m_bEaseInOut", easeInOut);
+
+            parse.AddInitialRead(fieldOutput);
         }
+
+        /// <inheritdoc/>
+        public override ulong StoredFields => fieldOutput.Mask();
 
         public override void Operate(ParticleCollection particles, float frameTime, ParticleSystemState particleSystemState, float strength)
         {
@@ -35,23 +40,40 @@ namespace ValveResourceFormat.Particles.Operators
                 return;
             }
 
-            foreach (ref var particle in particles.Current)
+            if (!ParticleBuffer.IsVector(fieldOutput))
             {
+                return;
+            }
+
+            var current = particles.Current;
+            var ages = current.ReadAges();
+
+            var lifetimes = current.ReadFloats(ParticleField.LifeDuration);
+            var particleIds = current.ReadIntegers(ParticleField.ParticleId);
+            var colors = current.Vectors(fieldOutput);
+            var initialColors = particles.Initial.ReadVectors(fieldOutput);
+
+            for (var i = 0; i < colors.Length; i++)
+            {
+                var lifetime = lifetimes[i];
+
+                if (lifetime <= 0f)
+                {
+                    continue;
+                }
+
                 // Eased fades draw each channel separately, uneased fades scale all three by one draw
+                var particleId = particleIds[i];
                 var newColor = easeInOut
                     ? new Vector3(
-                        particleSystemState.Random.ForParticleBetween(particle.ParticleId, RedOffset, colorFadeMin.X, colorFadeMax.X),
-                        particleSystemState.Random.ForParticleBetween(particle.ParticleId, GreenOffset, colorFadeMin.Y, colorFadeMax.Y),
-                        particleSystemState.Random.ForParticleBetween(particle.ParticleId, BlueOffset, colorFadeMin.Z, colorFadeMax.Z))
-                    : particleSystemState.Random.ForParticleBetween(particle.ParticleId, RedOffset, colorFadeMin, colorFadeMax);
+                        particleSystemState.Random.ForParticleBetween(particleId, RedOffset, colorFadeMin.X, colorFadeMax.X),
+                        particleSystemState.Random.ForParticleBetween(particleId, GreenOffset, colorFadeMin.Y, colorFadeMax.Y),
+                        particleSystemState.Random.ForParticleBetween(particleId, BlueOffset, colorFadeMin.Z, colorFadeMax.Z))
+                    : particleSystemState.Random.ForParticleBetween(particleId, RedOffset, colorFadeMin, colorFadeMax);
 
-                var t = easeInOut
-                    ? MathUtils.Smoothstep(fadeStartTime, fadeEndTime, particle.NormalizedAge)
-                    : MathUtils.Saturate(MathUtils.Remap(particle.NormalizedAge, fadeStartTime, fadeEndTime));
+                var t = ColorInterpolate.FadeFraction(ages[i] / lifetime, fadeStartTime, fadeEndTime, easeInOut);
 
-                var initialColor = particle.GetInitialVector(particles, fieldOutput);
-
-                particle.SetVector(fieldOutput, initialColor + ((newColor - initialColor) * t));
+                colors[i] = MathUtils.Lerp(initialColors[i], newColor, t);
             }
         }
     }

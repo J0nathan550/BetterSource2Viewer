@@ -10,16 +10,22 @@ namespace ValveResourceFormat.Particles.Initializers
 
         public ScaleVelocity(ParticleDefinitionParser parse) : base(parse)
         {
-            scale = parse.VectorProvider("m_vecScale", scale);
+            scale = parse.CollectionVectorProvider("m_vecScale", scale);
         }
 
-        public override ulong WrittenFields => FieldMask(ParticleField.PositionPrevious);
+        public override ulong WrittenFields => ParticleField.PositionPrevious.Mask();
 
-        public override Particle Initialize(ref Particle particle, ParticleCollection particles, ParticleSystemState particleSystemState)
+        protected override void InitializeCall(ParticleSpan run, ParticleCollection particles, ParticleSystemState particleSystemState)
         {
-            particle.Velocity *= scale.NextVector(ref particle, particleSystemState);
+            var scaleValue = scale.NextVector(particleSystemState);
 
-            return particle;
+            var positions = run.ReadVectors(ParticleField.Position);
+            var previousPositions = run.Vectors(ParticleField.PositionPrevious);
+
+            for (var i = 0; i < previousPositions.Length; i++)
+            {
+                previousPositions[i] = ((previousPositions[i] - positions[i]) * scaleValue) + positions[i];
+            }
         }
     }
 }

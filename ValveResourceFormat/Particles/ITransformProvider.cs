@@ -11,50 +11,46 @@ namespace ValveResourceFormat.Particles
         /// <summary>
         /// Returns a transformation matrix from the provider.
         /// </summary>
-        Matrix4x4 NextTransform(ref Particle particle, ParticleSystemState renderState);
+        Matrix4x4 NextTransform(ParticleSystemState renderState);
 
         /// <summary>
-        /// Returns a transformation matrix using system-level state only.
-        /// </summary>
-        Matrix4x4 NextTransform(ParticleSystemState renderState)
-            => NextTransform(ref Particle.Default, renderState);
-
-        /// <summary>
-        /// Returns the transform as it stood at <paramref name="time"/> within the frame being simulated, so a
-        /// particle spawned part way through a frame starts from where its source was at that moment.
+        /// Returns the transform as it stood at <paramref name="time"/> within the step being simulated, so a
+        /// particle spawned part way through a step starts from where its source was at that moment.
         /// Providers without a history answer with their current transform.
         /// </summary>
-        Matrix4x4 NextTransformAtTime(ref Particle particle, ParticleSystemState renderState, float time)
-            => NextTransform(ref particle, renderState);
-
-        /// <summary>
-        /// Gets the orientation, meaning the forward direction, that this provider carries.
-        /// </summary>
-        /// <remarks>
-        /// Providers that only place things answer <see langword="false"/> rather than reporting the +X an
-        /// identity rotation would give, so a caller does not overwrite a direction with a meaningless one.
-        /// Returning false is the default, so a provider opts in to having an orientation.
-        /// </remarks>
-        /// <returns>Whether the provider has an orientation to report.</returns>
-        bool TryGetOrientation(ref Particle particle, ParticleSystemState renderState, out Vector3 orientation)
-        {
-            orientation = Vector3.Zero;
-            return false;
-        }
+        Matrix4x4 NextTransformAtTime(ParticleSystemState renderState, float time)
+            => NextTransform(renderState);
     }
 
     /// <summary>
-    /// Provides a transform derived from a control point's position and optional orientation.
+    /// Provides a transform from a control point's axes and position, or from one control point
+    /// picked at random out of a range.
     /// </summary>
     readonly struct ControlPointTransformProvider : ITransformProvider
     {
         private readonly int controlPoint;
         private readonly bool useOrientation;
+        private readonly int rangeMax;
+        private readonly float endGrowthTime;
+        private readonly bool isRange;
 
         public ControlPointTransformProvider(int controlPoint, bool useOrientation)
         {
             this.controlPoint = controlPoint;
             this.useOrientation = useOrientation;
+        }
+
+        /// <summary>
+        /// A transform that picks one of the control points from <paramref name="controlPoint"/> to
+        /// <paramref name="rangeMax"/> that have been set, admitting the higher ones over
+        /// <paramref name="endGrowthTime"/> seconds of the system's life.
+        /// </summary>
+        public ControlPointTransformProvider(int controlPoint, bool useOrientation, int rangeMax, float endGrowthTime)
+            : this(controlPoint, useOrientation)
+        {
+            this.rangeMax = rangeMax;
+            this.endGrowthTime = endGrowthTime;
+            isRange = true;
         }
 
         /// <summary>
@@ -65,87 +61,86 @@ namespace ValveResourceFormat.Particles
         {
         }
 
-        /// <summary>
-        /// Whether this control point says anything about which way it faces, as opposed to only where it is.
-        /// </summary>
-        private bool HasOrientation(ControlPoint cp)
-            => useOrientation && (cp.Rotation is not null || cp.Orientation != Vector3.Zero);
-
-        /// <inheritdoc/>
-        public Matrix4x4 NextTransform(ref Particle particle, ParticleSystemState renderState)
+        private int PickControlPoint(ParticleSystemState state)
         {
-            var cp = renderState.GetControlPoint(controlPoint);
-            var position = cp.Position;
-
-            if (!HasOrientation(cp))
+            if (!isRange)
             {
-                return Matrix4x4.CreateTranslation(position);
+                return controlPoint;
             }
 
-            // A full rotation (e.g. from a map entity's angles) can express frames a bare forward
-            // vector cannot; prefer it when the control point carries one.
-            var rotation = cp.Rotation is { } fullRotation
-                ? Matrix4x4.CreateFromQuaternion(fullRotation)
-                : EntityTransformHelper.ForwardDirectionToRotationMatrix(cp.Orientation);
+            var low = controlPoint;
+            var high = Math.Max(controlPoint, rangeMax);
+            Span<int> candidates = stackalloc int[ParticleSystemState.ControlPointCount];
+            var count = 0;
 
-            return rotation * Matrix4x4.CreateTranslation(position);
+            for (var cp = Math.Max(low, 0); cp <= Math.Min(high, ParticleSystemState.MaxControlPoint); cp++)
+            {
+                if (state.GetControlPoint(cp).ChangeTime != -1f)
+                {
+                    candidates[count++] = cp;
+                }
+            }
+
+            var growth = endGrowthTime == 0f ? 1f : MathF.Min(state.Age, endGrowthTime) / endGrowthTime;
+
+            if (growth < 1f)
+            {
+                var limit = MathF.Floor((MathUtils.Saturate(growth) * (high - low)) + low);
+                var candidate = low + state.Random.NextIndex((int)limit - low + 1);
+
+                if (candidates[..count].Contains(candidate))
+                {
+                    return candidate;
+                }
+            }
+            else if (count == 0)
+            {
+                return controlPoint;
+            }
+
+            var index = state.Random.NextIndex(count);
+
+            return count == 0 ? controlPoint : candidates[Math.Min(index, count - 1)];
+        }
+
+        private Matrix4x4 Rotation(ControlPoint cp)
+            => useOrientation ? cp.GetRotationMatrix() : Matrix4x4.Identity;
+
+        /// <inheritdoc/>
+        public Matrix4x4 NextTransform(ParticleSystemState renderState)
+        {
+            var cp = renderState.GetControlPoint(PickControlPoint(renderState));
+            var transform = Rotation(cp);
+            transform.Translation = cp.Position;
+
+            return transform;
         }
 
         /// <inheritdoc/>
-        public Matrix4x4 NextTransformAtTime(ref Particle particle, ParticleSystemState renderState, float time)
+        public Matrix4x4 NextTransformAtTime(ParticleSystemState renderState, float time)
         {
-            var cp = renderState.GetControlPoint(controlPoint);
-            var fraction = cp.StepFraction(renderState, time);
+            var cp = renderState.GetControlPoint(PickControlPoint(renderState));
+            var fraction = ControlPoint.StepFraction(renderState, time);
 
-            if (fraction >= 1f)
-            {
-                return NextTransform(ref particle, renderState);
-            }
+            var transform = useOrientation
+                ? Matrix4x4.CreateFromQuaternion(Quaternion.Slerp(cp.GetPreviousRotation(), cp.GetRotation(), fraction))
+                : Matrix4x4.Identity;
+            transform.Translation = MathUtils.Lerp(cp.PositionPrevious, cp.Position, fraction);
 
-            var position = Vector3.Lerp(cp.PositionPrevious, cp.Position, fraction);
-
-            if (!HasOrientation(cp))
-            {
-                return Matrix4x4.CreateTranslation(position);
-            }
-
-            var rotation = cp.HasPreviousOrientation
-                ? Quaternion.Slerp(cp.GetPreviousRotation(), cp.GetRotation(), fraction)
-                : cp.GetRotation();
-            return Matrix4x4.CreateFromQuaternion(rotation) * Matrix4x4.CreateTranslation(position);
-        }
-
-        /// <inheritdoc/>
-        public bool TryGetOrientation(ref Particle particle, ParticleSystemState renderState, out Vector3 orientation)
-        {
-            var cp = renderState.GetControlPoint(controlPoint);
-
-            if (!HasOrientation(cp))
-            {
-                orientation = Vector3.Zero;
-                return false;
-            }
-
-            // Forward is the frame's first row either way, and for the direction-only case that is the
-            // direction itself, so there is nothing to build here.
-            orientation = cp.Rotation is { } fullRotation
-                ? Vector3.Transform(Vector3.UnitX, fullRotation)
-                : MathUtils.SafeNormalize(cp.Orientation);
-
-            return true;
+            return transform;
         }
 
         /// <summary>
         /// Transforms a local offset into control point <paramref name="cp"/>'s frame (rotation + translation).
         /// </summary>
         public static Vector3 TransformPosition(ParticleSystemState state, int cp, Vector3 localOffset)
-            => Vector3.Transform(localOffset, new ControlPointTransformProvider(cp, true).NextTransform(ref Particle.Default, state));
+            => Vector3.Transform(localOffset, new ControlPointTransformProvider(cp, true).NextTransform(state));
 
         /// <summary>
         /// Rotates a local direction into control point <paramref name="cp"/>'s frame (rotation only, no translation).
         /// </summary>
         public static Vector3 TransformDirection(ParticleSystemState state, int cp, Vector3 localDir)
-            => Vector3.TransformNormal(localDir, new ControlPointTransformProvider(cp, true).NextTransform(ref Particle.Default, state));
+            => Vector3.TransformNormal(localDir, state.GetControlPoint(cp).GetRotationMatrix());
 
         /// <summary>
         /// Rotates a single Euler angle, given in radians as <paramref name="angleField"/>'s component, by control
@@ -161,9 +156,7 @@ namespace ValveResourceFormat.Particles
                 _ => new Vector3(0f, 0f, degrees),
             };
 
-            var composed = EntityTransformHelper.EulerAnglesToRotationMatrix(angles)
-                * new ControlPointTransformProvider(cp, true).NextTransform(ref Particle.Default, state);
-            var result = EntityTransformHelper.ToEulerAngles(Quaternion.CreateFromRotationMatrix(composed));
+            var result = TransformAngles(state, cp, angles);
 
             return float.DegreesToRadians(angleField switch
             {
@@ -171,6 +164,72 @@ namespace ValveResourceFormat.Particles
                 ParticleField.Yaw => result.Y,
                 _ => result.Z,
             });
+        }
+
+        /// <summary>
+        /// Rotates (pitch, yaw, roll) angles in degrees by control point <paramref name="cp"/>'s
+        /// orientation and returns the angles of the composed rotation.
+        /// </summary>
+        public static Vector3 TransformAngles(ParticleSystemState state, int cp, Vector3 pitchYawRoll)
+        {
+            var composed = EntityTransformHelper.EulerAnglesToRotationMatrix(pitchYawRoll)
+                * state.GetControlPoint(cp).GetRotationMatrix();
+
+            return EntityTransformHelper.ToEulerAngles(Quaternion.CreateFromRotationMatrix(composed));
+        }
+    }
+
+    /// <summary>
+    /// PT_TYPE_NAMED_VALUE. The system's transform named value, as it stands now when following it and
+    /// as the system started with otherwise, blended from the previous step's value within a step.
+    /// The identity when the system has none.
+    /// </summary>
+    readonly struct NamedValueTransformProvider : ITransformProvider
+    {
+        private readonly string name;
+        private readonly bool follow;
+        private readonly bool useOrientation;
+
+        public NamedValueTransformProvider(ParticleDefinitionParser parse)
+        {
+            name = parse.String("m_NamedValue");
+            follow = parse.Boolean("m_bFollowNamedValue");
+            useOrientation = parse.Boolean("m_bUseOrientation", true);
+        }
+
+        private bool TryGet(ParticleSystemState state, out ParticleNamedValue value, out ParticleNamedValue previous)
+        {
+            if (state.Data is { } system)
+            {
+                return system.NamedValues.TryGetTransform(name, follow, out value, out previous);
+            }
+
+            value = previous = ParticleNamedValue.Default(ParticleNamedValueType.Transform);
+            return false;
+        }
+
+        private Matrix4x4 Compose(Quaternion rotation, Vector3 position)
+        {
+            var transform = useOrientation ? Matrix4x4.CreateFromQuaternion(rotation) : Matrix4x4.Identity;
+            transform.Translation = position;
+
+            return transform;
+        }
+
+        /// <inheritdoc/>
+        public Matrix4x4 NextTransform(ParticleSystemState renderState)
+        {
+            TryGet(renderState, out var value, out _);
+            return Compose(value.Rotation, value.Vector);
+        }
+
+        /// <inheritdoc/>
+        public Matrix4x4 NextTransformAtTime(ParticleSystemState renderState, float time)
+        {
+            TryGet(renderState, out var value, out var previous);
+            var fraction = ControlPoint.StepFraction(renderState, time);
+
+            return Compose(Quaternion.Slerp(previous.Rotation, value.Rotation, fraction), MathUtils.Lerp(previous.Vector, value.Vector, fraction));
         }
     }
 
@@ -180,7 +239,7 @@ namespace ValveResourceFormat.Particles
     readonly struct IdentityTransformProvider : ITransformProvider
     {
         /// <inheritdoc/>
-        public Matrix4x4 NextTransform(ref Particle particle, ParticleSystemState renderState)
+        public Matrix4x4 NextTransform(ParticleSystemState renderState)
         {
             return Matrix4x4.Identity;
         }

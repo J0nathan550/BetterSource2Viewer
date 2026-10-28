@@ -2,9 +2,8 @@
 
 using System.Collections.Immutable;
 using System.Diagnostics;
-using System.Globalization;
 using System.IO;
-using System.IO.Enumeration;
+using System.Linq;
 using System.Threading;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
@@ -29,7 +28,7 @@ namespace ValveResourceFormat.IO
     /// To read raw file bytes from a VPK package, use <c>Package.ReadEntry</c> instead.
     /// </para>
     /// </remarks>
-    public class GameFileLoader : IFileLoader, IDisposable
+    public partial class GameFileLoader : IFileLoader, IDisposable
     {
         private const string AddonsSuffix = "_addons";
         private const string GameinfoGi = "gameinfo.gi";
@@ -49,22 +48,40 @@ namespace ValveResourceFormat.IO
 
         private readonly Dictionary<string, ShaderCollection> CachedShaders = [];
         private readonly Lock CachedShadersLock = new();
-        private readonly HashSet<string> CurrentGameSearchPaths = [];
+        private ImmutableArray<string> CurrentGameSearchPaths = [];
         private readonly HashSet<string> CurrentGameOfficialAddonsPaths = [];
         private readonly HashSet<string> CurrentGameAddonsPaths = [];
         private ImmutableArray<Package> CurrentGamePackages = [];
 
+        // Newest first, searched before addons and game packages
+        private ImmutableArray<MountedMapPackage> CurrentMapPackages = [];
+        private readonly Lock MapPackagesLock = new();
+        private readonly List<MountedMapPackage> UnmountedMapPackages = [];
+
+        private sealed class MountedMapPackage(string path, Package package)
+        {
+            public string Path { get; } = path;
+            public Package Package { get; } = package;
+            public int References { get; set; } = 1;
+        }
+
         // Addons are mounted in front of the game's own files, so they override them
-        private readonly List<Package> CurrentAddonPackages = [];
-        private readonly List<string> CurrentAddonSearchPaths = [];
+        private ImmutableArray<AddonSearchPath> CurrentAddonSearchPaths = [];
+
+        /// <summary>An addon vpk or a loose addon folder, exactly one of the two is set.</summary>
+        private readonly record struct AddonSearchPath(Package? Package, string? Folder);
 
         private readonly string? CurrentFileName;
+
+        // Where the gameinfo of the current file is looked for from, which for a source file is the compiled side
+        private readonly string? GameSearchFileName;
         private readonly ILogger Logger;
         private string? PreferredAddonFolderOnDisk;
         private string? WorkshopContentFolder;
         private bool ShaderPackagesScanned;
         private volatile bool AddonDependenciesPending;
         private readonly Lock AddonDependenciesLock = new();
+        private Game ResourceGame;
         private bool StoredSurfacePropertyStringTokens;
 
         /// <summary>
@@ -85,6 +102,7 @@ namespace ValveResourceFormat.IO
         {
             CurrentPackage = currentPackage;
             CurrentFileName = currentFileName;
+            GameSearchFileName = GetGamePathForContentFile(currentFileName);
             Logger = logger ?? NullLogger.Instance;
 
             // Find gameinfo.gi by walking up from the current file, preload vpks and add folders to search paths
@@ -116,17 +134,19 @@ namespace ValveResourceFormat.IO
         {
             if (disposing)
             {
-                foreach (var package in CurrentAddonPackages)
+                foreach (var package in EnumerateMountedPackages())
                 {
                     package.Dispose();
                 }
 
-                foreach (var package in CurrentGamePackages)
+                foreach (var mapPackage in UnmountedMapPackages)
                 {
-                    package.Dispose();
+                    mapPackage.Package.Dispose();
                 }
 
-                CurrentAddonPackages.Clear();
+                CurrentMapPackages = [];
+                UnmountedMapPackages.Clear();
+                CurrentAddonSearchPaths = [];
                 CurrentGamePackages = [];
 
                 lock (CachedShadersLock)
@@ -168,18 +188,17 @@ namespace ValveResourceFormat.IO
                 return (null, CurrentPackage, entry);
             }
 
-            // For addons, always check addon folder first before checking all the other game search paths
-            if (PreferredAddonFolderOnDisk != null)
+            foreach (var mapPackage in CurrentMapPackages)
             {
-                var addonPath = FindFileInFolder(PreferredAddonFolderOnDisk, file);
+                entry = mapPackage.Package.FindEntry(file);
 
-                if (addonPath != null)
+                if (entry != null)
                 {
 #if DEBUG_FILE_LOAD
-                    Logger.LogDebug("Loaded \"{File}\" from addon folder: \"{Path}\"", file, addonPath);
+                    Logger.LogDebug("Loaded \"{File}\" from map vpk \"{Package}\"", file, mapPackage.Package.FileName);
 #endif
 
-                    return (addonPath, null, null);
+                    return (null, mapPackage.Package, entry);
                 }
             }
 
@@ -200,27 +219,22 @@ namespace ValveResourceFormat.IO
                 }
             }
 
-            // Newest first, each addon is mounted in front of the ones before it
-            for (var i = CurrentAddonPackages.Count - 1; i >= 0; i--)
+            foreach (var (package, folder) in CurrentAddonSearchPaths)
             {
-                var package = CurrentAddonPackages[i];
-                entry = package.FindEntry(file);
-
-                if (entry != null)
+                if (package != null)
                 {
+                    entry = package.FindEntry(file);
+
+                    if (entry != null)
+                    {
 #if DEBUG_FILE_LOAD
-                    Logger.LogDebug("Loaded \"{File}\" from addon vpk \"{Package}\"", file, package.FileName);
+                        Logger.LogDebug("Loaded \"{File}\" from addon vpk \"{Package}\"", file, package.FileName);
 #endif
 
-                    return (null, package, entry);
+                        return (null, package, entry);
+                    }
                 }
-            }
-
-            foreach (var folder in CurrentAddonSearchPaths)
-            {
-                var addonPath = FindFileInFolder(folder, file);
-
-                if (addonPath != null)
+                else if (FindFileInFolder(folder!, file) is { } addonPath)
                 {
 #if DEBUG_FILE_LOAD
                     Logger.LogDebug("Loaded \"{File}\" from addon folder: \"{Path}\"", file, addonPath);
@@ -233,12 +247,11 @@ namespace ValveResourceFormat.IO
             // Check additional packages
             foreach (var package in CurrentGamePackages)
             {
-                entry = package?.FindEntry(file);
+                entry = package.FindEntry(file);
 
                 if (entry != null)
                 {
 #if DEBUG_FILE_LOAD
-                    Debug.Assert(package != null);
                     Logger.LogDebug("Loaded \"{File}\" from preloaded vpk \"{Package}\"", file, package.FileName);
 #endif
 
@@ -303,7 +316,7 @@ namespace ValveResourceFormat.IO
                     }
                     else if (foundFile.PackageEntry != null)
                     {
-                        var stream = GetPackageEntryStream(foundFile.Package!, foundFile.PackageEntry);
+                        var stream = foundFile.Package!.GetMemoryMappedStreamIfPossible(foundFile.PackageEntry);
                         shaderFile.Read(fileName, stream);
                     }
 
@@ -380,7 +393,7 @@ namespace ValveResourceFormat.IO
             }
             else if (foundFile.PackageEntry != null)
             {
-                return GetPackageEntryStream(foundFile.Package!, foundFile.PackageEntry);
+                return foundFile.Package!.GetMemoryMappedStreamIfPossible(foundFile.PackageEntry);
             }
             else
             {
@@ -412,7 +425,7 @@ namespace ValveResourceFormat.IO
                 }
                 else if (foundFile.PackageEntry != null)
                 {
-                    var stream = GetPackageEntryStream(foundFile.Package!, foundFile.PackageEntry);
+                    var stream = foundFile.Package!.GetMemoryMappedStreamIfPossible(foundFile.PackageEntry);
                     resource.Read(stream);
                     resourceToReturn = resource;
                     resource = null;
@@ -424,58 +437,6 @@ namespace ValveResourceFormat.IO
             }
 
             return resourceToReturn;
-        }
-
-        private void HandleGameInfo(HashSet<string> folders, string gameRoot, string gameinfoPath)
-        {
-            KVObject gameInfo;
-            using (var stream = File.OpenRead(gameinfoPath))
-            {
-                try
-                {
-                    gameInfo = KVSerializer.Create(KVSerializationFormat.KeyValues1Text).Deserialize(stream);
-                }
-                catch (Exception e)
-                {
-                    Logger.LogError(e, "Failed to read \"{GameInfo}\"", gameinfoPath);
-                    return;
-                }
-            }
-
-            var gameName = gameInfo.TryGetValue("game", out var game) ? game.ToString() : null;
-            Logger.LogInformation("Found \"{GameName}\" from \"{GameInfo}\"", gameName, gameinfoPath);
-
-            var fileSystem = gameInfo["FileSystem"];
-
-            // Only games that opt in mount the dependencies listed in an addon's addoninfo.txt
-            if (fileSystem.GetBooleanProperty("AllowAddonDependencies"))
-            {
-                AddonDependenciesPending = true;
-
-                // Workshop dependencies of a local addon are installed next to the game, in steamapps/workshop/content/appid
-                if (WorkshopContentFolder == null
-                    && fileSystem.TryGetValue("SteamAppId", out var steamAppId)
-                    && FindSteamAppsFolder(gameinfoPath) is { } steamApps)
-                {
-                    WorkshopContentFolder = Path.Join(steamApps, "workshop", "content", steamAppId.ToString());
-                }
-            }
-
-            foreach (var (key, searchPath) in fileSystem["SearchPaths"])
-            {
-                if (key == "Game")
-                {
-                    folders.Add(Path.Combine(gameRoot, searchPath.ToString()!));
-                }
-                else if (key == "OfficialAddonRoot")
-                {
-                    CurrentGameOfficialAddonsPaths.Add(Path.Combine(gameRoot, searchPath.ToString()!));
-                }
-                else if (key == "AddonRoot")
-                {
-                    CurrentGameAddonsPaths.Add(Path.Combine(gameRoot, searchPath.ToString()!));
-                }
-            }
         }
 
         /// <summary>
@@ -509,7 +470,7 @@ namespace ValveResourceFormat.IO
         /// </summary>
         public bool AddDiskPathToSearch(string searchPath)
         {
-            var success = CurrentGameSearchPaths.Add(searchPath);
+            var success = ImmutableInterlocked.Update(ref CurrentGameSearchPaths, static (searchPaths, searchPath) => searchPaths.Contains(searchPath) ? searchPaths : searchPaths.Add(searchPath), searchPath);
 
             if (success)
             {
@@ -524,7 +485,7 @@ namespace ValveResourceFormat.IO
         /// </summary>
         public bool RemoveDiskPathFromSearch(string searchPath)
         {
-            var success = CurrentGameSearchPaths.Remove(searchPath);
+            var success = ImmutableInterlocked.Update(ref CurrentGameSearchPaths, static (searchPaths, searchPath) => searchPaths.Remove(searchPath), searchPath);
 
             if (success)
             {
@@ -564,8 +525,11 @@ namespace ValveResourceFormat.IO
         /// </summary>
         public bool RemovePackageFromSearch(Package package)
         {
-            if (CurrentAddonPackages.Remove(package))
+            var addonSearchPath = new AddonSearchPath(package, null);
+
+            if (CurrentAddonSearchPaths.Contains(addonSearchPath))
             {
+                ImmutableInterlocked.Update(ref CurrentAddonSearchPaths, static (searchPaths, searchPath) => searchPaths.Remove(searchPath), addonSearchPath);
                 return true;
             }
 
@@ -577,245 +541,24 @@ namespace ValveResourceFormat.IO
             }
         }
 
-        private Package ReadPackage(string searchPath)
-        {
-            Logger.LogInformation("Preloading vpk \"{SearchPath}\"", searchPath);
-
-            var package = new Package();
-            package.OptimizeEntriesForBinarySearch(StringComparison.OrdinalIgnoreCase);
-            package.Read(searchPath);
-
-            return package;
-        }
-
         /// <summary>
-        /// Mounts an addon vpk in front of the game's own vpks.
+        /// Returns whether a package with the given VPK path is mounted, including <see cref="CurrentPackage"/>.
         /// </summary>
-        private void AddAddonPackageToSearch(string searchPath)
+        /// <param name="searchPath">Path to the VPK, with or without the <c>_dir.vpk</c> suffix.</param>
+        public bool IsPackageMounted(string searchPath)
         {
-            CurrentAddonPackages.Add(ReadPackage(searchPath));
-        }
+            ArgumentNullException.ThrowIfNull(searchPath);
 
-        /// <summary>
-        /// Mounts a loose addon folder, and the pak vpks inside it, in front of the game's own files.
-        /// </summary>
-        private void AddAddonFolderToSearch(string folder)
-        {
-            foreach (var vpk in EnumeratePakVpks(folder))
+            var packageName = GetFullPackageName(searchPath);
+
+            if (IsSamePackageName(CurrentFileName, packageName))
             {
-                AddAddonPackageToSearch(vpk);
+                return true;
             }
 
-            CurrentAddonSearchPaths.Insert(0, folder);
-            Logger.LogInformation("Added addon folder \"{Folder}\" to search paths", folder);
-        }
-
-        /// <summary>
-        /// Finds and loads search paths from gameinfo.gi files.
-        /// </summary>
-        public void FindAndLoadSearchPaths(string? modIdentifierPath = null)
-        {
-            modIdentifierPath ??= GetModIdentifierFile() ?? FindGameInfoMountingCurrentFolder();
-
-            HashSet<string> folders;
-
-            if (modIdentifierPath == "<VRF_WORKSHOP>")
+            foreach (var package in EnumerateSearchedPackages())
             {
-                folders = FindGameFoldersForWorkshopFile();
-            }
-            else
-            {
-                if (modIdentifierPath == null)
-                {
-                    return;
-                }
-
-                var rootFolder = Path.GetDirectoryName(modIdentifierPath);
-                var assumedGameRoot = Path.GetDirectoryName(rootFolder)!;
-
-                if (Path.GetFileName(modIdentifierPath) == GameinfoGi)
-                {
-                    folders = [];
-
-                    HandleGameInfo(folders, assumedGameRoot, modIdentifierPath);
-                }
-                else
-                {
-                    folders = FindGameFoldersForWorkshopFile();
-
-                    if (assumedGameRoot.EndsWith(AddonsSuffix, StringComparison.InvariantCultureIgnoreCase))
-                    {
-                        var mainGameDir = assumedGameRoot[..^AddonsSuffix.Length];
-                        var mainGameInfo = Path.Join(mainGameDir, GameinfoGi);
-
-                        if (File.Exists(mainGameInfo))
-                        {
-                            HandleGameInfo(folders, Path.GetDirectoryName(mainGameDir)!, mainGameInfo);
-                        }
-                        else if (Directory.Exists(mainGameDir))
-                        {
-                            folders.Add(mainGameDir);
-                        }
-                    }
-
-                    PreferredAddonFolderOnDisk = rootFolder;
-                }
-            }
-
-            FindAndLoadVpksInFolders(folders);
-        }
-
-        private string? GetModIdentifierFile()
-        {
-            var directory = CurrentFileName!;
-            string? childDirectory = null;
-            var i = 10;
-            var isLastWorkshop = false;
-
-            // Check for slash here to support paths on linux under wine
-            if (!Path.IsPathFullyQualified(directory) && !directory.StartsWith('/'))
-            {
-#if DEBUG_FILE_LOAD
-                Logger.LogDebug("Not a fully qualified path \"{Directory}\", not checking for mod", directory);
-#endif
-
-                return null;
-            }
-
-            while (i-- > 0)
-            {
-                directory = Path.GetDirectoryName(directory);
-
-                if (directory == null)
-                {
-                    return null;
-                }
-
-#if DEBUG_FILE_LOAD
-                Logger.LogDebug("Scanning \"{Directory}\"", directory);
-#endif
-
-                if (directory.EndsWith(AddonsSuffix, StringComparison.InvariantCultureIgnoreCase))
-                {
-                    var mainGameDir = directory[..^AddonsSuffix.Length];
-                    var mainGameInfo = Path.Join(mainGameDir, GameinfoGi);
-
-                    if (File.Exists(mainGameInfo))
-                    {
-                        // Loose compiled files of the addon the opened file is in (e.g. csgo_addons/<addon>/materials).
-                        // An addon packed as csgo_addons/vpks/<addon>.vpk is the opened package itself, not a folder.
-                        if (!string.Equals(Path.GetFileName(childDirectory), "vpks", StringComparison.OrdinalIgnoreCase))
-                        {
-                            PreferredAddonFolderOnDisk ??= childDirectory;
-                        }
-
-                        return mainGameInfo;
-                    }
-                }
-
-                var currentDirectory = Path.GetFileName(directory);
-
-                if (currentDirectory == "steamapps")
-                {
-                    if (isLastWorkshop) // Found /steamapps/workshop/ folder
-                    {
-                        return "<VRF_WORKSHOP>";
-                    }
-
-                    return null;
-                }
-
-                isLastWorkshop = currentDirectory == "workshop";
-
-                foreach (var modIdentifier in ModIdentifiers)
-                {
-                    var path = Path.Combine(directory, modIdentifier);
-                    if (File.Exists(path))
-                    {
-                        return path;
-                    }
-                }
-
-                childDirectory = directory;
-            }
-
-            return null;
-        }
-
-        /// <summary>
-        /// Finds the <c>gameinfo.gi</c> of a sibling mod that lists one of the folders the current file is in as a
-        /// search path or addon root, for mod folders that have no mod identifier of their own.
-        /// </summary>
-        private string? FindGameInfoMountingCurrentFolder()
-        {
-            var childDirectory = CurrentFileName!;
-
-            if (!Path.IsPathFullyQualified(childDirectory) && !childDirectory.StartsWith('/'))
-            {
-                return null;
-            }
-
-            childDirectory = Path.GetDirectoryName(childDirectory);
-
-            for (var i = 0; i < 10 && childDirectory != null; i++)
-            {
-                var directory = Path.GetDirectoryName(childDirectory);
-
-                if (directory == null || Path.GetFileName(directory) == "steamapps")
-                {
-                    return null;
-                }
-
-                var childName = Path.GetFileName(childDirectory);
-                childDirectory = directory;
-
-                IEnumerable<string> modFolders;
-
-                try
-                {
-                    modFolders = Directory.EnumerateDirectories(directory);
-                }
-                catch (Exception e) when (e is IOException or UnauthorizedAccessException)
-                {
-                    continue;
-                }
-
-                foreach (var modFolder in modFolders)
-                {
-                    var gameInfo = Path.Join(modFolder, GameinfoGi);
-
-                    if (File.Exists(gameInfo) && GameInfoMountsFolder(gameInfo, childName))
-                    {
-                        return gameInfo;
-                    }
-                }
-            }
-
-            return null;
-        }
-
-        private static bool GameInfoMountsFolder(string gameinfoPath, string folderName)
-        {
-            KVObject gameInfo;
-
-            try
-            {
-                using var stream = File.OpenRead(gameinfoPath);
-                gameInfo = KVSerializer.Create(KVSerializationFormat.KeyValues1Text).Deserialize(stream);
-            }
-            catch (Exception e) when (e is IOException or UnauthorizedAccessException or KeyValueException)
-            {
-                return false;
-            }
-
-            if (!gameInfo.TryGetValue("FileSystem", out var fileSystem) || !fileSystem.TryGetValue("SearchPaths", out var searchPaths))
-            {
-                return false;
-            }
-
-            foreach (var (_, searchPath) in searchPaths)
-            {
-                if (string.Equals(searchPath.ToString(), folderName, StringComparison.OrdinalIgnoreCase))
+                if (IsSamePackageName(package.FilePath, packageName))
                 {
                     return true;
                 }
@@ -824,15 +567,264 @@ namespace ValveResourceFormat.IO
             return false;
         }
 
+        /// <summary>
+        /// Returns whether a package opened from the entry of the outer package is mounted, including <see cref="CurrentPackage"/>.
+        /// </summary>
+        private bool IsPackageMounted(Package outerPackage, PackageEntry entry)
+        {
+            foreach (var package in EnumerateSearchedPackages())
+            {
+                if (package is NestedPackage nested && IsSameEntry(nested.Parent, nested.ParentEntry, outerPackage, entry))
+                {
+                    return true;
+                }
+            }
+
+            return false;
+        }
+
+        private static bool IsSamePackageName(string? path, string packageName)
+            => path != null && string.Equals(GetFullPackageName(path), packageName, StringComparison.OrdinalIgnoreCase);
+
+        private static string GetFullPackageName(string path) => Path.GetFullPath(PackageFileNames.GetPackageName(path));
+
+        /// <summary>
+        /// Returns whether two packages read the same file, or the same entry of the same package.
+        /// </summary>
+        private static bool IsSamePackage(Package package, Package other)
+        {
+            if (package == other)
+            {
+                return true;
+            }
+
+            if (package.FilePath is { } filePath)
+            {
+                return filePath.Equals(other.FilePath, StringComparison.OrdinalIgnoreCase);
+            }
+
+            return package is NestedPackage nested
+                && other is NestedPackage otherNested
+                && IsSameEntry(nested.Parent, nested.ParentEntry, otherNested.Parent, otherNested.ParentEntry);
+        }
+
+        private static bool IsSameEntry(Package package, PackageEntry entry, Package otherPackage, PackageEntry otherEntry)
+            => entry == otherEntry || (entry.GetFullPath() == otherEntry.GetFullPath() && IsSamePackage(package, otherPackage));
+
+        private IEnumerable<Package> EnumerateSearchedPackages()
+        {
+            if (CurrentPackage != null)
+            {
+                yield return CurrentPackage;
+            }
+
+            foreach (var package in EnumerateMountedPackages())
+            {
+                yield return package;
+            }
+        }
+
+        private IEnumerable<Package> EnumerateMountedPackages()
+        {
+            foreach (var mapPackage in CurrentMapPackages)
+            {
+                yield return mapPackage.Package;
+            }
+
+            foreach (var searchPath in CurrentAddonSearchPaths)
+            {
+                if (searchPath.Package != null)
+                {
+                    yield return searchPath.Package;
+                }
+            }
+
+            foreach (var package in CurrentGamePackages)
+            {
+                yield return package;
+            }
+        }
+
+        /// <summary>
+        /// Mounts a map package found through the search paths in front of every search path except
+        /// <see cref="CurrentPackage"/>, the way the engine mounts a map: the map mounted last is searched first. Mounting a
+        /// map package again moves it to the front. Every mount is released with <see cref="UnmountMapPackage"/>.
+        /// </summary>
+        /// <param name="mapPackagePath">Path of the map package in the search paths, such as <c>maps/de_dust2.vpk</c>.</param>
+        /// <returns>Whether the map package was found.</returns>
+        public bool TryMountMapPackage(string mapPackagePath)
+        {
+            ArgumentNullException.ThrowIfNull(mapPackagePath);
+
+            lock (MapPackagesLock)
+            {
+                foreach (var mapPackage in CurrentMapPackages)
+                {
+                    if (mapPackage.Path.Equals(mapPackagePath, StringComparison.OrdinalIgnoreCase))
+                    {
+                        mapPackage.References++;
+                        CurrentMapPackages = CurrentMapPackages.Remove(mapPackage).Insert(0, mapPackage);
+                        return true;
+                    }
+                }
+
+                var unmounted = UnmountedMapPackages.FindIndex(mapPackage => mapPackage.Path.Equals(mapPackagePath, StringComparison.OrdinalIgnoreCase));
+
+                if (unmounted >= 0)
+                {
+                    var mapPackage = UnmountedMapPackages[unmounted];
+                    UnmountedMapPackages.RemoveAt(unmounted);
+                    mapPackage.References = 1;
+                    CurrentMapPackages = CurrentMapPackages.Insert(0, mapPackage);
+                    return true;
+                }
+
+                var (pathOnDisk, outerPackage, entry) = FindFile(mapPackagePath);
+
+                if (pathOnDisk == null && entry == null)
+                {
+                    return false;
+                }
+
+                // The opened package, or one the game or an addon mounts, is searched already
+                if (pathOnDisk != null ? IsPackageMounted(pathOnDisk) : IsPackageMounted(outerPackage!, entry!))
+                {
+                    return true;
+                }
+
+#pragma warning disable CA2000 // Disposed with the loader
+                var package = pathOnDisk != null ? ReadPackage(pathOnDisk) : ReadInnerPackage(outerPackage!, entry!);
+#pragma warning restore CA2000
+                CurrentMapPackages = CurrentMapPackages.Insert(0, new MountedMapPackage(mapPackagePath, package));
+
+                return true;
+            }
+        }
+
+        /// <summary>
+        /// Releases a mount of <see cref="TryMountMapPackage"/>. The package is removed from the search paths once every
+        /// mount of it is released, but stays open until this loader is disposed, because resources loaded from it keep
+        /// reading from its entry streams. Mounting it again reuses it.
+        /// </summary>
+        /// <param name="mapPackagePath">The path the map package was mounted with.</param>
+        public void UnmountMapPackage(string mapPackagePath)
+        {
+            ArgumentNullException.ThrowIfNull(mapPackagePath);
+
+            lock (MapPackagesLock)
+            {
+                foreach (var mapPackage in CurrentMapPackages)
+                {
+                    if (!mapPackage.Path.Equals(mapPackagePath, StringComparison.OrdinalIgnoreCase))
+                    {
+                        continue;
+                    }
+
+                    if (--mapPackage.References == 0)
+                    {
+                        CurrentMapPackages = CurrentMapPackages.Remove(mapPackage);
+                        UnmountedMapPackages.Add(mapPackage);
+                    }
+
+                    return;
+                }
+            }
+        }
+
+        private NestedPackage ReadInnerPackage(Package outerPackage, PackageEntry entry)
+        {
+            Logger.LogInformation("Preloading vpk \"{InnerPath}\" from \"{Package}\"", entry.GetFullPath(), outerPackage.FileName);
+
+            return NestedPackage.Open(outerPackage, entry);
+        }
+
+        private void AddGamePackageToSearch(string searchPath)
+        {
+            if (!IsPackageMounted(searchPath))
+            {
+                AddPackageToSearch(searchPath);
+            }
+        }
+
+        private Package ReadPackage(string searchPath)
+        {
+            Logger.LogInformation("Preloading vpk \"{SearchPath}\"", searchPath);
+
+            return Package.Open(searchPath);
+        }
+
+        /// <summary>
+        /// Mounts an addon vpk at <paramref name="index"/> of the addon search paths, which are searched before the game's own.
+        /// </summary>
+        private void AddAddonPackageToSearch(string searchPath, int index)
+        {
+            if (IsPackageMounted(searchPath))
+            {
+                return;
+            }
+
+            var addonSearchPath = ReadAddonPackage(searchPath);
+            ImmutableInterlocked.Update(ref CurrentAddonSearchPaths, static (searchPaths, item) => searchPaths.Insert(item.Index, item.SearchPath), (Index: index, SearchPath: addonSearchPath));
+        }
+
+        /// <summary>
+        /// Mounts a loose addon folder at <paramref name="index"/> of the addon search paths, which are searched before the
+        /// game's own, with the pak vpks inside it in front of the folder, the highest numbered first.
+        /// </summary>
+        private void AddAddonFolderToSearch(string folder, int index)
+        {
+            folder = Path.GetFullPath(folder);
+
+            foreach (var searchPath in CurrentAddonSearchPaths)
+            {
+                if (string.Equals(searchPath.Folder, folder, StringComparison.OrdinalIgnoreCase))
+                {
+                    return;
+                }
+            }
+
+            var searchPaths = ImmutableArray.CreateBuilder<AddonSearchPath>();
+
+            try
+            {
+                foreach (var vpk in PackageFileNames.EnumeratePakDirectoryFiles(folder).Reverse())
+                {
+                    if (!IsPackageMounted(vpk))
+                    {
+                        searchPaths.Add(ReadAddonPackage(vpk));
+                    }
+                }
+            }
+            catch
+            {
+                foreach (var searchPath in searchPaths)
+                {
+                    searchPath.Package!.Dispose();
+                }
+
+                throw;
+            }
+
+            searchPaths.Add(new AddonSearchPath(null, folder));
+
+            ImmutableInterlocked.Update(ref CurrentAddonSearchPaths, static (current, item) => current.InsertRange(item.Index, item.SearchPaths), (Index: index, SearchPaths: searchPaths.ToImmutable()));
+            Logger.LogInformation("Added addon folder \"{Folder}\" to search paths", folder);
+        }
+
+#pragma warning disable CA2000 // Disposed with the loader or by RemovePackageFromSearch
+        private AddonSearchPath ReadAddonPackage(string vpk) => new(ReadPackage(vpk), null);
+#pragma warning restore CA2000
+
         private void FindAndLoadOfficialGameAddonPackage()
         {
-            if (CurrentFileName == null || CurrentGameOfficialAddonsPaths.Count == 0)
+            // The engine mounts an addon either from the official addons or from the local ones, never both
+            if (CurrentFileName == null || CurrentGameOfficialAddonsPaths.Count == 0 || PreferredAddonFolderOnDisk != null)
             {
                 return;
             }
 
             // Check if vpk with same file name exists in addons folder
-            var fileName = Path.GetFileNameWithoutExtension(CurrentFileName);
+            var fileName = CurrentPackage?.FileName is { } packageName ? Path.GetFileName(packageName) : Path.GetFileNameWithoutExtension(CurrentFileName);
 
             foreach (var officialAddonPath in CurrentGameOfficialAddonsPaths)
             {
@@ -843,29 +835,12 @@ namespace ValveResourceFormat.IO
                     continue;
                 }
 
-                if (FindAddonVpk(addonFolder, fileName) is { } vpk)
+                if (PackageFileNames.FindAddonPackage(addonFolder, fileName) is { } vpk)
                 {
-                    AddAddonPackageToSearch(vpk);
+                    AddAddonPackageToSearch(vpk, 0);
                     break;
                 }
             }
-        }
-
-        /// <summary>
-        /// Finds an addon packed as folder/name.vpk, or split into chunks with folder/name_dir.vpk.
-        /// </summary>
-        private static string? FindAddonVpk(string folder, string name)
-        {
-            var vpk = Path.Join(folder, $"{name}.vpk");
-
-            if (File.Exists(vpk))
-            {
-                return vpk;
-            }
-
-            vpk = Path.Join(folder, $"{name}_dir.vpk");
-
-            return File.Exists(vpk) ? vpk : null;
         }
 
         private void LoadAddonDependencies()
@@ -887,6 +862,9 @@ namespace ValveResourceFormat.IO
                 return;
             }
 
+            // Each dependency goes in front of the previous one, all behind the addon itself
+            var index = CurrentAddonSearchPaths.Length;
+
             // Dependencies are mounted directly, so their own dependencies are not followed
             foreach (var dependency in dependencies.Values)
             {
@@ -904,9 +882,9 @@ namespace ValveResourceFormat.IO
                         continue;
                     }
 
-                    if (FindAddonVpk(Path.Join(WorkshopContentFolder, dependencyName), dependencyName) is { } vpk)
+                    if (PackageFileNames.FindAddonPackage(Path.Join(WorkshopContentFolder, dependencyName), dependencyName) is { } vpk)
                     {
-                        AddAddonPackageToSearch(vpk);
+                        AddAddonPackageToSearch(vpk, index);
                     }
                     else
                     {
@@ -916,15 +894,14 @@ namespace ValveResourceFormat.IO
                     continue;
                 }
 
-                // Non-numeric dependencies are local addons referenced by name (e.g. "steamvr_home")
-                foreach (var addonsPath in CurrentGameAddonsPaths)
+                // Non-numeric dependencies are local addon folders referenced by name (e.g. "steamvr_home") in the first addon root
+                if (CurrentGameAddonsPaths.FirstOrDefault() is { } addonsPath)
                 {
                     var addonFolder = Path.Combine(addonsPath, dependencyName);
 
                     if (Directory.Exists(addonFolder))
                     {
-                        AddAddonFolderToSearch(addonFolder);
-                        break;
+                        AddAddonFolderToSearch(addonFolder, index);
                     }
                 }
             }
@@ -938,10 +915,7 @@ namespace ValveResourceFormat.IO
 
             if (entry != null)
             {
-                lock (CurrentPackage!)
-                {
-                    CurrentPackage.ReadEntry(entry, out addonInfo);
-                }
+                CurrentPackage!.ReadEntry(entry, out addonInfo);
             }
             else if (PreferredAddonFolderOnDisk != null && FindFileInFolder(PreferredAddonFolderOnDisk, AddonInfoTxt) is { } addonInfoPath)
             {
@@ -965,128 +939,13 @@ namespace ValveResourceFormat.IO
         {
             foreach (var folder in folders)
             {
-                foreach (var vpk in EnumeratePakVpks(folder))
+                foreach (var vpk in PackageFileNames.EnumeratePakDirectoryFiles(folder))
                 {
-                    AddPackageToSearch(vpk);
+                    AddGamePackageToSearch(vpk);
                 }
 
                 AddDiskPathToSearch(folder);
             }
-        }
-
-        private IEnumerable<string> EnumeratePakVpks(string folder)
-        {
-            // Scan for vpks in folder, same logic as in source engine
-            for (var i = 1; i < 99; i++)
-            {
-                var vpk = Path.Combine(folder, $"pak{i:D2}_dir.vpk");
-
-                if (!File.Exists(vpk))
-                {
-                    yield break;
-                }
-
-                if (IsOpenedPackage(vpk))
-                {
-#if DEBUG_FILE_LOAD
-                    Logger.LogDebug("VPK \"{Vpk}\" is the same we just opened, skipping", vpk);
-#endif
-                    continue;
-                }
-
-                yield return vpk;
-            }
-        }
-
-        /// <summary>
-        /// Whether <paramref name="vpk"/> is the file that was opened, given either by its own path or as
-        /// <see cref="CurrentPackage"/>, whose name has the <c>_dir.vpk</c> suffix stripped.
-        /// </summary>
-        private bool IsOpenedPackage(string vpk)
-        {
-            if (CurrentFileName == vpk)
-            {
-                return true;
-            }
-
-            return CurrentPackage?.FileName is { } packageName
-                && string.Equals(Path.GetFullPath(string.Concat(packageName, "_dir.vpk")), Path.GetFullPath(vpk), StringComparison.Ordinal);
-        }
-
-        private HashSet<string> FindGameFoldersForWorkshopFile()
-        {
-            // If we're loading a file from steamapps/workshop folder, attempt to discover gameinfos and load vpks for the game
-            const string STEAMAPPS_WORKSHOP_CONTENT = "steamapps/workshop/content";
-            var filePath = CurrentFileName!.Replace('\\', '/');
-            var contentIndex = filePath.IndexOf(STEAMAPPS_WORKSHOP_CONTENT, StringComparison.InvariantCultureIgnoreCase);
-
-            if (contentIndex == -1)
-            {
-                return [];
-            }
-
-            // Extract the appid from path
-            var contentIndexEnd = contentIndex + STEAMAPPS_WORKSHOP_CONTENT.Length + 1;
-            var slashAfterAppId = filePath.IndexOf('/', contentIndexEnd);
-
-            if (slashAfterAppId == -1)
-            {
-                return [];
-            }
-
-            var appIdString = filePath[contentIndexEnd..slashAfterAppId];
-
-            if (!int.TryParse(appIdString, NumberStyles.None, CultureInfo.InvariantCulture, out var appId))
-            {
-                return [];
-            }
-
-#if DEBUG_FILE_LOAD
-            Logger.LogDebug("Parsed appid {AppId} for workshop file {FilePath}", appId, filePath);
-#endif
-
-            var steamPath = filePath[..(contentIndex + "steamapps".Length)];
-
-            WorkshopContentFolder = filePath[..slashAfterAppId];
-
-            // The app is usually installed in the same library as its workshop content, but it can be moved to another one
-            if ((GameFolderLocator.FindSteamGameInLibrary(steamPath, appId) ?? GameFolderLocator.FindSteamGameByAppId(appId)) is not { GamePath: var gamePath })
-            {
-                return [];
-            }
-
-            // Find all the gameinfo.gi files, open them to get game paths
-            var gameInfos = new FileSystemEnumerable<string>(
-                gamePath,
-                (ref entry) => entry.ToSpecifiedFullPath(),
-                new EnumerationOptions
-                {
-                    RecurseSubdirectories = true,
-                    MaxRecursionDepth = 5,
-                })
-            {
-                ShouldIncludePredicate = static (ref entry) => !entry.IsDirectory && entry.FileName.Equals(GameinfoGi, StringComparison.Ordinal)
-            };
-
-            var folders = new HashSet<string>();
-
-            foreach (var gameInfo in gameInfos)
-            {
-                var directory = Path.GetDirectoryName(gameInfo);
-                var modName = Path.GetFileName(directory);
-                var assumedGameRoot = Path.GetDirectoryName(directory)!;
-
-                if (modName == "core")
-                {
-                    // Skip loading core gameinfo directly, let it be discovered by any of the other mod folders
-                    // This is needed to prevent core being found first and having highest priority
-                    continue;
-                }
-
-                HandleGameInfo(folders, assumedGameRoot, gameInfo);
-            }
-
-            return folders;
         }
 
         private string? FindFileOnDisk(string file)
@@ -1106,18 +965,6 @@ namespace ValveResourceFormat.IO
             }
 
             return null;
-        }
-
-        private static string? FindSteamAppsFolder(string path)
-        {
-            var folder = Path.GetDirectoryName(path);
-
-            while (folder != null && !Path.GetFileName(folder).Equals("steamapps", StringComparison.OrdinalIgnoreCase))
-            {
-                folder = Path.GetDirectoryName(folder);
-            }
-
-            return folder;
         }
 
         private static string? FindFileInFolder(string folder, string file)
@@ -1143,25 +990,11 @@ namespace ValveResourceFormat.IO
 
                     if (File.Exists(vpk))
                     {
-                        AddPackageToSearch(vpk);
+                        AddGamePackageToSearch(vpk);
 
                         break; // One for each folder
                     }
                 }
-            }
-        }
-
-        /// <summary>
-        /// Gets a stream for reading a package entry.
-        /// </summary>
-        /// <remarks>
-        /// Do not use this method, it will be removed in the future in favor of a method in the ValvePak library.
-        /// </remarks>
-        public static Stream GetPackageEntryStream(Package package, PackageEntry entry)
-        {
-            lock (package)
-            {
-                return package.GetMemoryMappedStreamIfPossible(entry);
             }
         }
     }

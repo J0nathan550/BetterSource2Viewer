@@ -84,6 +84,13 @@ namespace GUI.Types.PackageViewer
         // A new package being put together with Create VPK from folder
         private bool isEditingPackage;
 
+        /// <summary>Whether this is a package being built or edited, rather than one opened to browse.</summary>
+        public bool IsEditingPackage => isEditingPackage;
+
+        /// <summary>Finds the package viewer that fills a tab, such as one started by Create VPK from folder.</summary>
+        public static PackageViewer? FromTab(System.Windows.Forms.TabPage tab)
+            => tab.Content is OwningDecorator decorator ? decorator.Owned.OfType<PackageViewer>().FirstOrDefault() : null;
+
         public bool DeletedFilesRecovered { get; private set; }
 
         public VrfGuiContext VrfGuiContext => vrfGuiContext;
@@ -93,20 +100,16 @@ namespace GUI.Types.PackageViewer
             return magic == Package.MAGIC;
         }
 
-        public async Task LoadAsync(Stream? stream)
-        {
-            var package = new Package();
-            package.OptimizeEntriesForBinarySearch(StringComparison.OrdinalIgnoreCase);
+        Task IViewer.LoadAsync(Stream? stream) => throw new NotSupportedException("Packages are read with Load.");
 
-            if (stream != null)
-            {
-                package.SetFileName(vrfGuiContext.FileName);
-                package.Read(stream);
-            }
-            else
-            {
-                package.Read(vrfGuiContext.FileName);
-            }
+        /// <summary>
+        /// Reads the package file of the context, or the package in an entry of the package of the parent context.
+        /// </summary>
+        public void Load(PackageEntry? entry)
+        {
+            var package = entry != null
+                ? NestedPackage.Open(vrfGuiContext.ParentGuiContext!.CurrentPackage!, entry)
+                : Package.Open(vrfGuiContext.FileName);
 
             vrfGuiContext.CurrentPackage = package;
 
@@ -1189,7 +1192,7 @@ namespace GUI.Types.PackageViewer
                 try
                 {
                     using (var output = File.Create(tempPath))
-                    using (var input = GameFileLoader.GetPackageEntryStream(package, file))
+                    using (var input = package.GetMemoryMappedStreamIfPossible(file))
                     {
                         await input.CopyToAsync(output).ConfigureAwait(true);
                     }
@@ -1598,20 +1601,11 @@ namespace GUI.Types.PackageViewer
                 return;
             }
 
-            var searchText = closedWindow.SearchText;
-            var fileType = closedWindow.SelectedFileType;
-            var filterKey = closedWindow.SelectedFilterKey;
-
-            if (!string.IsNullOrEmpty(searchText) || fileType != null || filterKey != null)
-            {
-                SearchAndFillResults(searchText, closedWindow.SelectedSearchType, fileType, filterKey, closedWindow.SelectedFilterValue);
-            }
+            SearchAndFillResults(closedWindow.Request);
         }
 
-        internal void SearchAndFillResults(string searchText, SearchType searchType, string? fileType = null, string? filterKey = null, string? filterValue = null)
+        internal void SearchAndFillResults(SearchRequest request)
         {
-            var request = new SearchRequest(searchText, searchType, fileType, filterKey, filterValue);
-
             suppressHistoryRecording = true;
 
             try
@@ -1628,30 +1622,16 @@ namespace GUI.Types.PackageViewer
 
         private void PerformSearch(SearchRequest request)
         {
-            List<PackageEntry> results;
-
-            try
+            if (vrfGuiContext.CurrentPackage is not { } package || (request.Folder ?? VirtualRoot) is not { } folder)
             {
-                // No text lists every file, so the filters alone can narrow it down
-                results = string.IsNullOrEmpty(request.Text)
-                    ? Search(string.Empty, SearchType.FileNamePartialMatch)
-                    : Search(request.Text, request.Type);
-            }
-            catch (Exception e) when (e is ArgumentException or InvalidOperationException or FormatException)
-            {
-                _ = AppMessageDialogs.ShowMessageAsync(e.Message, "Invalid search", MessageIcon.Warning);
                 return;
             }
 
-            if (request.FileType != null)
-            {
-                results.RemoveAll(entry => !entry.TypeName.Equals(request.FileType, StringComparison.OrdinalIgnoreCase));
-            }
+            var candidates = EnumerateFiles(folder).Where(entry =>
+                (request.Extension == null || entry.TypeName == request.Extension)
+                && (request.FilterKey == null || assetSearchData == null || MatchesAssetFilter(entry, request.FilterKey, request.FilterValue)));
 
-            if (request.FilterKey != null && assetSearchData != null)
-            {
-                results.RemoveAll(entry => !MatchesAssetFilter(entry, request.FilterKey, request.FilterValue));
-            }
+            var results = Find(package, [.. candidates], request.Query);
 
             var node = new VirtualPackageNode(string.Empty, 0, null);
             node.Files.AddRange(results);
@@ -1659,88 +1639,17 @@ namespace GUI.Types.PackageViewer
             DisplayNodes(node, updatePath: false);
         }
 
-        private List<PackageEntry> Search(string value, SearchType searchType)
+        private static IEnumerable<PackageEntry> EnumerateFiles(VirtualPackageNode folder)
+            => folder.Files.Concat(folder.Folders.Values.SelectMany(EnumerateFiles));
+
+        private static List<PackageEntry> Find(Package package, List<PackageEntry> candidates, PackageSearchQuery query)
         {
-            var results = new List<PackageEntry>();
-
-            if (VirtualRoot == null)
+            if (query is not { Text.Length: > 0, Type: PackageSearchType.FileContents or PackageSearchType.FileContentsHex })
             {
-                return results;
+                return PackageSearch.Find(package, candidates, query).Matches;
             }
 
-            if (searchType is SearchType.FileNamePartialMatch or SearchType.FullPath)
-            {
-                value = value.Replace('\\', Package.DirectorySeparatorChar);
-            }
-
-            // If only file name search is selected, but entered text contains a slash, search full path
-            if (searchType == SearchType.FileNamePartialMatch && value.Contains(Package.DirectorySeparatorChar, StringComparison.Ordinal))
-            {
-                searchType = SearchType.FullPath;
-            }
-
-            switch (searchType)
-            {
-                case SearchType.FileNameExactMatch:
-                    SearchTree(VirtualRoot, results, entry => entry.GetFileName().Equals(value, StringComparison.OrdinalIgnoreCase));
-                    break;
-
-                case SearchType.FileNamePartialMatch:
-                    SearchTree(VirtualRoot, results, entry => entry.GetFileName().Contains(value, StringComparison.OrdinalIgnoreCase));
-                    break;
-
-                case SearchType.FullPath:
-                    SearchTree(VirtualRoot, results, entry => entry.GetFullPath().Contains(value, StringComparison.OrdinalIgnoreCase));
-                    break;
-
-                case SearchType.Regex:
-                {
-                    var regex = new Regex(value, RegexOptions.CultureInvariant | RegexOptions.IgnoreCase);
-                    SearchTree(VirtualRoot, results, entry => regex.IsMatch(entry.GetFileName()));
-                    break;
-                }
-
-                case SearchType.FileContents:
-                    SearchFileContents(results, Encoding.UTF8.GetBytes(value));
-                    break;
-
-                case SearchType.FileContentsHex:
-                    SearchFileContents(results, Convert.FromHexString(value.Replace(" ", "", StringComparison.Ordinal)));
-                    break;
-            }
-
-            return results;
-        }
-
-        private static void SearchTree(VirtualPackageNode node, List<PackageEntry> results, Func<PackageEntry, bool> matchFunction)
-        {
-            foreach (var entry in node.Files)
-            {
-                if (matchFunction(entry))
-                {
-                    results.Add(entry);
-                }
-            }
-
-            foreach (var folder in node.Folders.Values)
-            {
-                SearchTree(folder, results, matchFunction);
-            }
-        }
-
-        private void SearchFileContents(List<PackageEntry> results, byte[] pattern)
-        {
-            if (vrfGuiContext.ParentGuiContext != null)
-            {
-                throw new InvalidOperationException("Inner paks are not supported.");
-            }
-
-            var package = vrfGuiContext.CurrentPackage;
-
-            if (package?.Entries == null)
-            {
-                return;
-            }
+            List<PackageEntry> results = [];
 
             using var progressDialog = new GenericProgressForm
             {
@@ -1748,16 +1657,16 @@ namespace GUI.Types.PackageViewer
             };
             progressDialog.OnProcess = cancellationToken =>
             {
-                Log.Info(nameof(PackageViewer), "Pattern search");
+                progressDialog.SetProgress(string.Create(CultureInfo.InvariantCulture, $"Searching {candidates.Count:N0} files"));
+                progressDialog.SetBarMax(candidates.Count);
 
-                var matches = PackageContentSearch.Search(package, pattern, progressDialog, cancellationToken);
-                results.AddRange(matches);
-
-                Log.Info(nameof(PackageViewer), $"Found {results.Count} matches");
+                results = PackageSearch.Find(package, candidates, query, progressDialog, cancellationToken).Matches;
 
                 return Task.CompletedTask;
             };
             progressDialog.ShowDialog();
+
+            return results;
         }
 
         private Task<Dictionary<string, SortedSet<string>>?> GetSearchDataKeysAsync()

@@ -27,6 +27,20 @@ namespace ValveResourceFormat.IO
         /// <param name="material">The material containing the texture.</param>
         /// <returns>The suffix string for the input texture, or null if not found.</returns>
         public string? GetSuffixForInputTexture(string inputName, Material material);
+
+        /// <summary>
+        /// Gets the blend state of a material for the default dynamic combo.
+        /// </summary>
+        /// <param name="material">The material.</param>
+        /// <param name="combos">Integer parameters overriding those of the material, as F_ features or S_ and D_ combos.</param>
+        public RsBlendStateDesc GetBlendState(Material material, IReadOnlyDictionary<string, long>? combos = null);
+
+        /// <summary>
+        /// Gets the integer attributes of a material combined with those of its shader, the material taking precedence.
+        /// </summary>
+        /// <param name="material">The material.</param>
+        /// <param name="combos">Overrides for the integer parameters of the material.</param>
+        public IReadOnlyDictionary<string, long> GetIntAttributes(Material material, IReadOnlyDictionary<string, long>? combos = null);
     }
 
     /// <summary>
@@ -68,14 +82,59 @@ namespace ValveResourceFormat.IO
             return GetSuffixForInputTexture_Internal(inputName, material) ?? basicProvider?.GetSuffixForInputTexture(inputName, material);
         }
 
+        /// <inheritdoc/>
+        /// <remarks>
+        /// Returns the basic provider's guess if available. The blend state compiled into the shader is not used,
+        /// see <see cref="GetCompiledBlendState"/>.
+        /// </remarks>
+        public RsBlendStateDesc GetBlendState(Material material, IReadOnlyDictionary<string, long>? combos = null)
+        {
+            ArgumentNullException.ThrowIfNull(material);
+
+            return basicProvider?.GetBlendState(material, combos) ?? default;
+        }
+
+        /// <inheritdoc/>
+        /// <remarks>
+        /// Reads the constant attributes compiled into the pixel shader, falling back to basic provider
+        /// for the attributes the shader does not compile to a constant.
+        /// </remarks>
+        public IReadOnlyDictionary<string, long> GetIntAttributes(Material material, IReadOnlyDictionary<string, long>? combos = null)
+        {
+            ArgumentNullException.ThrowIfNull(material);
+
+            var attributes = basicProvider?.GetIntAttributes(material, combos) ?? material.IntAttributes;
+            var shaderAttributes = GetIntAttributes_Internal(material, combos ?? material.IntParams);
+
+            if (shaderAttributes == null)
+            {
+                return attributes;
+            }
+
+            var combined = new Dictionary<string, long>(attributes);
+
+            foreach (var (name, value) in shaderAttributes)
+            {
+                if (!material.IntAttributes.ContainsKey(name))
+                {
+                    combined[name] = value;
+                }
+            }
+
+            return combined;
+        }
+
         /// <summary>
         /// Extracts the material feature state from integer parameters.
         /// </summary>
         /// <param name="material">The material to extract feature state from.</param>
         /// <returns>A dictionary of feature names (with 'F_' prefix) and their values.</returns>
         public static IDictionary<string, byte> GetMaterialFeatureState(Material material)
-            => material.IntParams
-                .Where(p => p.Key.StartsWith("F_", StringComparison.Ordinal))
+            => GetComboState(material.IntParams, "F_");
+
+        private static Dictionary<string, byte> GetComboState(IReadOnlyDictionary<string, long> combos, string prefix)
+            => combos
+                .Where(p => p.Key.StartsWith(prefix, StringComparison.Ordinal))
                 .ToDictionary(p => p.Key, p => (byte)p.Value);
 
         /// <summary>
@@ -471,6 +530,86 @@ namespace ValveResourceFormat.IO
 
             return null;
         }
+
+        /// <summary>
+        /// Gets the blend state compiled into the pixel shader render state for the default dynamic combo.
+        /// </summary>
+        /// <remarks>
+        /// This is the state of the pass the combo was compiled for, not how the material blends:
+        /// deferred shaders compile their GBuffer write state, translucent combos may leave blending off for the pass to set,
+        /// and alpha tested combos that discard do not enable alpha to coverage.
+        /// </remarks>
+        /// <param name="material">The material.</param>
+        /// <param name="combos">Integer parameters overriding those of the material, as F_ features or S_ and D_ combos.</param>
+        /// <returns>The compiled blend state, or null if the shader or its static combo is not available.</returns>
+        public RsBlendStateDesc? GetCompiledBlendState(Material material, IReadOnlyDictionary<string, long>? combos = null)
+        {
+            ArgumentNullException.ThrowIfNull(material);
+
+            combos ??= material.IntParams;
+            var shader = fileLoader.LoadShader(material.ShaderName);
+            var program = shader?.PixelShaderRenderState ?? shader?.Pixel;
+
+            if (shader == null || program == null || GetStaticCombo(shader, program, combos) is not { } staticCombo)
+            {
+                return null;
+            }
+
+            var dynamicConfig = Array.ConvertAll(program.DynamicComboArray, combo => (int)combos.GetValueOrDefault(combo.Name, combo.RangeMin));
+            var dynamicComboId = new ComboConfigMapping(program, isDynamic: true).CalcComboIdFromValues(dynamicConfig);
+
+            var renderState = staticCombo.DynamicComboRenderStates
+                .FirstOrDefault(renderState => renderState.DynamicComboId == dynamicComboId) as VfxRenderStateInfoPixelShader;
+
+            return renderState?.BlendStateDesc;
+        }
+
+        /// <summary>
+        /// Gets the integer and boolean attributes compiled as constants into the pixel shader static combo.
+        /// Attributes compiled to an expression are left out.
+        /// </summary>
+        private Dictionary<string, long>? GetIntAttributes_Internal(Material material, IReadOnlyDictionary<string, long> combos)
+        {
+            var shader = fileLoader.LoadShader(material.ShaderName);
+
+            if (shader?.Pixel == null || GetStaticCombo(shader, shader.Pixel, combos) is not { } staticCombo)
+            {
+                return null;
+            }
+
+            var attributes = new Dictionary<string, long>();
+
+            foreach (var attribute in staticCombo.Attributes)
+            {
+                long? value = attribute.ConstValue switch
+                {
+                    int intValue => intValue,
+                    bool boolValue => boolValue ? 1 : 0,
+                    _ => null,
+                };
+
+                if (value.HasValue)
+                {
+                    attributes.TryAdd(attribute.Name, value.Value);
+                }
+            }
+
+            return attributes;
+        }
+
+        private static VfxStaticComboData? GetStaticCombo(ShaderCollection shader, VfxProgramData program, IReadOnlyDictionary<string, long> combos)
+        {
+            if (shader.Features == null)
+            {
+                return null;
+            }
+
+            var (_, staticComboId) = ResolveStaticConfiguration(shader.Features, program, GetComboState(combos, "F_"), GetComboState(combos, "S_"));
+
+            return program.StaticComboEntries.ContainsKey(staticComboId)
+                ? program.StaticComboCache.Get(staticComboId)
+                : null;
+        }
     }
 
     /// <summary>
@@ -636,6 +775,112 @@ namespace ValveResourceFormat.IO
             { "TextureReflectance", "_refl"},
             { "TextureTranslucency", "_trans"},
         };
+
+        private static readonly string[] TranslucentShaders =
+        [
+            "vr_glass",
+            "vr_glass_markable",
+            "vr_energy_field",
+            "csgo_glass",
+            "csgo_effects",
+            "citadel_overlay",
+        ];
+
+        /// <inheritdoc/>
+        /// <remarks>
+        /// Guesses the blend state from material flags and a few known shaders.
+        /// </remarks>
+        public RsBlendStateDesc GetBlendState(Material material, IReadOnlyDictionary<string, long>? combos = null)
+        {
+            ArgumentNullException.ThrowIfNull(material);
+
+            combos ??= material.IntParams;
+            var shaderName = Path.GetFileNameWithoutExtension(material.ShaderName);
+
+            if (shaderName == "csgo_decalmodulate")
+            {
+                return CreateBlendState(RsBlendMode.DestColor, RsBlendMode.SrcColor);
+            }
+
+            var blendModeParam = shaderName.EndsWith("static_overlay", StringComparison.Ordinal) || shaderName == "csgo_unlitgeneric"
+                ? combos.GetValueOrDefault("F_BLEND_MODE")
+                : 0;
+
+            return blendModeParam switch
+            {
+                2 => new RsBlendStateDesc { AlphaToCoverageEnable = true },
+                3 => CreateBlendState(RsBlendMode.DestColor, RsBlendMode.SrcColor),
+                5 => CreateBlendState(RsBlendMode.Zero, RsBlendMode.SrcColor),
+                6 => CreateBlendState(RsBlendMode.DestColor, RsBlendMode.InvSrcAlpha),
+                > 0 => GetPassBlendState(combos),
+                _ when combos.GetValueOrDefault("F_TRANSLUCENT") == 1
+                    || combos.GetValueOrDefault("F_ADDITIVE_BLEND") == 1
+                    || TranslucentShaders.AsSpan().Contains(shaderName)
+                    || material.IntAttributes.ContainsKey("mapbuilder.water") => GetPassBlendState(combos),
+                _ => new RsBlendStateDesc { AlphaToCoverageEnable = combos.GetValueOrDefault("F_ALPHA_TEST") > 0 },
+            };
+        }
+
+        /// <inheritdoc/>
+        /// <remarks>
+        /// Adds the attributes that material flags and a few known shaders would compile to.
+        /// </remarks>
+        public IReadOnlyDictionary<string, long> GetIntAttributes(Material material, IReadOnlyDictionary<string, long>? combos = null)
+        {
+            ArgumentNullException.ThrowIfNull(material);
+
+            combos ??= material.IntParams;
+            var shaderName = Path.GetFileNameWithoutExtension(material.ShaderName);
+            var attributes = new Dictionary<string, long>(material.IntAttributes);
+
+            if (shaderName == "csgo_water_fancy")
+            {
+                attributes.TryAdd("bCsgoWater", 1);
+                attributes.TryAdd("DoNotCastShadows", 1);
+                attributes.TryAdd("translucent", 1);
+            }
+
+            var isTranslucent = GetBlendState(material, combos).BlendEnable[0];
+            var hasDepthBias = combos.GetValueOrDefault("F_DEPTHBIAS") == 1 || combos.GetValueOrDefault("F_DEPTH_BIAS") == 1;
+
+            // :MaterialIsOverlay
+            if (combos.GetValueOrDefault("F_OVERLAY") == 1
+                || shaderName.EndsWith("static_overlay", StringComparison.Ordinal)
+                || shaderName == "citadel_overlay"
+                || (isTranslucent && hasDepthBias && shaderName is "csgo_vertexlitgeneric" or "csgo_complex"))
+            {
+                attributes.TryAdd("overlay", 1);
+            }
+
+            if (combos.GetValueOrDefault("F_DO_NOT_CAST_SHADOWS") == 1 || material.IntAttributes.GetValueOrDefault("F_DO_NOT_CAST_SHADOWS") == 1)
+            {
+                attributes.TryAdd("DoNotCastShadows", 1);
+            }
+
+            if (isTranslucent)
+            {
+                attributes.TryAdd("translucent", 1);
+            }
+
+            return attributes;
+        }
+
+        /// <summary>
+        /// Gets the blend state of the pass that draws translucent materials, additive when the material asks for it.
+        /// </summary>
+        private static RsBlendStateDesc GetPassBlendState(IReadOnlyDictionary<string, long> combos)
+            => combos.GetValueOrDefault("F_ADDITIVE_BLEND") == 1 || combos.GetValueOrDefault("F_BLEND_MODE") == 4
+                ? CreateBlendState(RsBlendMode.SrcAlpha, RsBlendMode.One)
+                : CreateBlendState(RsBlendMode.SrcAlpha, RsBlendMode.InvSrcAlpha);
+
+        private static RsBlendStateDesc CreateBlendState(RsBlendMode src, RsBlendMode dest)
+        {
+            var blendState = new RsBlendStateDesc();
+            blendState.SetBlendEnable(0, true);
+            blendState.SetSrcBlend(0, src);
+            blendState.SetDestBlend(0, dest);
+            return blendState;
+        }
 
         /// <summary>
         /// Gets hardcoded texture inputs. If no mappings are found it will be a single guessed RGBA input.

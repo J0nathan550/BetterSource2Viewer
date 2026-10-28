@@ -30,7 +30,7 @@ namespace GUI.Types.GLViewers
                 {
                     case "CSmartPropElement_Model":
                     {
-                        using var resource = GuiContext.LoadFileCompiled(child.GetStringProperty("m_sModelName"));
+                        var resource = GuiContext.LoadFileCompiled(child.GetStringProperty("m_sModelName"));
                         Debug.Assert(resource != null);
                         var model = (Model?)resource.DataBlock;
                         Debug.Assert(model != null);
@@ -57,11 +57,11 @@ namespace GUI.Types.GLViewers
 
                             if (pickOneClass != "CSmartPropElement_Model")
                             {
-                                Log.Warn(nameof(GLSingleNodeViewer), $"Unhandled smart prop class {className}");
+                                Log.Warn(nameof(GLSingleNodeViewer), $"Unhandled smart prop class {pickOneClass}");
                                 continue;
                             }
 
-                            using var resource = GuiContext.LoadFileCompiled(pickOneChild.GetStringProperty("m_sModelName"));
+                            var resource = GuiContext.LoadFileCompiled(pickOneChild.GetStringProperty("m_sModelName"));
                             Debug.Assert(resource != null);
                             var model = (Model?)resource.DataBlock;
                             Debug.Assert(model != null);

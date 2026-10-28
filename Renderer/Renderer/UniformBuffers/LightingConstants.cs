@@ -19,7 +19,10 @@ namespace ValveResourceFormat.Renderer.Buffers
         public uint NumBarnLights;
         /// <summary>Per-type light counts (index matches light type enum).</summary>
         [MarshalAs(UnmanagedType.ByValArray, SizeConst = 4)] private readonly uint[] NumLights;
-        /// <summary>Surface-to-sun direction (XYZ) of the environment light, or zero when the scene has none.</summary>
+        /// <summary>
+        /// Surface-to-sun direction (XYZ) of the environment light, or zero when the scene has none, and the roughness its
+        /// specular highlight is no sharper than (W).
+        /// </summary>
         public Vector4 SunDirection;
         /// <summary>Sun color: linear color premultiplied by brightness (RGB), render-specular flag (W).</summary>
         public Vector4 SunColor;
@@ -41,7 +44,7 @@ namespace ValveResourceFormat.Renderer.Buffers
         /// <summary>Per-light falloff shaped like <c>g_vSingleLightFalloffParams</c>: linear (X) and quadratic (Y) attenuation, squared range cutoff (Z), zero-at-range bias (W).</summary>
         [MarshalAs(UnmanagedType.ByValArray, SizeConst = MAX_LIGHTS)] public Vector4[] LightFallOff;
 
-        /// <summary>Mip level and size constants used when sampling environment maps.</summary>
+        /// <summary>Environment map constants: highest mip level (X), number of cubes (Y), RGBM encoding bool (Z).</summary>
         public Vector4 EnvMapSizeConstants;
 
         /// <summary>Red channel of the ambient lighting: weights against the normal (XYZ) and a constant (W).</summary>

@@ -331,6 +331,14 @@ namespace GUI.Types.GLViewers
             return text;
         }
 
+        /// <summary>Rebuilds the graph with <paramref name="build"/>, then refreshes the stats and refits the view.</summary>
+        protected void RebuildGraph(Action build)
+        {
+            View.Rebuild(build);
+            RefreshStatsLabel();
+            RefitToGraph();
+        }
+
         /// <summary>Recomputes the stats label text and height.</summary>
         protected void RefreshStatsLabel()
         {
@@ -519,23 +527,6 @@ namespace GUI.Types.GLViewers
                 {
                     var dash = entry.Kind == GraphLegendKind.DashedWire ? Avalonia.Media.DashStyle.Dash : null;
                     context.DrawLine(new Avalonia.Media.Pen(brush, 3, dash), new Avalonia.Point(2, mid), new Avalonia.Point(20, mid));
-                }
-                else if (entry.Kind == GraphLegendKind.Marker)
-                {
-                    const double Radius = 5;
-                    const double CenterX = 11;
-                    var diamond = new Avalonia.Media.StreamGeometry();
-
-                    using (var geometry = diamond.Open())
-                    {
-                        geometry.BeginFigure(new Avalonia.Point(CenterX, mid - Radius), true);
-                        geometry.LineTo(new Avalonia.Point(CenterX + Radius, mid));
-                        geometry.LineTo(new Avalonia.Point(CenterX, mid + Radius));
-                        geometry.LineTo(new Avalonia.Point(CenterX - Radius, mid));
-                        geometry.EndFigure(true);
-                    }
-
-                    context.DrawGeometry(brush, null, diamond);
                 }
                 else
                 {

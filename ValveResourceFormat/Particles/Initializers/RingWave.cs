@@ -1,3 +1,5 @@
+using ValveResourceFormat.ResourceTypes;
+
 namespace ValveResourceFormat.Particles.Initializers
 {
     /// <summary>
@@ -17,28 +19,31 @@ namespace ValveResourceFormat.Particles.Initializers
         private readonly INumberProvider particlesPerOrbit = new LiteralNumberProvider(-1);
         private readonly INumberProvider initialSpeedMin = new LiteralNumberProvider(0);
         private readonly INumberProvider initialSpeedMax = new LiteralNumberProvider(0);
+        private readonly INumberProvider roll = new LiteralNumberProvider(0);
+        private readonly INumberProvider pitch = new LiteralNumberProvider(0);
+        private readonly INumberProvider yaw = new LiteralNumberProvider(0);
 
         /// <summary>Transform the ring is centred on, and whose rotation the ring plane lies in.</summary>
         private readonly ITransformProvider transformInput = new ControlPointTransformProvider();
 
-        /// <summary>Drops the vertical part of the outward speed, leaving the ring to spread flat.</summary>
-        private readonly bool xyVelocityOnly;
+        /// <summary>Drops the world Z part of the outward speed.</summary>
+        private readonly bool xyVelocityOnly = true;
 
         private uint orbitCount;
 
         public RingWave(ParticleDefinitionParser parse) : base(parse)
         {
             evenDistribution = parse.Boolean("m_bEvenDistribution", evenDistribution);
-            particlesPerOrbit = parse.NumberProvider("m_flParticlesPerOrbit", particlesPerOrbit);
+            particlesPerOrbit = parse.CollectionNumberProvider("m_flParticlesPerOrbit", particlesPerOrbit);
             initialRadius = parse.NumberProvider("m_flInitialRadius", initialRadius);
             thickness = parse.NumberProvider("m_flThickness", thickness);
             initialSpeedMin = parse.NumberProvider("m_flInitialSpeedMin", initialSpeedMin);
             initialSpeedMax = parse.NumberProvider("m_flInitialSpeedMax", initialSpeedMax);
             transformInput = parse.TransformInput("m_TransformInput", transformInput);
             xyVelocityOnly = parse.Boolean("m_bXYVelocityOnly", xyVelocityOnly);
-
-            // m_flRoll, m_flPitch and m_flYaw rotate the ring circle, but not the thickness offset,
-            // before the transform is applied. All three default to zero and are not read here.
+            roll = parse.NumberProvider("m_flRoll", roll);
+            pitch = parse.NumberProvider("m_flPitch", pitch);
+            yaw = parse.NumberProvider("m_flYaw", yaw);
         }
 
         public override void Reset()
@@ -46,56 +51,81 @@ namespace ValveResourceFormat.Particles.Initializers
             orbitCount = 0;
         }
 
-        public override ulong WrittenFields => FieldMask(ParticleField.Position) | FieldMask(ParticleField.PositionPrevious);
+        public override ulong WrittenFields => ParticleField.Position.Mask() | ParticleField.PositionPrevious.Mask();
 
-        public override Particle Initialize(ref Particle particle, ParticleCollection particles, ParticleSystemState particleSystemState)
+        protected override void InitializeCall(ParticleSpan run, ParticleCollection particles, ParticleSystemState particleSystemState)
         {
-            var thickness = this.thickness.NextNumber(ref particle, particleSystemState);
-            var particlesPerOrbit = this.particlesPerOrbit.NextNumber(ref particle, particleSystemState);
+            var thicknesses = thickness.Fill(run, particleSystemState);
+            var perOrbit = particlesPerOrbit.NextNumber(particleSystemState);
+            var radii = initialRadius.Fill(run, particleSystemState);
+            var pitches = pitch.Fill(run, particleSystemState);
+            var yaws = yaw.Fill(run, particleSystemState);
+            var rolls = roll.Fill(run, particleSystemState);
+            var speedMins = initialSpeedMin.Fill(run, particleSystemState);
+            var speedMaxes = initialSpeedMax.Fill(run, particleSystemState);
 
-            var thicknessOffset = particleSystemState.Random.NextInUnitBall(out _) * thickness;
+            var creationTimes = run.ReadFloats(ParticleField.CreationTime);
+            var positions = run.Vectors(ParticleField.Position);
+            var previousPositions = SpawnPreviousPositions(run, particleSystemState);
+            var activeParticles = particles.Count;
+            var previousFrameTime = particleSystemState.PreviousStep;
 
-            var radius = initialRadius.NextNumber(ref particle, particleSystemState);
-
-            var angle = GetNextAngle(particlesPerOrbit, particles.Count, particleSystemState);
-            var radialDirection = new Vector3(MathF.Cos(angle), MathF.Sin(angle), 0);
-
-            var transform = transformInput.NextTransformAtTime(ref particle, particleSystemState, particle.CreationTime);
-
-            particle.Position = Vector3.Transform((radius * radialDirection) + thicknessOffset, transform);
-
-            // Initial speed pushes outward, along the line from the transform to where the particle
-            // actually landed, so the thickness offset tilts the direction as well as the position.
-            var outward = MathUtils.SafeNormalize(particle.Position - transform.Translation);
-
-            if (xyVelocityOnly)
+            for (var i = 0; i < run.Length; i++)
             {
-                outward.Z = 0f;
+                var thicknessOffset = particleSystemState.Random.NextInUnitBall(out _) * thicknesses[i];
+
+                var radius = radii[i];
+
+                var transform = transformInput.NextTransformAtTime(particleSystemState, creationTimes[i]);
+
+                var angle = GetNextAngle(perOrbit, activeParticles, particleSystemState);
+                var (sin, cos) = MathF.SinCos(angle);
+                var ringAngles = new Vector3(pitches[i], yaws[i], rolls[i]);
+                var ring = Vector3.TransformNormal(new Vector3(radius * cos, radius * sin, 0f), EntityTransformHelper.EulerAnglesToRotationMatrix(ringAngles));
+
+                var position = Vector3.Transform(ring + thicknessOffset, transform);
+
+                // Initial speed pushes outward, along the line from the transform to where the particle
+                // actually landed, so the thickness offset tilts the direction as well as the position.
+                var outward = MathUtils.SafeNormalize(position - transform.Translation);
+
+                var speed = particleSystemState.Random.NextBetween(speedMins[i], speedMaxes[i]);
+
+                var previous = position - (outward * (speed * previousFrameTime));
+
+                if (xyVelocityOnly)
+                {
+                    previous.Z = position.Z;
+                }
+
+                positions[i] = position;
+
+                if (!previousPositions.IsEmpty)
+                {
+                    previousPositions[i] = previous;
+                }
             }
-
-            var speedMin = initialSpeedMin.NextNumber(ref particle, particleSystemState);
-            var speedMax = initialSpeedMax.NextNumber(ref particle, particleSystemState);
-            particle.Velocity += outward * particleSystemState.Random.NextBetween(speedMin, speedMax);
-
-            return particle;
         }
 
+        /// <summary>
+        /// The particle's index along the ring times the angle step. The index is never wrapped to the
+        /// orbit and counts before use, so the first particle is one step past angle zero. Without even
+        /// distribution the step is a fresh random angle, still multiplied by the index.
+        /// </summary>
         private float GetNextAngle(float particlesPerOrbit, int activeParticles, ParticleSystemState particleSystemState)
         {
+            orbitCount++;
+
             if (evenDistribution)
             {
                 // -1 spreads one orbit over the particles alive right now, so a continuously emitted
                 // ring stays closed instead of crawling around as an arc of the max particle count.
                 var perOrbit = particlesPerOrbit == -1f ? activeParticles : particlesPerOrbit;
 
-                // The counter is never wrapped to the orbit, and counts before use, so the first
-                // particle is one step past angle zero.
-                orbitCount++;
-
                 return orbitCount * (MathF.Tau / MathF.Max(1f, perOrbit));
             }
 
-            return particleSystemState.Random.NextBetween(0f, MathF.Tau);
+            return orbitCount * (particleSystemState.Random.Next() * MathF.Tau);
         }
     }
 }

@@ -1,7 +1,9 @@
+using System.Collections.Concurrent;
 using System.Diagnostics.CodeAnalysis;
 using System.Threading;
 using Microsoft.Extensions.Logging;
 using ValveResourceFormat.IO;
+using ValveResourceFormat.ResourceTypes.ModelAnimation;
 
 namespace ValveResourceFormat.Renderer;
 
@@ -19,6 +21,11 @@ public class RendererContext : IDisposable
     /// Game file loader for loading resources from packages.
     /// </summary>
     public GameFileLoader FileLoader { get; }
+
+    /// <summary>
+    /// Information lookup from compiled shaders (.vcs).
+    /// </summary>
+    public ShaderDataProvider ShaderDataProvider { get; }
 
     /// <summary>
     /// Owns the GPU objects created for this renderer. Creation goes through the static methods on
@@ -70,6 +77,13 @@ public class RendererContext : IDisposable
     public MorphCompositeAtlas MorphAtlas { get; }
 
     /// <summary>
+    /// Holds the sheet sequences of every texture the particle renderers of this context draw.
+    /// </summary>
+    internal Particles.ParticleSheetCache ParticleSheets { get; } = new();
+
+    internal ConcurrentDictionary<string, Lazy<List<AnimationBase>>> ModelAnimations { get; } = new();
+
+    /// <summary>
     /// Whether scene nodes simulate across the thread pool, published by the renderer each frame.
     /// </summary>
     public bool ParallelSimulation { get; set; } = true;
@@ -82,6 +96,7 @@ public class RendererContext : IDisposable
     public RendererContext(GameFileLoader fileLoader, ILogger logger)
     {
         FileLoader = fileLoader;
+        ShaderDataProvider = new ShaderDataProvider(fileLoader);
         Logger = logger;
         Device = GraphicsDevice.Create();
 

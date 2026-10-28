@@ -37,52 +37,32 @@ namespace ValveResourceFormat.Particles.Utils
 
             var parameters = parse.Nested(block);
 
-            return new RangeSampler(parameters.Boolean("m_bDistributeEvenly"), parameters.Int32("m_nSeed"));
+            return new RangeSampler(parameters.Boolean("m_bDistributeEvenly"), parameters.Int32("m_nSeed", -1));
         }
 
         /// <summary>
         /// Interpolates per component between <paramref name="min"/> and <paramref name="max"/>, either from
         /// three consecutive values off the system's shared random table or, when an even distribution is
         /// asked for, from a stratified sample that takes nothing from that table. A negative authored seed
-        /// is displaced by the system's own seed, giving each instance of an effect its own sequence.
+        /// is displaced by the system's own seed, giving each instance of an effect its own sequence. The
+        /// stratified sample is keyed to the spawn index of the particle at collection index <paramref name="index"/>.
         /// </summary>
-        public Vector3 NextVectorBetween(ref Particle particle, ParticleSystemState particleSystemState, Vector3 min, Vector3 max)
+        public Vector3 NextVectorBetween(int index, ParticleSystemState particleSystemState, Vector3 min, Vector3 max)
         {
             if (!distributeEvenly)
             {
-                return particleSystemState.Random.NextBetweenPerComponent(min, max);
+                return particleSystemState.Random.NextBetweenPerComponentSeededTwice(min, max);
             }
 
             var start = seed < 0 ? seed + particleSystemState.Random.Seed : seed;
-            var index = (start + particle.UniqueParticleId) & 0x7FFFFFFF;
+            var sample = (start + particleSystemState.SpawnIndex(index)) & 0x7FFFFFFF;
 
             var fractions = new Vector3(
-                RadicalInverse(index, 2),
-                RadicalInverse(index, 3),
-                RadicalInverse(index, 5));
+                MathUtils.RadicalInverse(sample, 2),
+                MathUtils.RadicalInverse(sample, 3),
+                MathUtils.RadicalInverse(sample, 5));
 
-            return min + ((max - min) * fractions);
-        }
-
-        /// <summary>
-        /// The radical inverse of <paramref name="index"/> in <paramref name="radix"/>: the digits of the
-        /// index in that base, mirrored about the radix point, giving a value in [0, 1).
-        /// </summary>
-        private static float RadicalInverse(int index, int radix)
-        {
-            var inverseRadix = 1f / radix;
-            var digitScale = 1f;
-            var result = 0f;
-
-            do
-            {
-                digitScale *= inverseRadix;
-                result += (index % radix) * digitScale;
-                index /= radix;
-            }
-            while (index > 0);
-
-            return result;
+            return MathUtils.Lerp(min, max, fractions);
         }
     }
 }

@@ -4,6 +4,8 @@ using System.Linq;
 using System.Runtime.InteropServices;
 using Microsoft.Extensions.Logging;
 using ValveResourceFormat.Particles;
+using ValveResourceFormat.Renderer.Materials;
+using ValveResourceFormat.Renderer.Particles;
 using ValveResourceFormat.ResourceTypes;
 using ValveResourceFormat.ResourceTypes.ModelAnimation;
 using ValveResourceFormat.ResourceTypes.ModelAnimation2;
@@ -17,6 +19,9 @@ namespace ValveResourceFormat.Renderer.SceneNodes
     /// </summary>
     public partial class ModelSceneNode : MeshCollectionNode
     {
+        /// <summary>Gets the model resource this node renders.</summary>
+        internal Model Model { get; }
+
         /// <summary>Gets the animation controller managing skeletal pose and flex data for this model.</summary>
         public AnimationController AnimationController { get; }
 
@@ -53,6 +58,7 @@ namespace ValveResourceFormat.Renderer.SceneNodes
         public ModelSceneNode(Scene scene, Model model, string? skin = null, bool isWorldPreview = false)
             : base(scene)
         {
+            Model = model;
             materialGroups = model.GetMaterialGroups().ToArray();
             AnimationGraphReferences = model.AnimGraph2References;
             meshGroups = model.MeshGroups;
@@ -95,13 +101,13 @@ namespace ValveResourceFormat.Renderer.SceneNodes
             AnimationController.ResolvePosition = attachmentName => GetChildFrame(attachmentName).Translation;
             AnimationController.AnimationLookup = animationName => Animations.GetValueOrDefault(animationName);
 
-            ParticleSurface = new ModelParticleSurface(this, model, Scene.RendererContext.FileLoader);
+            ParticleModelObject = new ParticleModelNodeObject(model, this, Scene.RendererContext.FileLoader);
         }
 
         /// <summary>
-        /// The model's meshes and hitboxes as they are posed, for effects played on the model to create their particles on.
+        /// The model as it is posed, for effects played on the model to create their particles on.
         /// </summary>
-        public IParticleModel ParticleSurface { get; }
+        public IParticleModelObject ParticleModelObject { get; }
 
         readonly struct CharacterEyeParameters
         {
@@ -144,11 +150,18 @@ namespace ValveResourceFormat.Renderer.SceneNodes
         /// </summary>
         private void SetCharacterEyeRenderParams()
         {
-            var eyeEnablingMaterials = meshRenderers
-                .SelectMany(Mesh => Mesh.DrawCallsOpaque.Select(Draw => (Mesh, Draw)))
-                .Where(meshDraw => meshDraw.Draw.Material.IntParams.GetValueOrDefault("F_EYEBALLS") == 1)
-                .Select(meshDraw => (meshDraw.Mesh, meshDraw.Draw.Material))
-                .ToList();
+            var eyeEnablingMaterials = new List<(RenderableMesh Mesh, RenderMaterial Material)>();
+
+            foreach (var mesh in meshRenderers)
+            {
+                foreach (var drawCall in mesh.DrawCallsOpaque)
+                {
+                    if (drawCall.Material.IntParams.GetValueOrDefault("F_EYEBALLS") == 1)
+                    {
+                        eyeEnablingMaterials.Add((mesh, drawCall.Material));
+                    }
+                }
+            }
 
             if (eyeEnablingMaterials.Count == 0)
             {
@@ -302,6 +315,18 @@ namespace ValveResourceFormat.Renderer.SceneNodes
         }
 
         private IEnumerable<AnimationBase> GetAllAnimations(Model model)
+        {
+            if (model.Resource.FileName is not { } fileName)
+            {
+                return LoadAllAnimations(model);
+            }
+
+            return Scene.RendererContext.ModelAnimations
+                .GetOrAdd(fileName, _ => new Lazy<List<AnimationBase>>(() => [.. LoadAllAnimations(model)]))
+                .Value;
+        }
+
+        private IEnumerable<AnimationBase> LoadAllAnimations(Model model)
         {
             var fileLoader = Scene.RendererContext.FileLoader;
 

@@ -10,21 +10,20 @@ namespace ValveResourceFormat.Particles.Operators
     {
         private readonly int cpInput;
         private readonly ParticleField fieldOutput = ParticleField.Position;
-        // -1 means the control point is read in world space.
+        // -1 leaves the output range in world space.
         private readonly int localSpaceCp = -1;
         private readonly Vector3 inputMin = Vector3.Zero;
-        private readonly Vector3 inputMax = Vector3.One;
+        private readonly Vector3 inputMax = Vector3.Zero;
         private readonly Vector3 outputMin = Vector3.Zero;
-        private readonly Vector3 outputMax = Vector3.One;
-        private readonly float startTime = -1f;
-        private readonly float endTime = -1f;
-        private readonly float interpRate;
+        private readonly Vector3 outputMax = Vector3.Zero;
         private readonly ParticleSetMethod setMethod = ParticleSetMethod.PARTICLE_SET_REPLACE_VALUE;
         private readonly bool offset;
         private readonly bool accelerate;
 
         // The output field cannot change, so the operator settles at construction whether it does anything.
         private readonly bool outputsVector;
+        private readonly bool clampsToUnit;
+        private readonly ControlPointRemapTiming timing;
 
         public RemapCPtoVector(ParticleDefinitionParser parse) : base(parse)
         {
@@ -35,15 +34,34 @@ namespace ValveResourceFormat.Particles.Operators
             inputMax = parse.Vector3("m_vInputMax", inputMax);
             outputMin = parse.Vector3("m_vOutputMin", outputMin);
             outputMax = parse.Vector3("m_vOutputMax", outputMax);
-            startTime = parse.Float("m_flStartTime", startTime);
-            endTime = parse.Float("m_flEndTime", endTime);
-            interpRate = parse.Float("m_flInterpRate", interpRate);
             setMethod = parse.Enum<ParticleSetMethod>("m_nSetMethod", setMethod);
             offset = parse.Boolean("m_bOffset", offset);
             accelerate = parse.Boolean("m_bAccelerate", accelerate);
 
-            outputsVector = fieldOutput.FieldType() == "vector";
+            outputsVector = ParticleBuffer.IsVector(fieldOutput);
+            clampsToUnit = fieldOutput is ParticleField.Color or ParticleField.GlowRgb;
+            timing = new ControlPointRemapTiming(parse);
+
+            // Ramping reads the initial value without declaring an initial read, so the initial stream may be missing in the format
+            if (setMethod.ReadsInitialValue() || setMethod == ParticleSetMethod.PARTICLE_SET_RAMP_CURRENT_VALUE)
+            {
+                parse.AddInitialRead(fieldOutput);
+            }
         }
+
+        public override void AddControlPointDefaults(ControlPointDefaults defaults)
+        {
+            defaults.AddField(cpInput, fieldOutput);
+        }
+
+        public override void Reset()
+        {
+            timing.Reset();
+        }
+
+        /// <inheritdoc/>
+        public override ulong StoredFields
+            => fieldOutput.Mask() | (fieldOutput == ParticleField.Position ? ParticleField.PositionPrevious.Mask() : 0);
 
         public override void Operate(ParticleCollection particles, float frameTime, ParticleSystemState particleSystemState, float strength)
         {
@@ -52,46 +70,83 @@ namespace ValveResourceFormat.Particles.Operators
                 return;
             }
 
-            // The window is measured against the system's own age, and a negative bound leaves it unset.
-            if (startTime >= 0f && endTime >= 0f
-                && (particleSystemState.Age < startTime || particleSystemState.Age > endTime))
-            {
-                return;
-            }
-
             var input = particleSystemState.GetControlPoint(cpInput).Position;
+            var outputMin = this.outputMin;
+            var outputMax = this.outputMax;
 
-            if (localSpaceCp >= 0)
+            if (localSpaceCp != -1)
             {
-                input = ControlPointTransformProvider.TransformDirection(particleSystemState, localSpaceCp, input);
+                outputMin = ControlPointTransformProvider.TransformDirection(particleSystemState, localSpaceCp, outputMin);
+                outputMax = ControlPointTransformProvider.TransformDirection(particleSystemState, localSpaceCp, outputMax);
             }
+
+            var interpolation = timing.NextInterpolation(input, particleSystemState.Age);
 
             var remapped = new Vector3(
                 MathUtils.RemapValClamped(input.X, inputMin.X, inputMax.X, outputMin.X, outputMax.X),
                 MathUtils.RemapValClamped(input.Y, inputMin.Y, inputMax.Y, outputMin.Y, outputMax.Y),
                 MathUtils.RemapValClamped(input.Z, inputMin.Z, inputMax.Z, outputMin.Z, outputMax.Z));
 
-            // An interpolation scale eases the field toward the remapped value over time; zero snaps to it.
-            var interpolation = interpRate > 0f ? MathUtils.Saturate(interpRate * frameTime) : 1f;
+            var live = particles.Current;
+            var creationTimes = live.ReadFloats(ParticleField.CreationTime);
+            var output = live.Vectors(fieldOutput);
+            var writesPosition = fieldOutput is ParticleField.Position or ParticleField.PositionPrevious;
+            var previousPositions = writesPosition ? live.Vectors(ParticleField.PositionPrevious) : default;
+            var initial = particles.Initial.ReadVectors(fieldOutput);
 
-            foreach (ref var particle in particles.Current)
+            for (var i = 0; i < output.Length; i++)
             {
-                var value = remapped;
+                if (!timing.Covers(creationTimes[i]))
+                {
+                    continue;
+                }
 
-                // Offset and accelerate both read the remap as a displacement rather than a value in its
-                // own right: one displaces the spawn value once, the other integrates over time.
+                var current = output[i];
+
+                // Scaling the current value scales every axis by its X, and ramping adds to the initial value
+                var value = setMethod switch
+                {
+                    ParticleSetMethod.PARTICLE_SET_SCALE_INITIAL_VALUE => remapped * initial[i],
+                    ParticleSetMethod.PARTICLE_SET_ADD_TO_INITIAL_VALUE => remapped + initial[i],
+                    ParticleSetMethod.PARTICLE_SET_SCALE_CURRENT_VALUE => remapped * current.X,
+                    ParticleSetMethod.PARTICLE_SET_ADD_TO_CURRENT_VALUE => remapped + current,
+                    ParticleSetMethod.PARTICLE_SET_RAMP_CURRENT_VALUE => (remapped * frameTime) + initial[i],
+                    _ => remapped,
+                };
+
+                value = MathUtils.Lerp(current, value, interpolation);
+
+                if (clampsToUnit)
+                {
+                    value = Vector3.Clamp(value, Vector3.Zero, Vector3.One);
+                }
+
+                if (!writesPosition)
+                {
+                    output[i] = value;
+                    continue;
+                }
+
+                if (accelerate && !offset)
+                {
+                    output[i] = value * frameTime;
+                    continue;
+                }
+
+                var previous = previousPositions[i];
+
                 if (offset)
                 {
-                    value += particle.GetInitialVector(particles, fieldOutput);
+                    value += current;
+                    previous += value;
                 }
-                else if (accelerate)
+                else
                 {
-                    value = particle.GetVector(fieldOutput) + (value * frameTime);
+                    previous = value;
                 }
 
-                var target = particle.ModifyVectorBySetMethod(particles, fieldOutput, value, setMethod);
-
-                particle.SetVector(fieldOutput, Vector3.Lerp(particle.GetVector(fieldOutput), target, interpolation * strength));
+                output[i] = accelerate ? (value * frameTime) + value : value;
+                previousPositions[i] = previous;
             }
         }
     }

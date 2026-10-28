@@ -218,7 +218,7 @@ namespace GUI.Types.Exporter
             if (decompile)
             {
                 // We need to know what files were handled by the glTF exporter
-                gltfExporter = new GltfModelExporter(new TrackingFileLoader(exportData.VrfGuiContext))
+                gltfExporter = new GltfModelExporter(new TrackingFileLoader(exportData.FileLoader))
                 {
                     ProgressReporter = dialog,
                 };
@@ -283,9 +283,7 @@ namespace GUI.Types.Exporter
                 text.AppendLine(CultureInfo.InvariantCulture, $"The other {others} listed in the console.");
             }
 
-            // The context is either the package, or a file opened from it which already names the file
-            var guiContext = exportData.VrfGuiContext;
-            var context = firstFailedFile == guiContext.FileName ? guiContext.DisplayPath : $"{firstFailedFile} ← {guiContext.DisplayPath}";
+            var context = exportData.VrfGuiContext.GetEntryDisplayPath(firstFailedFile);
 
             var report = new StringBuilder();
             ErrorReport.AppendExceptionWithVersion(report, firstFailure, context);
@@ -429,7 +427,7 @@ namespace GUI.Types.Exporter
                 {
                     EnsureDirectoryExists(outFilePath);
 
-                    using var stream = GameFileLoader.GetPackageEntryStream(currentPackage, packageFile);
+                    using var stream = currentPackage.GetMemoryMappedStreamIfPossible(packageFile);
 
                     if (!decompile || !packageFile.TypeName.EndsWith(GameFileLoader.CompiledFileSuffix, StringComparison.Ordinal))
                     {
@@ -539,7 +537,7 @@ namespace GUI.Types.Exporter
                 }
                 else
                 {
-                    contentFile = FileExtract.Extract(resource, exportData.VrfGuiContext, progress);
+                    contentFile = FileExtract.Extract(resource, exportData.FileLoader, progress);
                 }
 
                 if (contentFile.Data != null)

@@ -246,20 +246,27 @@ namespace ValveResourceFormat.ResourceTypes
 
             if (connections.Count > 0)
             {
-                entity.Connections = connections.Select((connection) => new Connection
+                var entityConnections = new List<Connection>(connections.Count);
+
+                foreach (var connection in connections)
                 {
-                    SourceEntity = entity,
-                    TargetName = connection.GetStringProperty("m_targetName"),
-                    OutputName = connection.GetStringProperty("m_outputName"),
-                    InputName = connection.GetStringProperty("m_inputName"),
-                    OverrideParam = connection.GetStringProperty("m_overrideParam"),
-                    Delay = connection.GetFloatProperty("m_flDelay"),
-                    TimesToFire = connection.GetInt32Property("m_nTimesToFire"),
-                    TargetType = connection.GetEnumValue<EntityIOTargetType>("m_targetType"),
-                    ParamMap = connection.TryGetValue("m_paramMap", out var paramMap) && paramMap.ValueType == KVValueType.Collection
-                        ? paramMap
-                        : null,
-                }).ToList();
+                    entityConnections.Add(new Connection
+                    {
+                        SourceEntity = entity,
+                        TargetName = connection.GetStringProperty("m_targetName"),
+                        OutputName = connection.GetStringProperty("m_outputName"),
+                        InputName = connection.GetStringProperty("m_inputName"),
+                        OverrideParam = connection.GetStringProperty("m_overrideParam"),
+                        Delay = connection.GetFloatProperty("m_flDelay"),
+                        TimesToFire = connection.GetInt32Property("m_nTimesToFire"),
+                        TargetType = connection.GetEnumValue<EntityIOTargetType>("m_targetType"),
+                        ParamMap = connection.TryGetValue("m_paramMap", out var paramMap) && paramMap.ValueType == KVValueType.Collection
+                            ? paramMap
+                            : null,
+                    });
+                }
+
+                entity.Connections = entityConnections;
             }
 
             return entity;
@@ -277,10 +284,11 @@ namespace ValveResourceFormat.ResourceTypes
             var entity = new Entity { ParentLump = this };
 
             entityKv.TryGetValue("values", out var values);
-            entityKv.TryGetValue("attributes", out var attributes);
+            // ignore CEntityKeyValues attributes
+            // entityKv.TryGetValue("attributes", out var attributes);
 
             ReadValues(entity, values);
-            ReadValues(entity, attributes);
+            // ReadValues(entity, attributes);
 
             return entity;
         }
@@ -289,7 +297,7 @@ namespace ValveResourceFormat.ResourceTypes
         private static string ToPropertyKey(string name) => name.ToLowerInvariant();
 
         private static KVObject MakeColor32(byte[] bytes)
-            => KVObject.Array(bytes.Select(b => (KVObject)(long)b));
+            => KVObject.PackedArray(Array.ConvertAll(bytes, static b => (long)b));
 
         private static void ReadValues(Entity entity, KVObject? values)
         {
@@ -321,8 +329,8 @@ namespace ValveResourceFormat.ResourceTypes
                 throw new UnexpectedMagicException("Unsupported entity data version", entityVersion, nameof(entityVersion));
             }
 
-            var hashedFieldsCount = dataReader.ReadUInt32();
-            var stringFieldsCount = dataReader.ReadUInt32();
+            var keyValuesFieldsCount = dataReader.ReadUInt32();
+            var attributesFieldsCount = dataReader.ReadUInt32();
 
             var entity = new Entity { ParentLump = this };
 
@@ -345,9 +353,11 @@ namespace ValveResourceFormat.ResourceTypes
                     _ => throw new UnexpectedMagicException("Unknown type", (int)type, nameof(type)),
                 };
 
+                // ignore CEntityKeyValues attributes
                 if (keyName == null)
                 {
                     keyName = ToPropertyKey(StringToken.GetKnownString(keyHash));
+                    entity.Add(keyName, entityProperty);
                 }
                 else
                 {
@@ -359,11 +369,9 @@ namespace ValveResourceFormat.ResourceTypes
                         );
                     }
                 }
-
-                entity.Add(keyName, entityProperty);
             }
 
-            for (var i = 0; i < hashedFieldsCount; i++)
+            for (var i = 0; i < keyValuesFieldsCount; i++)
             {
                 // murmur2 hashed field name (see EntityLumpKeyLookup)
                 var keyHash = dataReader.ReadUInt32();
@@ -372,7 +380,7 @@ namespace ValveResourceFormat.ResourceTypes
             }
 
             // TODO: Is this attributes like in KV3 version, should we put them into separate property?
-            for (var i = 0; i < stringFieldsCount; i++)
+            for (var i = 0; i < attributesFieldsCount; i++)
             {
                 var keyHash = dataReader.ReadUInt32();
                 var keyName = dataReader.ReadNullTermString(Encoding.UTF8);
@@ -389,9 +397,7 @@ namespace ValveResourceFormat.ResourceTypes
         /// <returns>A formatted string containing all entities and their properties.</returns>
         public string ToEntityDumpString()
         {
-            var knownKeys = StringToken.InvertedTable;
             var builder = new StringBuilder();
-            var unknownKeys = new Dictionary<uint, uint>();
 
             using var valueStream = new MemoryStream();
 
@@ -457,17 +463,6 @@ namespace ValveResourceFormat.ResourceTypes
                 }
 
                 builder.AppendLine();
-            }
-
-            if (unknownKeys.Count > 0)
-            {
-                builder.AppendLine($"@@@@@ UNKNOWN KEY LOOKUPS:");
-                builder.AppendLine($"If you know what these are, add them to EntityLumpKnownKeys.cs");
-
-                foreach (var unknownKey in unknownKeys)
-                {
-                    builder.AppendLine(CultureInfo.InvariantCulture, $"key={unknownKey.Key} hits={unknownKey.Value}");
-                }
             }
 
             return builder.ToString();

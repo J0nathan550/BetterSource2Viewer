@@ -1,7 +1,7 @@
 namespace ValveResourceFormat.Particles.Operators
 {
     /// <summary>
-    /// Fades a particle's alpha field in linearly over a proportional fade-in time at the start of the particle's life.
+    /// Fades a particle's alpha field in along a smoothstep over a proportional fade-in time at the start of the particle's life.
     /// </summary>
     /// <remarks>
     /// The fade-in time is a fraction of the particle's lifetime in the 0-1 range: a setting of
@@ -17,18 +17,40 @@ namespace ValveResourceFormat.Particles.Operators
         {
             fadeInTime = parse.Float("m_flFadeInTime", fadeInTime);
             fieldOutput = parse.ParticleField("m_nFieldOutput", fieldOutput);
+
+            parse.AddInitialRead(fieldOutput);
         }
+
+        /// <inheritdoc/>
+        public override ulong StoredFields => fieldOutput.Mask();
 
         public override void Operate(ParticleCollection particles, float frameTime, ParticleSystemState particleSystemState, float strength)
         {
-            foreach (ref var particle in particles.Current)
+            if (!ParticleBuffer.IsScalar(fieldOutput))
             {
-                var time = particle.NormalizedAge;
-                if (time <= fadeInTime)
+                return;
+            }
+
+            var current = particles.Current;
+            var ages = current.ReadAges();
+
+            var lifetimes = current.ReadFloats(ParticleField.LifeDuration);
+            var outputs = current.Floats(fieldOutput);
+            var initials = particles.Initial.ReadFloats(fieldOutput);
+
+            for (var i = 0; i < outputs.Length; i++)
+            {
+                var age = ages[i];
+                var fadeInLength = fadeInTime * lifetimes[i];
+                var fading = MathF.Max(0f, age - frameTime) < fadeInLength;
+
+                if (!fading)
                 {
-                    var newAlpha = (time / fadeInTime) * particle.GetInitialScalar(particles, ParticleField.Alpha);
-                    particle.SetScalar(fieldOutput, newAlpha);
+                    continue;
                 }
+
+                // A fading particle has a positive fade length, so the smoothstep's edges cannot meet here
+                outputs[i] = MathUtils.Smoothstep(0f, fadeInLength, age) * initials[i];
             }
         }
     }

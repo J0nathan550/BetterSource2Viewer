@@ -1,6 +1,9 @@
 using System.Globalization;
 using Microsoft.Extensions.Logging;
 using ValveResourceFormat.Blocks;
+using ValveResourceFormat.IO;
+using ValveResourceFormat.Particles;
+using ValveResourceFormat.Renderer.Particles;
 using ValveResourceFormat.Renderer.SceneNodes;
 using ValveResourceFormat.ResourceTypes;
 using ValveResourceFormat.Serialization.KeyValues;
@@ -9,7 +12,8 @@ namespace ValveResourceFormat.Renderer.Entities;
 
 /// <summary>
 /// <c>info_particle_system</c>, and Dota's <c>dota_world_particle_system</c>: plays <c>effect_name</c> at
-/// the entity, with its control points bound to the entities the <c>cpointN</c> keys name.
+/// the entity, with its control points bound to the entities the <c>cpointN</c> keys name and carrying
+/// their models.
 /// </summary>
 /// <seealso href="https://s2v.app/SchemaExplorer/cs2/server/CParticleSystem">CParticleSystem</seealso>
 /// <seealso href="https://s2v.app/SchemaExplorer/dota2/client/C_DOTAWorldParticleSystem">C_DOTAWorldParticleSystem</seealso>
@@ -18,7 +22,8 @@ public class InfoParticleSystem : BaseEntity
     // At most this many cpointN_value keys are applied
     private const int MaxLiteralControlPointValues = 4;
 
-    private static readonly string[] ControlPointKeys = CreateKeys("cpoint{0}");
+    /// <summary>The <c>cpointN</c> keys, by control point.</summary>
+    internal static readonly string[] ControlPointKeys = CreateKeys("cpoint{0}");
     private static readonly string[] ControlPointValueKeys = CreateKeys("cpoint{0}_value");
 
     /// <summary>Gets the effect, or <see langword="null"/> when <c>effect_name</c> did not load.</summary>
@@ -32,12 +37,9 @@ public class InfoParticleSystem : BaseEntity
     /// <inheritdoc/>
     public override void Spawn()
     {
-        var snapshotFile = KeyValues.GetStringProperty("snapshot_file");
-        var snapshot = string.IsNullOrEmpty(snapshotFile)
-            ? null
-            : EntitySystem.FileLoader.LoadFileCompiled(snapshotFile)?.GetBlockByType(BlockType.SNAP) as ParticleSnapshot;
+        base.Spawn();
 
-        Effect = CreateEffect(KeyValues.GetStringProperty("effect_name"), snapshot);
+        Effect = CreateEffect(KeyValues.GetStringProperty("effect_name"), LoadSnapshot(EntitySystem.FileLoader, KeyValues));
 
         if (Effect == null)
         {
@@ -108,33 +110,20 @@ public class InfoParticleSystem : BaseEntity
             effect.Transform = target.Transform;
         }
 
-        if (target.RootNode is { } targetNode)
+        effect.BindControlPoint(index, target);
+
+        if (target is BaseModelEntity { LoadedModel: { } model } modelEntity)
         {
-            effect.BindControlPoint(index, targetNode, target.Transform);
-        }
-        else
-        {
-            effect.SetControlPoint(index, target.Transform);
+            effect.GetControlPoint(index).ModelObject = modelEntity.ModelNode is { } modelNode
+                ? new ParticleModelNodeObject(model, modelNode, EntitySystem.RendererContext.FileLoader)
+                : new BindPoseModelObject(model) { Transform = target.Transform };
         }
     }
 
-    // data_cp takes a vector, tint_cp a colour, and up to four cpointN_value keys a position each.
-    // Applied after the cpointN bindings, overriding them.
+    // Up to four cpointN_value keys take a position each. Applied after the cpointN bindings, overriding them.
     private void ApplyLiteralControlPointValues(ParticleSceneNode effect)
     {
-        var dataControlPoint = LiteralControlPointIndex("data_cp");
-
-        if (dataControlPoint >= 0)
-        {
-            effect.GetControlPoint(dataControlPoint).Position = KeyValues.GetVector3Property("data_cp_value");
-        }
-
-        var tintControlPoint = LiteralControlPointIndex("tint_cp");
-
-        if (tintControlPoint >= 0)
-        {
-            effect.GetControlPoint(tintControlPoint).Position = KeyValues.GetVector3Property("tint_cp_color", new Vector3(255f));
-        }
+        SetDataAndTintControlPoints(effect, KeyValues);
 
         var applied = 0;
 
@@ -150,9 +139,42 @@ public class InfoParticleSystem : BaseEntity
         }
     }
 
+    /// <summary>Loads the snapshot the <c>snapshot_file</c> key of a particle system names.</summary>
+    /// <param name="fileLoader">Loads the snapshot.</param>
+    /// <param name="keyValues">The keyvalues of the entity.</param>
+    /// <returns>The snapshot, or <see langword="null"/> when the entity names none or it did not load.</returns>
+    internal static ParticleSnapshot? LoadSnapshot(IFileLoader fileLoader, EntityLump.Entity keyValues)
+    {
+        var snapshotFile = keyValues.GetStringProperty("snapshot_file");
+
+        return string.IsNullOrEmpty(snapshotFile)
+            ? null
+            : fileLoader.LoadFileCompiled(snapshotFile)?.GetBlockByType(BlockType.SNAP) as ParticleSnapshot;
+    }
+
+    /// <summary>Sets the control points <c>data_cp</c> and <c>tint_cp</c> name to the vector and colour the keys give.</summary>
+    /// <param name="effect">The effect.</param>
+    /// <param name="keyValues">The keyvalues of the entity.</param>
+    internal static void SetDataAndTintControlPoints(ParticleSceneNode effect, EntityLump.Entity keyValues)
+    {
+        var dataControlPoint = LiteralControlPointIndex(keyValues, "data_cp");
+
+        if (dataControlPoint >= 0)
+        {
+            effect.GetControlPoint(dataControlPoint).Position = keyValues.GetVector3Property("data_cp_value");
+        }
+
+        var tintControlPoint = LiteralControlPointIndex(keyValues, "tint_cp");
+
+        if (tintControlPoint >= 0)
+        {
+            effect.GetControlPoint(tintControlPoint).Position = keyValues.GetVector3Property("tint_cp_color", new Vector3(255f));
+        }
+    }
+
     // -1 when unused or out of range
-    private int LiteralControlPointIndex(string key)
-        => KeyValues.GetInt32Property(key, -1) is var index && index >= 0 && index < ControlPointKeys.Length ? index : -1;
+    private static int LiteralControlPointIndex(EntityLump.Entity keyValues, string key)
+        => keyValues.GetInt32Property(key, -1) is var index && index >= 0 && index < ControlPointKeys.Length ? index : -1;
 
     /// <summary>Starts the effect over.</summary>
     [EntityInput("Start")]

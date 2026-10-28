@@ -5,7 +5,9 @@ namespace ValveResourceFormat.Particles.Initializers
     /// <summary>
     /// Initializes a scalar particle attribute from the value lattice sampled at the particle's
     /// scaled creation position with a time term added to every component, remapped into an output
-    /// range. Angle fields author the range in degrees; alpha fields clamp to [0, 1].
+    /// range. The time term is taken once per call, from the first particle, and shared by the rest; in
+    /// the whole blocks of a batch each lane takes it from the first block. Angle fields author the
+    /// range in degrees; alpha fields clamp to [0, 1].
     /// </summary>
     /// <seealso href="https://s2v.app/SchemaExplorer/cs2/particles/C_INIT_CreationNoise">C_INIT_CreationNoise</seealso>
     class CreationNoise : ParticleFunctionInitializer
@@ -35,52 +37,98 @@ namespace ValveResourceFormat.Particles.Initializers
             offsetLoc = parse.Vector3("m_vecOffsetLoc", offsetLoc);
         }
 
-        public override ulong WrittenFields => FieldMask(fieldOutput);
+        public override ulong WrittenFields => fieldOutput.Mask();
 
-        public override Particle Initialize(ref Particle particle, ParticleCollection particles, ParticleSystemState particleSystemState)
+        protected override void InitializeCall(ParticleSpan run, ParticleCollection particles, ParticleSystemState particleSystemState)
         {
-            if (fieldOutput.FieldType() != "float")
+            if (!ParticleBuffer.IsScalar(fieldOutput))
             {
-                return particle;
+                return;
             }
 
-            var samplePosition = (particle.Position + offsetLoc) * noiseScaleLoc;
+            var creationTimes = run.ReadFloats(ParticleField.CreationTime);
 
-            // The world time term ticks in milliseconds
-            var sampleTime = ((particle.CreationTime + offset) * noiseScale)
+            // The world time term ticks in milliseconds of the simulated world time. Wall clock milliseconds since process
+            // start would be scaled otherwise, which cannot be reproduced
+            var timeTerm = ((creationTimes[0] + offset) * noiseScale)
                 + (particleSystemState.WorldTime * 1000f * worldTimeScale);
-            var noise = Noise.Value3D(samplePosition + new Vector3(sampleTime));
 
-            // abs folds the signed noise into the full output range; otherwise the half-span
-            // scale centers it in the range. absValInv inverts either way.
-            var absScale = absVal ? 1f : 0.5f;
-            var normalized = absVal ? MathF.Abs(noise) : noise;
+            Span<float> laneTimeTerms = stackalloc float[4];
+            laneTimeTerms.Fill(timeTerm);
 
-            if (absValInv)
+            WriteNoise(run, laneTimeTerms);
+        }
+
+        /// <summary>
+        /// Takes the time term of each lane from the creation time of the particle in that lane of the
+        /// first block, for every block, and leaves the world time out.
+        /// </summary>
+        protected override void InitializeBlocks(ParticleSpan run, ParticleCollection particles, ParticleSystemState particleSystemState)
+        {
+            if (!ParticleBuffer.IsScalar(fieldOutput))
+            {
+                return;
+            }
+
+            var creationTimes = run.ReadFloats(ParticleField.CreationTime);
+
+            Span<float> laneTimeTerms = stackalloc float[4];
+
+            for (var lane = 0; lane < laneTimeTerms.Length; lane++)
+            {
+                laneTimeTerms[lane] = (creationTimes[lane] + offset) * noiseScale;
+            }
+
+            WriteNoise(run, laneTimeTerms);
+        }
+
+        /// <summary>
+        /// Writes the mapped noise at each particle's position, offset by the time term of its lane in
+        /// <paramref name="laneTimeTerms"/>.
+        /// </summary>
+        private void WriteNoise(ParticleSpan run, ReadOnlySpan<float> laneTimeTerms)
+        {
+            var positions = run.ReadVectors(ParticleField.Position);
+            var outputs = run.Floats(fieldOutput);
+
+            var isAngle = fieldOutput.IsOrientationField();
+            var min = isAngle ? float.DegreesToRadians(outputMin) : outputMin;
+            var max = isAngle ? float.DegreesToRadians(outputMax) : outputMax;
+            var isAlpha = fieldOutput.IsAlpha();
+
+            for (var i = 0; i < run.Length; i++)
+            {
+                var samplePosition = (positions[i] + offsetLoc) * noiseScaleLoc;
+                var noise = Noise.Value3D(samplePosition + new Vector3(laneTimeTerms[i & 3]));
+
+                var value = MapToRange(noise, absVal, absValInv, min, max);
+
+                if (isAlpha)
+                {
+                    value = MathUtils.Saturate(value);
+                }
+
+                outputs[i] = value;
+            }
+        }
+
+        /// <summary>
+        /// Maps value noise in -1 to 1 onto [<paramref name="min"/>, <paramref name="max"/>]. Absolute
+        /// noise covers the whole range from 0, signed noise is centred in it, and inverting flips either.
+        /// </summary>
+        internal static float MapToRange(float noise, bool absolute, bool inverted, float min, float max)
+        {
+            var absScale = absolute ? 1f : 0.5f;
+            var normalized = absolute ? MathF.Abs(noise) : noise;
+
+            if (inverted)
             {
                 normalized = 1f - normalized;
             }
 
-            var min = outputMin;
-            var max = outputMax;
-
-            if (fieldOutput is ParticleField.Roll or ParticleField.Yaw or ParticleField.Pitch)
-            {
-                min *= 0.017453292f;
-                max *= 0.017453292f;
-            }
-
             var span = max - min;
-            var value = min + ((1f - absScale) * span) + (absScale * span * normalized);
 
-            if (fieldOutput is ParticleField.Alpha or ParticleField.AlphaAlternate)
-            {
-                value = MathUtils.Saturate(value);
-            }
-
-            particle.SetScalar(fieldOutput, value);
-
-            return particle;
+            return min + ((1f - absScale) * span) + (absScale * span * normalized);
         }
     }
 }

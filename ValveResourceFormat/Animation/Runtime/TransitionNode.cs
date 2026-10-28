@@ -230,8 +230,7 @@ namespace ValveResourceFormat.Animation
         /// <summary>
         /// Called before a new (forced) transition starts so this in-flight transition can switch to a
         /// cached-pose source if its source is about to become the new target state, or start caching
-        /// its pose if a forceable transition back to its source may follow (Esoterica
-        /// TransitionNode::NotifyNewTransitionStarting).
+        /// its pose if a forceable transition back to its source may follow.
         /// </summary>
         public void NotifyNewTransitionStarting(GraphContext ctx, StateNode targetStateNode, List<StateNode> forceableFutureTargetStatesUsingCachedPoses)
         {
@@ -286,15 +285,15 @@ namespace ValveResourceFormat.Animation
 
         /// <summary>
         /// Lerps the source layer context towards the target state's layer context by the transition
-        /// blend weight (Esoterica TransitionNode::UpdateLayerContext).
+        /// blend weight.
         /// </summary>
         void UpdateLayerContext(LayerContext sourceAndResultLayerContext, LayerContext targetContext)
         {
             // Update layer weights
             //-------------------------------------------------------------------------
 
-            sourceAndResultLayerContext.Weight = float.Lerp(sourceAndResultLayerContext.Weight, targetContext.Weight, BlendWeight);
-            sourceAndResultLayerContext.RootMotionWeight = float.Lerp(sourceAndResultLayerContext.RootMotionWeight, targetContext.RootMotionWeight, BlendWeight);
+            sourceAndResultLayerContext.Weight = MathUtils.Lerp(sourceAndResultLayerContext.Weight, targetContext.Weight, BlendWeight);
+            sourceAndResultLayerContext.RootMotionWeight = MathUtils.Lerp(sourceAndResultLayerContext.RootMotionWeight, targetContext.RootMotionWeight, BlendWeight);
 
             // Update final bone mask
             //-------------------------------------------------------------------------
@@ -625,7 +624,7 @@ namespace ValveResourceFormat.Animation
                 {
                     PreviousTime = 0f;
                     CurrentTime = 0f;
-                    BlendedDuration = float.Lerp(SourceNode.Duration, TargetStateNode.Duration, BlendWeight);
+                    BlendedDuration = MathUtils.Lerp(SourceNode.Duration, TargetStateNode.Duration, BlendWeight);
                     blendedSyncTrack = TargetStateNode.SyncTrack;
                 }
             }
@@ -828,7 +827,7 @@ namespace ValveResourceFormat.Animation
             }
             else
             {
-                BlendedDuration = float.Lerp(SourceNode?.Duration ?? 0f, TargetStateNode.Duration, BlendWeight);
+                BlendedDuration = MathUtils.Lerp(SourceNode?.Duration ?? 0f, TargetStateNode.Duration, BlendWeight);
 
                 if (BlendedDuration > 0f)
                 {
