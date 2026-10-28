@@ -5,6 +5,7 @@ using Avalonia.Controls;
 using Avalonia.Input;
 using Avalonia.Layout;
 using Avalonia.Threading;
+using GUI.Controls;
 using GUI.Types.PackageViewer;
 using ValveResourceFormat.IO;
 
@@ -26,7 +27,7 @@ namespace GUI.Forms
         private readonly CheckBox matchCaseCheckBox;
         private readonly CheckBox wholeWordCheckBox;
         private readonly CheckBox regexCheckBox;
-        private readonly ComboBox fileTypeComboBox;
+        private readonly SearchableComboBox fileTypeComboBox;
         private readonly TextBlock hintText;
         private readonly Button findButton;
         private readonly ComboBox filterKeyComboBox;
@@ -73,7 +74,7 @@ namespace GUI.Forms
             regexCheckBox = new CheckBox { Content = "Regex" };
             hintText = new TextBlock { IsVisible = false, Foreground = Avalonia.Media.Brushes.IndianRed, TextWrapping = Avalonia.Media.TextWrapping.Wrap };
 
-            fileTypeComboBox = new ComboBox { HorizontalAlignment = HorizontalAlignment.Stretch, MaxDropDownHeight = 400 };
+            fileTypeComboBox = new SearchableComboBox { HorizontalAlignment = HorizontalAlignment.Stretch };
 
             filterKeyComboBox = new ComboBox { HorizontalAlignment = HorizontalAlignment.Stretch, IsEnabled = false };
             filterKeyComboBox.SelectionChanged += (_, _) => OnFilterKeyChanged();

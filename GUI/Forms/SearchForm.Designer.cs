@@ -42,7 +42,7 @@ namespace GUI.Forms
             regexCheckBox = new System.Windows.Forms.CheckBox();
             onlyInFolderCheckBox = new System.Windows.Forms.CheckBox();
             extensionLabel = new System.Windows.Forms.Label();
-            extensionComboBox = new ThemedComboBox();
+            extensionComboBox = new SearchableComboBox();
             hintLabel = new System.Windows.Forms.Label();
             SuspendLayout();
             // 
@@ -278,7 +278,7 @@ namespace GUI.Forms
         private System.Windows.Forms.CheckBox regexCheckBox;
         private System.Windows.Forms.CheckBox onlyInFolderCheckBox;
         private System.Windows.Forms.Label extensionLabel;
-        private ThemedComboBox extensionComboBox;
+        private SearchableComboBox extensionComboBox;
         private System.Windows.Forms.Label hintLabel;
     }
 }
